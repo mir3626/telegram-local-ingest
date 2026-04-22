@@ -19,3 +19,4 @@ Append-only notes that should survive context compaction.
 - 2026-04-22T09:35:12.968Z [integration] Connected `apps/worker` dispatch loop: polling, operator commands, `/ingest` job creation, file import, raw bundle write, optional wiki adapter, Telegram notify, and completion/failure transitions.
 - 2026-04-22T11:01:36.496Z [handoff] Saved continuation prompt and latest verification notes in `.vibe/agent/handoff.md`. Next recommended work is live smoke readiness check and local Telegram Bot API Server end-to-end run.
 - 2026-04-22T12:21:28.414Z [move] Repository moved from `C:\Users\Tony\Workspace\telegram-local-ingest` to `C:\workspace\telegram-local-ingest` for a shorter Windows/WSL-friendly workspace path.
+- 2026-04-22T12:27:39.382Z [move] Preparing WSL internal move to `/home/tonyn/workspace/telegram-local-ingest` so Hermes agent, local Bot API Server, worker, and vault can share Linux paths.

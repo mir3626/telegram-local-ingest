@@ -3,7 +3,7 @@
 ## Identity
 
 - **repo**: `telegram-local-ingest`
-- **path**: `C:\workspace\telegram-local-ingest`
+- **path**: `/home/tonyn/workspace/telegram-local-ingest`
 - **current iteration**: `iter-1`
 - **current sprint**: `completed`
 - **harnessVersion**: `1.5.0`
@@ -43,7 +43,7 @@ Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from C:\workspace\telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. The MVP roadmap is complete through commit e97e578 plus this handoff update. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: prepare and run a live smoke against a configured .env/local Telegram server/Obsidian vault, or add a small .env readiness checker before live smoke if credentials/server are not ready.
+Continue from /home/tonyn/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. The MVP roadmap is complete through commit e97e578 plus this handoff update. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: prepare and run a live smoke against a configured .env/local Telegram server/Obsidian vault, or add a small .env readiness checker before live smoke if credentials/server are not ready.
 ```
 
 ## Latest Verification
