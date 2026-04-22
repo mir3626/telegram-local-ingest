@@ -52,6 +52,15 @@ runtime/
 
 `runtime/` is operational state and must not be treated as Obsidian content.
 
+## Worker Dispatch
+
+`apps/worker` runs the integrated local loop:
+
+1. Poll Telegram updates and advance durable offsets.
+2. Route `/status`, `/retry`, and `/cancel` through `packages/operator`.
+3. Route `/ingest` through `packages/capture`.
+4. Process queued jobs through file import, raw bundle writing, optional wiki adapter execution, Telegram notification, and terminal state transition.
+
 ## Obsidian Vault Layout
 
 ```text

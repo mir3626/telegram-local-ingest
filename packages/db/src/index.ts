@@ -432,6 +432,14 @@ export function mustGetSourceBundle(db: DatabaseSync, id: string): StoredSourceB
   return mapSourceBundle(row);
 }
 
+export function mustGetSourceBundleForJob(db: DatabaseSync, jobId: string): StoredSourceBundle {
+  const row = db.prepare("SELECT * FROM source_bundles WHERE job_id = ?").get(jobId) as SourceBundleRow | undefined;
+  if (!row) {
+    throw new Error(`Source bundle not found for job: ${jobId}`);
+  }
+  return mapSourceBundle(row);
+}
+
 function applyV1(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE jobs (

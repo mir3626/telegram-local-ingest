@@ -10,7 +10,7 @@
 
 ## Status
 
-The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 8 are complete. The project context now targets a Telegram Local Bot API Server based local ingest worker, and the code has config loading, Telegram Bot API baseline, startup health checks, SQLite-backed operational state, Telegram capture-to-job creation, controlled Telegram file import into runtime staging/archive, immutable Obsidian raw bundle writing, RTZR STT client/helpers, a protected wiki ingest adapter boundary, and Telegram operator command primitives.
+The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 8 are complete. The project context now targets a Telegram Local Bot API Server based local ingest worker, and the code has config loading, Telegram Bot API baseline, startup health checks, SQLite-backed operational state, Telegram capture-to-job creation, controlled Telegram file import into runtime staging/archive, immutable Obsidian raw bundle writing, RTZR STT client/helpers, a protected wiki ingest adapter boundary, Telegram operator command primitives, and an integrated worker dispatch loop.
 
 ## Durable Decisions
 
@@ -32,7 +32,7 @@ The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 8 ar
 
 ## Next Action
 
-MVP roadmap is complete. Next practical step is integration wiring in `apps/worker` against a live local Telegram Bot API Server and a real Obsidian vault.
+MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is a live smoke against a local Telegram Bot API Server and a real Obsidian vault.
 
 ```text
 Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import -> raw bundle -> optional RTZR/wiki adapter -> Telegram status.
