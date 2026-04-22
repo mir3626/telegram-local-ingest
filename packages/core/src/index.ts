@@ -28,6 +28,7 @@ export interface RuntimeConfig {
   runtimeDir: string;
   sqliteDbPath: string;
   wikiWriteLockPath: string;
+  maxFileSizeBytes: number;
 }
 
 export interface TelegramConfig {
@@ -121,6 +122,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     "TELEGRAM_POLL_TIMEOUT_SECONDS",
     issues,
   );
+  const maxFileSizeBytes = parseInteger(
+    env.INGEST_MAX_FILE_SIZE_BYTES,
+    2 * 1024 * 1024 * 1024,
+    "INGEST_MAX_FILE_SIZE_BYTES",
+    issues,
+  );
 
   const config: AppConfig = {
     telegram: {
@@ -133,6 +140,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       runtimeDir: readNonEmpty(env.INGEST_RUNTIME_DIR) ?? "./runtime",
       sqliteDbPath: readNonEmpty(env.SQLITE_DB_PATH) ?? "./runtime/ingest.db",
       wikiWriteLockPath: readNonEmpty(env.WIKI_WRITE_LOCK_PATH) ?? "./runtime/wiki.lock",
+      maxFileSizeBytes,
     },
     vault: {
       obsidianVaultPath: required("OBSIDIAN_VAULT_PATH"),
@@ -154,6 +162,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   if (pollTimeoutSeconds < 1 || pollTimeoutSeconds > 100) {
     issues.push("TELEGRAM_POLL_TIMEOUT_SECONDS must be between 1 and 100");
+  }
+  if (maxFileSizeBytes < 1) {
+    issues.push("INGEST_MAX_FILE_SIZE_BYTES must be at least 1");
   }
 
   if (issues.length > 0) {

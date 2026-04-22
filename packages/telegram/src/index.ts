@@ -250,7 +250,14 @@ export function resolveTelegramFileLocation(
   config: TelegramLocalBotApiConfig,
 ): TelegramFileLocation {
   if (isAbsoluteFilePath(file.filePath)) {
-    return { kind: "local-path", path: path.normalize(file.filePath) };
+    const resolved = path.resolve(file.filePath);
+    if (config.localFilesRoot) {
+      const root = path.resolve(config.localFilesRoot);
+      if (!isPathInside(root, resolved)) {
+        throw new TelegramApiError("getFile", `absolute file_path is outside TELEGRAM_LOCAL_FILES_ROOT: ${file.filePath}`);
+      }
+    }
+    return { kind: "local-path", path: resolved };
   }
 
   if (config.localFilesRoot) {

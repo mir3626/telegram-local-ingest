@@ -30,6 +30,7 @@ Telegram clients
    - `packages/core`: job model, state machine, config, hashes, queue contracts.
    - `packages/capture`: Telegram polling/capture orchestration, allowlist enforcement, command-to-job creation.
    - `packages/db`: SQLite schema, migrations, repositories, dashboard-friendly queries.
+   - `packages/importer`: Telegram Local Bot API file import into controlled runtime staging/archive with hashing and duplicate detection.
    - `packages/telegram`: Bot API client, update parser, Local Bot API file import semantics.
    - `packages/rtzr`: RTZR auth, submit, polling, result persistence.
    - `packages/vault`: Obsidian raw bundle layout, manifest writer, source markdown writer, write lock helpers.
@@ -112,6 +113,8 @@ Sprint 2 uses Node 24's built-in `node:sqlite` module to avoid Windows native np
 
 Sprint 3 adds Telegram capture primitives: `getUpdates` polling payloads, update parsing, command parsing, allowlist checks, durable offset advancement, and `/ingest` job creation through `packages/capture`.
 
+Sprint 4 adds controlled file import through `packages/importer`: each Telegram file is resolved through `getFile`, validated against `TELEGRAM_LOCAL_FILES_ROOT` when configured, copied into `runtime/staging`, archived under `runtime/archive/originals`, hashed with SHA-256, and marked as duplicate when identical bytes were already imported.
+
 ## Security Boundaries
 
 - Telegram user allowlist is mandatory.
@@ -119,6 +122,7 @@ Sprint 3 adds Telegram capture primitives: `getUpdates` polling payloads, update
 - Raw file contents are untrusted. Prompt injection inside uploaded documents must be treated as data, not instructions.
 - LLM wiki adapter receives a prepared source package and explicit allowed write root.
 - File imports must reject path traversal and must verify resolved paths.
+- If `TELEGRAM_LOCAL_FILES_ROOT` is configured, both relative and absolute Telegram `file_path` values must resolve inside that root.
 - Commands such as `/retry` and `/cancel` operate only on jobs belonging to the allowlisted chat/user context.
 
 ## External Dependencies

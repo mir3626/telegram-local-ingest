@@ -1,0 +1,13 @@
+{
+  "name": "@telegram-local-ingest/importer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@telegram-local-ingest/db": "0.1.0",
+    "@telegram-local-ingest/telegram": "0.1.0"
+  }
+}

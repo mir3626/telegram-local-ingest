@@ -68,6 +68,15 @@ export interface StoredJobFile {
   createdAt: string;
 }
 
+export interface UpdateJobFileImportInput {
+  id: string;
+  sha256: string;
+  sizeBytes: number;
+  localPath: string;
+  archivePath: string;
+  now?: string;
+}
+
 export interface StoredJobEvent {
   id: number;
   jobId: string;
@@ -310,12 +319,46 @@ export function listJobFiles(db: DatabaseSync, jobId: string): StoredJobFile[] {
     .map((row) => mapJobFile(row as unknown as JobFileRow));
 }
 
+export function findJobFileBySha256(
+  db: DatabaseSync,
+  sha256: string,
+  excludingId?: string,
+): StoredJobFile | null {
+  const row = db
+    .prepare(`
+      SELECT * FROM job_files
+      WHERE sha256 = ? AND (? IS NULL OR id != ?)
+      ORDER BY created_at ASC
+      LIMIT 1
+    `)
+    .get(sha256, excludingId ?? null, excludingId ?? null) as JobFileRow | undefined;
+  return row ? mapJobFile(row) : null;
+}
+
 export function mustGetJobFile(db: DatabaseSync, id: string): StoredJobFile {
   const row = db.prepare("SELECT * FROM job_files WHERE id = ?").get(id) as JobFileRow | undefined;
   if (!row) {
     throw new Error(`Job file not found: ${id}`);
   }
   return mapJobFile(row);
+}
+
+export function updateJobFileImport(db: DatabaseSync, input: UpdateJobFileImportInput): StoredJobFile {
+  const current = mustGetJobFile(db, input.id);
+  const timestamp = input.now ?? nowIso();
+  db.prepare(`
+    UPDATE job_files
+    SET sha256 = ?, size_bytes = ?, local_path = ?, archive_path = ?
+    WHERE id = ?
+  `).run(input.sha256, input.sizeBytes, input.localPath, input.archivePath, input.id);
+  appendJobEvent(db, current.jobId, "file.imported", current.originalName ?? current.id, {
+    fileId: current.id,
+    sha256: input.sha256,
+    sizeBytes: input.sizeBytes,
+    localPath: input.localPath,
+    archivePath: input.archivePath,
+  }, timestamp);
+  return mustGetJobFile(db, input.id);
 }
 
 export function appendJobEvent(

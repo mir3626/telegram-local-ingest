@@ -11,3 +11,4 @@ Append-only notes that should survive context compaction.
 - 2026-04-22T08:17:16.553Z [sprint-complete] sprint-0-phase0-seed and sprint-1-telegram-local-baseline completed together before initial commit. Next sprint: sprint-2-sqlite-job-model.
 - 2026-04-22T08:26:27.473Z [sprint-complete] sprint-2-sqlite-job-model completed. Used Node 24 `node:sqlite` behind `packages/db`; warning is expected while module is experimental. Next sprint: sprint-3-telegram-capture.
 - 2026-04-22T08:46:31.224Z [sprint-complete] sprint-3-telegram-capture completed. Added `packages/capture` and Telegram parser/client primitives. Next sprint: sprint-4-local-file-import.
+- 2026-04-22T08:54:32.402Z [sprint-complete] sprint-4-local-file-import completed. Added `packages/importer` for controlled staging/archive import, SHA-256, duplicate detection, max size policy, and Telegram path safety. Next sprint: sprint-5-vault-bundle-writer.

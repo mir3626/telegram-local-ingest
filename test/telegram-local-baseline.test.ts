@@ -34,6 +34,7 @@ test("loadConfig applies local Bot API defaults and parses allowlist", () => {
   assert.equal(config.telegram.botApiBaseUrl, "http://127.0.0.1:8081");
   assert.deepEqual(config.telegram.allowedUserIds, ["42", "99"]);
   assert.equal(config.telegram.pollTimeoutSeconds, 25);
+  assert.equal(config.runtime.maxFileSizeBytes, 2 * 1024 * 1024 * 1024);
   assert.equal(config.vault.rawRoot, "raw");
 });
 
@@ -112,6 +113,26 @@ test("relative file paths resolve under localFilesRoot and reject traversal", ()
 
   assert.throws(
     () => resolveTelegramFileLocation({ fileId: "bad", filePath: "../secret.txt" }, config),
+    TelegramApiError,
+  );
+});
+
+test("absolute file paths are constrained when localFilesRoot is configured", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-local-root-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-local-outside-"));
+  const insidePath = path.join(root, "documents", "safe.pdf");
+  const outsidePath = path.join(outside, "secret.pdf");
+  const config = {
+    botToken: "123:abc",
+    baseUrl: "http://127.0.0.1:8081",
+    localFilesRoot: root,
+  };
+
+  const inside = resolveTelegramFileLocation({ fileId: "safe", filePath: insidePath }, config);
+  assert.equal(inside.kind, "local-path");
+  assert.equal(inside.path, path.resolve(insidePath));
+  assert.throws(
+    () => resolveTelegramFileLocation({ fileId: "bad", filePath: outsidePath }, config),
     TelegramApiError,
   );
 });

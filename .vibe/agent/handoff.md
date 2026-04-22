@@ -5,12 +5,12 @@
 - **repo**: `telegram-local-ingest`
 - **path**: `C:\Users\Tony\Workspace\telegram-local-ingest`
 - **current iteration**: `iter-1`
-- **current sprint**: `sprint-4-local-file-import`
+- **current sprint**: `sprint-5-vault-bundle-writer`
 - **harnessVersion**: `1.5.0`
 
 ## Status
 
-The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 3 are complete. The project context now targets a Telegram Local Bot API Server based local ingest worker, and the code has config loading, Telegram Bot API baseline, startup health checks, SQLite-backed operational state, and Telegram capture-to-job creation.
+The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 4 are complete. The project context now targets a Telegram Local Bot API Server based local ingest worker, and the code has config loading, Telegram Bot API baseline, startup health checks, SQLite-backed operational state, Telegram capture-to-job creation, and controlled Telegram file import into runtime staging/archive.
 
 ## Durable Decisions
 
@@ -21,16 +21,17 @@ The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 3 ar
 - Use deterministic TypeScript code for queue, state, file import, retry, permissions, and notifications.
 - Use `packages/db` as the SQL boundary; app code should call repository functions rather than writing SQL inline.
 - Use `packages/capture` as the Telegram update-to-job orchestration boundary.
+- Use `packages/importer` as the Telegram file import boundary; never process files in-place from Bot API storage.
 - Use RTZR STT for audio and voice files.
 - Write immutable Obsidian raw bundles under `raw/<date>/<source_id>/`.
 - Let the LLM wiki adapter update `wiki/**` only, never `raw/**`.
 
 ## Next Action
 
-Start Sprint 4: Local file import and archive.
+Start Sprint 5: Obsidian raw bundle writer.
 
 ```text
-Implement getFile-driven file import from Telegram Local Bot API storage into runtime staging/archive with path safety, sha256, duplicate detection, and job_file updates.
+Write immutable raw bundles under raw/<date>/<source_id>/ with manifest.yaml, source.md, log.md, and original/normalized/extracted artifact directories.
 ```
 
 ## Links

@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-4-local-file-import
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture
-> **Pending**: sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
+> **Current**: sprint-5-vault-bundle-writer
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import
+> **Pending**: sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -103,6 +103,7 @@ Telegram mobile/desktop
   - Worker never processes files in-place from Bot API storage.
   - Same file uploaded twice is detected as duplicate.
   - Unsafe paths are rejected.
+- **status**: completed. Added `packages/importer` to copy Telegram Local Bot API files into `runtime/staging` and `runtime/archive/originals`, compute SHA-256, detect duplicate bytes through SQLite metadata, enforce max file size, and reject unsafe relative/absolute paths.
 
 ## Sprint 5 — Obsidian Raw Bundle Writer
 
