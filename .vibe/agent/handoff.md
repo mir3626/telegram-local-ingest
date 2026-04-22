@@ -38,6 +38,21 @@ MVP roadmap is complete and `apps/worker` now wires the main flow together. Next
 Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import -> raw bundle -> optional RTZR/wiki adapter -> Telegram status.
 ```
 
+## Continuation Prompt
+
+Use this when resuming in a fresh session:
+
+```text
+Continue from C:\Users\Tony\Workspace\telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. The MVP roadmap is complete through commit e97e578 plus this handoff update. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: prepare and run a live smoke against a configured .env/local Telegram server/Obsidian vault, or add a small .env readiness checker before live smoke if credentials/server are not ready.
+```
+
+## Latest Verification
+
+- `npm run typecheck`: passed
+- `npm test`: passed, 275 tests, 274 passed, 1 skipped
+- `npm run build`: passed
+- `git status`: clean before this handoff-only update
+
 ## Links
 
 - Product context: `docs/context/product.md`
