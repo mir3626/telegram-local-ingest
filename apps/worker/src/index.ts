@@ -103,6 +103,16 @@ interface RtzrPreset {
   config: RtzrTranscribeConfig;
 }
 
+interface SttLanguagePreset {
+  key: string;
+  label: string;
+  emoji: string;
+  rtzrModelName: NonNullable<RtzrTranscribeConfig["model_name"]>;
+  rtzrLanguage: NonNullable<RtzrTranscribeConfig["language"]>;
+  rtzrLanguageCandidates?: string[];
+  sensevoiceLanguage: string;
+}
+
 const RTZR_PRESETS: RtzrPreset[] = [
   {
     key: "meeting",
@@ -156,6 +166,50 @@ const RTZR_PRESETS: RtzrPreset[] = [
       use_paragraph_splitter: true,
       paragraph_splitter: { max: 50 },
     },
+  },
+];
+
+const STT_LANGUAGE_PRESETS: SttLanguagePreset[] = [
+  {
+    key: "ko",
+    label: "한국어",
+    emoji: "🇰🇷",
+    rtzrModelName: "sommers",
+    rtzrLanguage: "ko",
+    sensevoiceLanguage: "ko",
+  },
+  {
+    key: "en",
+    label: "영어",
+    emoji: "🇺🇸",
+    rtzrModelName: "whisper",
+    rtzrLanguage: "en",
+    sensevoiceLanguage: "en",
+  },
+  {
+    key: "zh",
+    label: "중국어",
+    emoji: "🇨🇳",
+    rtzrModelName: "whisper",
+    rtzrLanguage: "zh",
+    sensevoiceLanguage: "zh",
+  },
+  {
+    key: "ja",
+    label: "일본어",
+    emoji: "🇯🇵",
+    rtzrModelName: "sommers",
+    rtzrLanguage: "ja",
+    sensevoiceLanguage: "ja",
+  },
+  {
+    key: "multi",
+    label: "혼합/자동",
+    emoji: "🌐",
+    rtzrModelName: "whisper",
+    rtzrLanguage: "multi",
+    rtzrLanguageCandidates: ["ko", "en", "ja", "zh"],
+    sensevoiceLanguage: "auto",
   },
 ];
 
@@ -239,7 +293,7 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
       try {
         if (isTelegramUserAllowed(callback.userId, context.config.telegram.allowedUserIds)) {
           const handled = await handleRetryCallback(context, callback)
-            || await handleRtzrPresetCallback(context, callback);
+            || await handleSttContextCallback(context, callback);
           operatorCommandsHandled += handled ? 1 : 0;
         }
       } finally {
@@ -435,8 +489,16 @@ async function handleRetryCallback(context: WorkerContext, callback: ParsedTeleg
   return true;
 }
 
-async function handleRtzrPresetCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
-  const parsed = parseRtzrPresetCallbackData(callback.data);
+async function handleSttContextCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
+  const languageSelection = parseSttLanguageCallbackData(callback.data);
+  if (languageSelection) {
+    return handleSttLanguageCallback(context, callback, languageSelection);
+  }
+  return handleSttEnvironmentCallback(context, callback);
+}
+
+async function handleSttEnvironmentCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
+  const parsed = parseSttEnvironmentCallbackData(callback.data);
   if (!parsed || !callback.chatId) {
     await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 처리할 수 없는 선택입니다.");
     return false;
@@ -464,21 +526,87 @@ async function handleRtzrPresetCallback(context: WorkerContext, callback: Parsed
     return true;
   }
 
+  appendJobEvent(context.db, job.id, "stt.environment_selected", `${preset.emoji} ${preset.label}`, {
+    sttProvider: context.config.stt.provider,
+    presetKey: preset.key,
+    presetLabel: preset.label,
+    presetDescription: preset.description,
+    translationDefaultRelation: context.config.translation.defaultRelation,
+  });
+  await context.telegram.answerCallbackQuery(callback.callbackQueryId, `${preset.emoji} ${preset.label} 환경을 저장했습니다.`);
+  await context.telegram.sendMessage(
+    callback.chatId,
+    buildSttLanguagePrompt(job.id, preset),
+    { replyMarkup: buildSttLanguageKeyboard(job.id, preset.key) },
+  );
+  logWorker(`stt environment selected job=${job.id} provider=${context.config.stt.provider} preset=${preset.key}`, "info", "STT");
+  return true;
+}
+
+async function handleSttLanguageCallback(
+  context: WorkerContext,
+  callback: ParsedTelegramCallback,
+  parsed: { presetKey: string; languageKey: string; jobId: string },
+): Promise<boolean> {
+  if (!callback.chatId) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 처리할 수 없는 선택입니다.");
+    return false;
+  }
+
+  const preset = RTZR_PRESETS.find((candidate) => candidate.key === parsed.presetKey);
+  if (!preset) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 알 수 없는 녹음 환경입니다.");
+    return false;
+  }
+
+  const language = STT_LANGUAGE_PRESETS.find((candidate) => candidate.key === parsed.languageKey);
+  if (!language) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 알 수 없는 인식 언어입니다.");
+    return false;
+  }
+
+  const job = getJob(context.db, parsed.jobId);
+  if (!job) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
+    return true;
+  }
+
+  if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔒 이 작업을 변경할 권한이 없습니다.");
+    return true;
+  }
+
+  if (job.status !== "RECEIVED") {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⏳ 이미 처리 중인 작업입니다.");
+    return true;
+  }
+
+  const rtzrConfig = buildRtzrTranscribeConfig(preset, language);
+  const sensevoiceConfig = buildSenseVoiceTranscribeOptions(context.config, language);
   appendJobEvent(context.db, job.id, "stt.preset_selected", `${preset.emoji} ${preset.label}`, {
     sttProvider: context.config.stt.provider,
     presetKey: preset.key,
     presetLabel: preset.label,
     presetDescription: preset.description,
-    rtzrConfig: preset.config,
-    sensevoiceConfig: buildSenseVoiceTranscribeOptions(context.config),
+    languageKey: language.key,
+    languageLabel: language.label,
+    languageCode: language.rtzrLanguage,
+    rtzrModelName: language.rtzrModelName,
+    ...(language.rtzrLanguageCandidates ? { languageCandidates: language.rtzrLanguageCandidates } : {}),
+    rtzrConfig,
+    sensevoiceConfig,
     translationDefaultRelation: context.config.translation.defaultRelation,
   });
   const queued = transitionJob(context.db, job.id, "QUEUED", {
-    message: `STT preset selected: ${preset.label}`,
+    message: `STT preset selected: ${preset.label}, ${language.label}`,
   });
-  await context.telegram.answerCallbackQuery(callback.callbackQueryId, `${preset.emoji} ${preset.label} 설정을 저장했습니다.`);
-  await context.telegram.sendMessage(callback.chatId, buildPresetQueuedMessage(queued.id, preset));
-  logWorker(`stt preset selected job=${queued.id} provider=${context.config.stt.provider} preset=${preset.key}`, "info", "STT");
+  await context.telegram.answerCallbackQuery(callback.callbackQueryId, `${language.emoji} ${language.label} 설정을 저장했습니다.`);
+  await context.telegram.sendMessage(callback.chatId, buildPresetQueuedMessage(queued.id, preset, language));
+  logWorker(
+    `stt preset selected job=${queued.id} provider=${context.config.stt.provider} preset=${preset.key} language=${language.key} model=${language.rtzrModelName}`,
+    "info",
+    "STT",
+  );
   return true;
 }
 
@@ -711,6 +839,30 @@ function buildSttPresetKeyboard(jobId: string): InlineKeyboardMarkup {
   };
 }
 
+function buildSttLanguagePrompt(jobId: string, preset: RtzrPreset): string {
+  return [
+    `🌐 ${preset.emoji} ${preset.label} 환경을 저장했어요: ${jobId}`,
+    "",
+    "어떤 언어로 인식할까요?",
+    "언어 선택에 따라 리턴제로 모델을 자동으로 분기합니다.",
+  ].join("\n");
+}
+
+function buildSttLanguageKeyboard(jobId: string, presetKey: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      STT_LANGUAGE_PRESETS.slice(0, 3).map((language) => ({
+        text: `${language.emoji} ${language.label}`,
+        callback_data: `stt-lang:${presetKey}:${language.key}:${jobId}`,
+      })),
+      STT_LANGUAGE_PRESETS.slice(3).map((language) => ({
+        text: `${language.emoji} ${language.label}`,
+        callback_data: `stt-lang:${presetKey}:${language.key}:${jobId}`,
+      })),
+    ],
+  };
+}
+
 function buildRetryKeyboard(jobId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [[{
@@ -720,11 +872,20 @@ function buildRetryKeyboard(jobId: string): InlineKeyboardMarkup {
   };
 }
 
-function buildPresetQueuedMessage(jobId: string, preset: RtzrPreset): string {
+function buildPresetQueuedMessage(jobId: string, preset: RtzrPreset, language: SttLanguagePreset): string {
   return [
-    `✅ ${preset.emoji} ${preset.label} 설정을 저장했어요.`,
+    `✅ ${preset.emoji} ${preset.label} / ${language.emoji} ${language.label} 설정을 저장했어요.`,
     `📥 처리 대기열에 넣었습니다: ${jobId}`,
   ].join("\n");
+}
+
+function buildRtzrTranscribeConfig(preset: RtzrPreset, language: SttLanguagePreset): RtzrTranscribeConfig {
+  return {
+    ...preset.config,
+    model_name: language.rtzrModelName,
+    language: language.rtzrLanguage,
+    ...(language.rtzrLanguageCandidates ? { language_candidates: language.rtzrLanguageCandidates } : {}),
+  };
 }
 
 function selectedRtzrConfig(events: StoredJobEvent[]): RtzrTranscribeConfig {
@@ -743,13 +904,13 @@ function selectedSenseVoiceConfig(config: AppConfig, events: StoredJobEvent[]): 
   return buildSenseVoiceTranscribeOptions(config);
 }
 
-function buildSenseVoiceTranscribeOptions(config: AppConfig): SenseVoiceTranscribeOptions {
+function buildSenseVoiceTranscribeOptions(config: AppConfig, language?: SttLanguagePreset): SenseVoiceTranscribeOptions {
   return {
     pythonPath: resolveProjectRelativePath(config.sensevoice.pythonPath),
     scriptPath: resolveProjectRelativePath(config.sensevoice.scriptPath),
     model: config.sensevoice.model,
     device: config.sensevoice.device,
-    language: config.sensevoice.language,
+    language: language?.sensevoiceLanguage ?? config.sensevoice.language,
     useItn: config.sensevoice.useItn,
     batchSizeSeconds: config.sensevoice.batchSizeSeconds,
     mergeVad: config.sensevoice.mergeVad,
@@ -789,12 +950,20 @@ function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactI
   });
 }
 
-function parseRtzrPresetCallbackData(data: string | undefined): { presetKey: string; jobId: string } | null {
+function parseSttEnvironmentCallbackData(data: string | undefined): { presetKey: string; jobId: string } | null {
   const match = /^(?:rtzr|stt):([a-z0-9_-]+):(.+)$/.exec(data ?? "");
   if (!match?.[1] || !match[2]) {
     return null;
   }
   return { presetKey: match[1], jobId: match[2] };
+}
+
+function parseSttLanguageCallbackData(data: string | undefined): { presetKey: string; languageKey: string; jobId: string } | null {
+  const match = /^stt-lang:([a-z0-9_-]+):([a-z0-9_-]+):(.+)$/.exec(data ?? "");
+  if (!match?.[1] || !match[2] || !match[3]) {
+    return null;
+  }
+  return { presetKey: match[1], languageKey: match[2], jobId: match[3] };
 }
 
 function parseRetryCallbackData(data: string | undefined): { jobId: string } | null {

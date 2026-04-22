@@ -123,7 +123,15 @@ test("runWorkerOnce asks for RTZR preset on audio uploads and queues after callb
     const second = await runWorkerOnce(context);
 
     assert.equal(second.operatorCommandsHandled, 1);
-    assert.equal(second.jobsProcessed, 1);
+    assert.equal(second.jobsProcessed, 0);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "RECEIVED");
+    assert.match(sentMessages[1]?.text ?? "", /어떤 언어/);
+    assert.match(JSON.stringify(sentMessages[1]?.reply_markup), /stt-lang:meeting:ko:tg_300_21/);
+
+    const third = await runWorkerOnce(context);
+
+    assert.equal(third.operatorCommandsHandled, 1);
+    assert.equal(third.jobsProcessed, 1);
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
     assert.equal(fs.existsSync(path.join(fixture.botRoot, "audio", "call.m4a")), false);
     assert.ok(answeredCallbacks.length > 0);
@@ -151,19 +159,23 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
       db: dbHandle.db,
       telegram: new TelegramBotApiClient(
         { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
-        mockAudioPresetFetch(sentMessages, answeredCallbacks),
+        mockAudioPresetFetch(sentMessages, answeredCallbacks, "en"),
       ),
       rtzr: mockRtzrTranscriber(rtzrCalls),
     };
 
     await runWorkerOnce(context);
     await runWorkerOnce(context);
+    await runWorkerOnce(context);
 
     const manifest = fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml"), "utf8");
     assert.equal(rtzrCalls.length, 1);
-    assert.equal(rtzrCalls[0]?.config.domain, "GENERAL");
+    assert.equal(rtzrCalls[0]?.config.model_name, "whisper");
+    assert.equal(rtzrCalls[0]?.config.language, "en");
     assert.equal(rtzrCalls[0]?.config.use_diarization, true);
     assert.equal(rtzrCalls[0]?.waitOptions.pollIntervalMs, 5000);
+    assert.match(manifest, /language:/);
+    assert.match(manifest, /model_name: "whisper"/);
     assert.match(manifest, /call\.rtzr\.json/);
     assert.match(manifest, /call\.transcript\.md/);
     assert.match(fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
@@ -197,11 +209,12 @@ test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles arti
 
     await runWorkerOnce(context);
     await runWorkerOnce(context);
+    await runWorkerOnce(context);
 
     const manifest = fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml"), "utf8");
     assert.equal(senseVoiceCalls.length, 1);
     assert.equal(senseVoiceCalls[0]?.options.device, "cpu");
-    assert.equal(senseVoiceCalls[0]?.options.language, "auto");
+    assert.equal(senseVoiceCalls[0]?.options.language, "ko");
     assert.match(manifest, /provider: "sensevoice"/);
     assert.match(manifest, /call\.sensevoice\.json/);
     assert.match(manifest, /call\.transcript\.md/);
@@ -232,6 +245,7 @@ test("runWorkerOnce sends a retry button when processing fails", async () => {
       sensevoice: mockFailingSenseVoiceTranscriber("sensevoice failed"),
     };
 
+    await runWorkerOnce(context);
     await runWorkerOnce(context);
     await assert.rejects(() => runWorkerOnce(context), /sensevoice failed/);
 
@@ -442,6 +456,7 @@ function mockTelegramFetch(
 function mockAudioPresetFetch(
   sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }>,
   answeredCallbacks: unknown[],
+  languageKey = "ko",
 ): FetchLike {
   return async (input, init) => {
     const method = input.split("/").at(-1);
@@ -469,20 +484,39 @@ function mockAudioPresetFetch(
           }],
         });
       }
+      if (offset === 12) {
+        return jsonResponse({
+          ok: true,
+          result: [{
+            update_id: 12,
+            callback_query: {
+              id: "callback-1",
+              from: { id: 400, is_bot: false, first_name: "Tony" },
+              message: {
+                message_id: 22,
+                date: 1_777_000_002,
+                chat: { id: 300, type: "private" },
+                text: "preset",
+              },
+              data: "stt:meeting:tg_300_21",
+            },
+          }],
+        });
+      }
       return jsonResponse({
         ok: true,
         result: [{
-          update_id: 12,
+          update_id: 13,
           callback_query: {
-            id: "callback-1",
+            id: "callback-2",
             from: { id: 400, is_bot: false, first_name: "Tony" },
             message: {
-              message_id: 22,
-              date: 1_777_000_002,
+              message_id: 23,
+              date: 1_777_000_003,
               chat: { id: 300, type: "private" },
-              text: "preset",
+              text: "language",
             },
-            data: "rtzr:meeting:tg_300_21",
+            data: `stt-lang:meeting:${languageKey}:tg_300_21`,
           },
         }],
       });

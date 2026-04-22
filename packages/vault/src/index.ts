@@ -317,6 +317,13 @@ interface ProcessingContext {
     key: string;
     label: string;
     description?: string;
+    language?: {
+      key: string;
+      label: string;
+      code: string;
+      modelName?: string;
+      candidates?: string[];
+    };
     rtzrConfig?: unknown;
     sensevoiceConfig?: unknown;
   };
@@ -343,6 +350,20 @@ function buildProcessingContext(events: StoredJobEvent[]): ProcessingContext {
       ...(selected.data.rtzrConfig !== undefined ? { rtzrConfig: selected.data.rtzrConfig } : {}),
       ...(selected.data.sensevoiceConfig !== undefined ? { sensevoiceConfig: selected.data.sensevoiceConfig } : {}),
     };
+    const languageKey = typeof selected.data.languageKey === "string" ? selected.data.languageKey : undefined;
+    const languageLabel = typeof selected.data.languageLabel === "string" ? selected.data.languageLabel : undefined;
+    const languageCode = typeof selected.data.languageCode === "string" ? selected.data.languageCode : undefined;
+    if (languageKey && languageLabel && languageCode) {
+      context.sttPreset.language = {
+        key: languageKey,
+        label: languageLabel,
+        code: languageCode,
+        ...(typeof selected.data.rtzrModelName === "string" ? { modelName: selected.data.rtzrModelName } : {}),
+        ...(Array.isArray(selected.data.languageCandidates) && selected.data.languageCandidates.every((candidate) => typeof candidate === "string")
+          ? { candidates: selected.data.languageCandidates }
+          : {}),
+      };
+    }
   }
   if (typeof selected.data.translationDefaultRelation === "string") {
     context.translation = {
@@ -366,6 +387,18 @@ function yamlProcessingContext(context: ProcessingContext): string[] {
     lines.push(`    label: ${yamlScalar(context.sttPreset.label)}`);
     if (context.sttPreset.description) {
       lines.push(`    description: ${yamlScalar(context.sttPreset.description)}`);
+    }
+    if (context.sttPreset.language) {
+      lines.push("    language:");
+      lines.push(`      key: ${yamlScalar(context.sttPreset.language.key)}`);
+      lines.push(`      label: ${yamlScalar(context.sttPreset.language.label)}`);
+      lines.push(`      code: ${yamlScalar(context.sttPreset.language.code)}`);
+      if (context.sttPreset.language.modelName) {
+        lines.push(`      model_name: ${yamlScalar(context.sttPreset.language.modelName)}`);
+      }
+      if (context.sttPreset.language.candidates) {
+        lines.push(`      candidates_json: ${yamlScalar(JSON.stringify(context.sttPreset.language.candidates))}`);
+      }
     }
     if (context.sttPreset.rtzrConfig !== undefined) {
       lines.push(`    rtzr_config_json: ${yamlScalar(JSON.stringify(context.sttPreset.rtzrConfig ?? {}))}`);
