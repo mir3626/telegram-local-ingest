@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-6-rtzr-stt
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer
-> **Pending**: sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
+> **Current**: sprint-7-wiki-ingest-adapter
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt
+> **Pending**: sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -135,6 +135,7 @@ Telegram mobile/desktop
   - Audio jobs produce transcript markdown.
   - RTZR result is persisted locally immediately.
   - External API failures leave retryable job state.
+- **status**: completed. Added `packages/rtzr` with OAuth token handling, batch STT submit/poll APIs, 429 polling backoff, failed-result errors, transcript artifact writing, supported format checks, and ffmpeg availability/conversion helpers.
 
 ## Sprint 7 — Wiki Ingest Adapter
 

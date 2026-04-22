@@ -53,7 +53,9 @@
     {
       "id": "sprint-6-rtzr-stt",
       "name": "RTZR STT Audio Processor",
-      "status": "planned"
+      "status": "passed",
+      "startedAt": "2026-04-22T08:59:41.251Z",
+      "completedAt": "2026-04-22T09:05:03.972Z"
     },
     {
       "id": "sprint-7-wiki-ingest-adapter",
@@ -67,8 +69,8 @@
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-6-rtzr-stt",
-    "lastActionSummary": "Completed Sprint 5: added immutable Obsidian raw bundle writing with deterministic paths, manifest/source/log files, artifact directories, and finalized overwrite protection.",
+    "currentSprintId": "sprint-7-wiki-ingest-adapter",
+    "lastActionSummary": "Completed Sprint 6: added RTZR auth, batch submit/poll, 429 backoff, failed-result handling, transcript artifact writing, and ffmpeg availability/conversion helpers.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -78,7 +80,7 @@
       "LLM agent only updates wiki through adapter"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-22T08:59:41.251Z"
+    "updatedAt": "2026-04-22T09:05:03.972Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -93,8 +95,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-22T08:59:41.251Z",
-  "verifiedAt": "2026-04-22T08:59:41.251Z",
+  "stateUpdatedAt": "2026-04-22T09:05:03.972Z",
+  "verifiedAt": "2026-04-22T09:05:03.972Z",
   "verificationCommands": [
     {
       "id": "typecheck",
