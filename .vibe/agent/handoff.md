@@ -16,6 +16,8 @@ The harness has been synced from the local WSL-visible `vibe-doctor` template at
 
 Live smoke has passed against the local Telegram Bot API Server and temporary vault. `TonyYoniBot` accepted an `/ingest project:smoke tag:live first smoke test` file message, created SQLite job `tg_5985744318_2`, imported the Local Bot API file into runtime archive/staging, wrote immutable raw bundle `raw/2026-04-22/tg_5985744318_2/`, skipped RTZR/wiki because credentials/adapter are not configured, and completed with Telegram notification.
 
+Upload-only behavior is now supported: an authorized file upload creates an ingest job even without `/ingest` text. Plain captions are preserved as instructions; `/ingest` captions still provide optional `project:`/`tag:` metadata. After a job reaches `COMPLETED`, the worker deletes the corresponding Telegram Local Bot API Server source file from `TELEGRAM_LOCAL_FILES_ROOT` so `documents/file_*` does not duplicate the archived/runtime/raw copies. A Windows launcher exists as `Start Telegram Local Ingest.cmd` and has also been copied to `C:\Users\Tony\Desktop\Start Telegram Local Ingest.cmd`; it starts the local Bot API server and worker in separate WSL console windows using the project `.env`.
+
 ## Durable Decisions
 
 - Use Telegram as the single capture, command, and notify channel.
@@ -36,7 +38,7 @@ Live smoke has passed against the local Telegram Bot API Server and temporary va
 
 ## Next Action
 
-MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to decide whether to harden live operations around this flow: background service script, better smoke command, richer logging, RTZR credentials, or wiki adapter wiring.
+MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to run one real upload-only smoke from the desktop launcher, then decide whether to add richer worker logs, RTZR credentials, or wiki adapter wiring.
 
 ```text
 Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import -> raw bundle -> optional RTZR/wiki adapter -> Telegram status.
@@ -47,7 +49,7 @@ Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.2` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`. The MVP roadmap is complete, `npm run smoke:ready` exists, and live smoke passed against local Telegram Bot API Server plus `/home/tony/obsidian-ingest-smoke-vault`. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: operational hardening around the live flow, such as service scripts, dedicated smoke command, richer worker logs, RTZR credentials, or wiki adapter wiring.
+Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.2` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and `Start Telegram Local Ingest.cmd` exists in the repo plus the Windows desktop. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: run one real upload-only smoke from the launcher, then consider richer worker logs, RTZR credentials, or wiki adapter wiring.
 ```
 
 ## Latest Verification
@@ -58,6 +60,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 - `npm test`: harness-only failures remain in `test/run-codex-wrapper.test.ts` under WSL locale/wrapper behavior; application tests pass
 - `npm run smoke:ready`: passed after `.env` was configured
 - Live smoke passed: job `tg_5985744318_2` completed and raw bundle was written under `/home/tony/obsidian-ingest-smoke-vault/raw/2026-04-22/tg_5985744318_2/`
+- Latest app-focused verification after upload-only/source-cleanup/launcher changes: `npm run typecheck`, `npm run build`, and 50 focused app tests passed
 
 ## WSL Move Notes
 

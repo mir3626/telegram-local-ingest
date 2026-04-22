@@ -36,6 +36,7 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
     });
     assert.equal(getTelegramOffset(dbHandle.db, "123:abc"), 11);
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    assert.equal(fs.existsSync(path.join(fixture.botRoot, "documents", "lead.txt")), false);
     assert.ok(fs.existsSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml")));
     assert.equal(mustGetSourceBundleForJob(dbHandle.db, "tg_300_21").sourceMarkdownPath.endsWith("source.md"), true);
     assert.deepEqual(sentMessages.map((message) => message.text), [
@@ -43,6 +44,34 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
       "Completed: tg_300_21 (sales)",
     ]);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "wiki.skipped"));
+    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "telegram_source.deleted"));
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce treats file uploads without captions as ingest jobs", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "documents/upload-only.txt", "upload only");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  try {
+    migrate(dbHandle.db);
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, undefined, "documents/upload-only.txt"),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsCreated, 1);
+    assert.equal(result.jobsProcessed, 1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    assert.equal(fs.existsSync(path.join(fixture.botRoot, "documents", "upload-only.txt")), false);
   } finally {
     dbHandle.close();
   }
@@ -59,7 +88,7 @@ test("runWorkerOnce handles operator status without creating a job", async () =>
       db: dbHandle.db,
       telegram: new TelegramBotApiClient(
         { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
-        mockTelegramFetch(sentMessages, "/status"),
+        mockTelegramFetch(sentMessages, "/status", null),
       ),
     };
 
@@ -117,7 +146,11 @@ function writeFile(root: string, relativePath: string, content: string): string 
   return filePath;
 }
 
-function mockTelegramFetch(sentMessages: Array<{ chat_id: string; text: string }>, text = "/ingest project:sales tag:lead"): FetchLike {
+function mockTelegramFetch(
+  sentMessages: Array<{ chat_id: string; text: string }>,
+  text: string | undefined = "/ingest project:sales tag:lead",
+  filePath: string | null = "documents/lead.txt",
+): FetchLike {
   return async (input, init) => {
     const method = input.split("/").at(-1);
     const body = init?.body ? JSON.parse(String(init.body)) : {};
@@ -132,14 +165,18 @@ function mockTelegramFetch(sentMessages: Array<{ chat_id: string; text: string }
               date: 1_777_000_001,
               chat: { id: 300, type: "private" },
               from: { id: 400, is_bot: false, first_name: "Tony" },
-              caption: text,
-              document: {
-                file_id: "doc-file",
-                file_unique_id: "doc-unique",
-                file_name: "lead.txt",
-                mime_type: "text/plain",
-                file_size: 12,
-              },
+              ...(text !== undefined ? { caption: text } : {}),
+              ...(filePath
+                ? {
+                    document: {
+                      file_id: "doc-file",
+                      file_unique_id: "doc-unique",
+                      file_name: path.basename(filePath),
+                      mime_type: "text/plain",
+                      file_size: 12,
+                    },
+                  }
+                : {}),
             },
           },
         ],
@@ -152,7 +189,7 @@ function mockTelegramFetch(sentMessages: Array<{ chat_id: string; text: string }
           file_id: "doc-file",
           file_unique_id: "doc-unique",
           file_size: 12,
-          file_path: "documents/lead.txt",
+          file_path: filePath ?? "documents/lead.txt",
         },
       });
     }

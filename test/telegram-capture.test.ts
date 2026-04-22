@@ -105,6 +105,52 @@ test("captureTelegramUpdates creates queued ingest jobs and stores offsets", () 
   }
 });
 
+test("captureTelegramUpdates creates queued jobs for file uploads without /ingest text", () => {
+  const handle = openIngestDatabase(":memory:");
+  try {
+    migrate(handle.db);
+    const update = documentUpdate();
+    delete update.message!.caption;
+
+    const result = captureTelegramUpdates(handle.db, [update], {
+      botKey: "bot-main",
+      allowedUserIds: ["400"],
+      pollTimeoutSeconds: 0,
+      now: NOW,
+    });
+
+    assert.equal(result.jobsCreated, 1);
+    const job = getJob(handle.db, "tg_300_21");
+    assert.equal(job?.status, "QUEUED");
+    assert.equal(job?.command, undefined);
+    assert.deepEqual(job?.tags, []);
+    assert.equal(job?.instructions, undefined);
+    assert.equal(listJobFiles(handle.db, "tg_300_21")[0]?.originalName, "lead.pdf");
+  } finally {
+    handle.close();
+  }
+});
+
+test("captureTelegramUpdates stores plain captions as upload instructions", () => {
+  const handle = openIngestDatabase(":memory:");
+  try {
+    migrate(handle.db);
+    const update = documentUpdate();
+    update.message!.caption = "please route this to sales";
+
+    captureTelegramUpdates(handle.db, [update], {
+      botKey: "bot-main",
+      allowedUserIds: ["400"],
+      pollTimeoutSeconds: 0,
+      now: NOW,
+    });
+
+    assert.equal(getJob(handle.db, "tg_300_21")?.instructions, "please route this to sales");
+  } finally {
+    handle.close();
+  }
+});
+
 test("captureTelegramUpdates advances offsets for unauthorized and unsupported updates", () => {
   const handle = openIngestDatabase(":memory:");
   try {

@@ -39,6 +39,13 @@ export interface ImportJobFilesResult {
   importedFiles: ImportedFileResult[];
 }
 
+export interface CleanupTelegramSourceFilesResult {
+  jobId: string;
+  deletedPaths: string[];
+  skippedFiles: string[];
+  failedFiles: Array<{ fileId: string; error: string }>;
+}
+
 export class FileImportError extends Error {
   readonly fileId?: string;
 
@@ -153,6 +160,46 @@ export async function importTelegramJobFile(
     localPath: stagingPath,
     archivePath,
   };
+}
+
+export async function cleanupTelegramSourceFiles(
+  db: DatabaseSync,
+  client: TelegramBotApiClient,
+  jobId: string,
+): Promise<CleanupTelegramSourceFilesResult> {
+  const result: CleanupTelegramSourceFilesResult = {
+    jobId,
+    deletedPaths: [],
+    skippedFiles: [],
+    failedFiles: [],
+  };
+
+  for (const file of listJobFiles(db, jobId)) {
+    if (!file.sourceFileId) {
+      result.skippedFiles.push(file.id);
+      continue;
+    }
+
+    try {
+      const telegramFile = await client.getFile(file.sourceFileId);
+      const sourcePath = resolveLocalTelegramFilePath(telegramFile, client, file.id);
+      await fs.rm(sourcePath, { force: true });
+      result.deletedPaths.push(sourcePath);
+      appendJobEvent(db, jobId, "telegram_source.deleted", file.originalName ?? file.id, {
+        fileId: file.id,
+        sourcePath,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      result.failedFiles.push({ fileId: file.id, error: message });
+      appendJobEvent(db, jobId, "telegram_source.cleanup_failed", file.originalName ?? file.id, {
+        fileId: file.id,
+        error: message,
+      });
+    }
+  }
+
+  return result;
 }
 
 export function resolveRuntimePath(runtimeDir: string, ...segments: string[]): string {

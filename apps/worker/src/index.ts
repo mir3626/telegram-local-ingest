@@ -20,7 +20,7 @@ import {
   type DbHandle,
   type StoredJob,
 } from "@telegram-local-ingest/db";
-import { importTelegramJobFiles } from "@telegram-local-ingest/importer";
+import { cleanupTelegramSourceFiles, importTelegramJobFiles } from "@telegram-local-ingest/importer";
 import {
   buildJobCompletionMessage,
   buildJobFailureMessage,
@@ -118,7 +118,7 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
     try {
       if (parsed && isTelegramUserAllowed(parsed.userId, context.config.telegram.allowedUserIds)) {
         const command = getMessageCommand(parsed);
-        if (command && command.name !== "ingest" && command.name !== "unknown") {
+        if (parsed.files.length === 0 && command && command.name !== "ingest" && command.name !== "unknown") {
           const result = await sendOperatorCommandResponse(context.db, context.telegram, parsed);
           operatorCommandsHandled += result.handled ? 1 : 0;
         } else {
@@ -207,7 +207,12 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       if (job.chatId) {
         await context.telegram.sendMessage(job.chatId, buildJobCompletionMessage(job));
       }
-      return transitionJob(context.db, job.id, "COMPLETED", { message: "Completed" });
+      const completed = transitionJob(context.db, job.id, "COMPLETED", { message: "Completed" });
+      const cleanup = await cleanupTelegramSourceFiles(context.db, context.telegram, job.id);
+      if (cleanup.failedFiles.length > 0) {
+        console.warn(`telegram source cleanup incomplete for ${job.id}: ${cleanup.failedFiles.length} failure(s)`);
+      }
+      return completed;
     }
 
     return job;

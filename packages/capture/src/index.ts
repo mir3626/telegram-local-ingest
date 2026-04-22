@@ -95,19 +95,23 @@ export function createQueuedJobFromTelegramMessage(
   now?: string,
 ): StoredJob | null {
   const command = getMessageCommand(message);
-  if (!command || command.name !== "ingest") {
+  if (command && command.name !== "ingest") {
+    return null;
+  }
+  if (message.files.length === 0) {
     return null;
   }
 
+  const instructions = command?.instructions ?? plainTextInstructions(message);
   const jobInput = {
     id: buildTelegramJobId(message),
     source: "telegram-local-bot-api",
     chatId: message.chatId,
-    command: command.raw,
-    tags: command.tags,
+    ...(command ? { command: command.raw } : {}),
+    tags: command?.tags ?? [],
     ...(message.userId ? { userId: message.userId } : {}),
-    ...(command.project ? { project: command.project } : {}),
-    ...(command.instructions ? { instructions: command.instructions } : {}),
+    ...(command?.project ? { project: command.project } : {}),
+    ...(instructions ? { instructions } : {}),
     ...(now ? { now } : {}),
   } as const;
   const job = createJob(db, jobInput);
@@ -127,7 +131,7 @@ export function createQueuedJobFromTelegramMessage(
   }
 
   return transitionJob(db, job.id, "QUEUED", {
-    message: "Queued from Telegram /ingest command",
+    message: command ? "Queued from Telegram /ingest command" : "Queued from Telegram file upload",
     ...(now ? { now } : {}),
   });
 }
@@ -142,6 +146,15 @@ export function buildTelegramJobFileId(message: ParsedTelegramMessage, file: Par
 
 function sanitizeId(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "_");
+}
+
+function plainTextInstructions(message: ParsedTelegramMessage): string | undefined {
+  const value = message.caption ?? message.text;
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed.startsWith("/")) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 function setOffset(db: DatabaseSync, options: CaptureOptions, updateId: number): void {
