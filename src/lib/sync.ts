@@ -16,7 +16,7 @@ export interface SyncManifest {
 }
 
 export interface HybridFileConfig {
-  strategy: 'section-merge' | 'json-deep-merge' | 'template-regenerate';
+  strategy: 'section-merge' | 'json-deep-merge' | 'template-regenerate' | 'line-union';
   harnessMarkers?: string[];
   preserveMarkers?: string[];
   harnessKeys?: string[];
@@ -28,6 +28,7 @@ export type SyncAction =
   | { type: 'replace'; path: string; reason: string }
   | { type: 'section-merge'; path: string; sections: string[] }
   | { type: 'json-merge'; path: string; keys: string[] }
+  | { type: 'line-merge'; path: string; reason: string }
   | { type: 'template-regen'; path: string }
   | { type: 'skip'; path: string; reason: string }
   | { type: 'conflict'; path: string; reason: string }
@@ -435,6 +436,11 @@ export async function buildSyncPlan(
       continue;
     }
 
+    if (config.strategy === 'line-union') {
+      actions.push({ type: 'line-merge', path: relativePath, reason: config.note ?? 'line union merge' });
+      continue;
+    }
+
     actions.push({ type: 'template-regen', path: relativePath });
   }
 
@@ -526,6 +532,35 @@ export function jsonDeepMerge(
   return result as JsonValue;
 }
 
+function splitLogicalLines(content: string): string[] {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  if (lines.at(-1) === '') {
+    lines.pop();
+  }
+  return lines;
+}
+
+export function lineUnionMerge(localContent: string, upstreamContent: string): string {
+  const merged = splitLogicalLines(localContent);
+  const seen = new Set(merged);
+  let appended = false;
+
+  for (const line of splitLogicalLines(upstreamContent)) {
+    if (line.length === 0 || seen.has(line)) {
+      continue;
+    }
+
+    if (!appended && merged.length > 0 && merged.at(-1) !== '') {
+      merged.push('');
+    }
+    merged.push(line);
+    seen.add(line);
+    appended = true;
+  }
+
+  return `${merged.join('\n')}\n`;
+}
+
 export async function computeFileHash(filePath: string): Promise<string> {
   const content = await readFile(filePath);
   return createHash('sha256').update(content).digest('hex');
@@ -609,6 +644,16 @@ export async function applySyncPlan(
       ]);
       const merged = jsonDeepMerge(localJson, upstreamJson, config);
       await writeJson(localPath, merged);
+      hashTargets.add(action.path);
+      continue;
+    }
+
+    if (action.type === 'line-merge') {
+      const [localContent, upstreamContent] = await Promise.all([
+        readText(localPath),
+        readText(upstreamPath),
+      ]);
+      await writeText(localPath, lineUnionMerge(localContent, upstreamContent));
       hashTargets.add(action.path);
     }
   }

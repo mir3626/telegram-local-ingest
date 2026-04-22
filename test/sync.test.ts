@@ -7,6 +7,7 @@ import {
   buildSyncPlan,
   computeFileHash,
   jsonDeepMerge,
+  lineUnionMerge,
   sectionMerge,
   type HybridFileConfig,
   type SyncManifest,
@@ -152,6 +153,18 @@ describe('jsonDeepMerge', () => {
   });
 });
 
+describe('lineUnionMerge', () => {
+  it('preserves local ignore entries and appends missing upstream entries', () => {
+    const local = 'node_modules/\nruntime/\n.env\n';
+    const upstream = 'node_modules/\ndist/\n.env\n.vibe/sync-cache.json\n';
+
+    assert.equal(
+      lineUnionMerge(local, upstream),
+      'node_modules/\nruntime/\n.env\n\ndist/\n.vibe/sync-cache.json\n',
+    );
+  });
+});
+
 describe('computeFileHash', () => {
   it('returns stable hashes for identical content', async () => {
     const dir = await makeTempDir('sync-hash-');
@@ -184,6 +197,10 @@ describe('buildSyncPlan', () => {
             strategy: 'json-deep-merge',
             harnessKeys: ['scripts.vibe:*'],
             projectKeys: ['name'],
+          },
+          '.gitignore': {
+            strategy: 'line-union',
+            note: 'preserve project ignore entries',
           },
         },
         project: [],
@@ -241,6 +258,8 @@ describe('buildSyncPlan', () => {
       name: 'upstream',
       scripts: { 'vibe:sync': 'sync' },
     });
+    await writeFile(path.join(localRoot, '.gitignore'), 'node_modules/\nruntime/\n', 'utf8');
+    await writeFile(path.join(upstreamRoot, '.gitignore'), 'node_modules/\ndist/\n', 'utf8');
 
     const plan = await buildSyncPlan(localRoot, upstreamRoot, manifest);
 
@@ -253,6 +272,7 @@ describe('buildSyncPlan', () => {
     assert.equal(plan.actions.some((action) => action.type === 'new-file' && action.path === 'scripts/new.mjs'), true);
     assert.equal(plan.actions.some((action) => action.type === 'section-merge' && action.path === 'CLAUDE.md'), true);
     assert.equal(plan.actions.some((action) => action.type === 'json-merge' && action.path === 'package.json'), true);
+    assert.equal(plan.actions.some((action) => action.type === 'line-merge' && action.path === '.gitignore'), true);
   });
 
   it('expands glob harness entries and deduplicates exact file paths', async () => {
@@ -325,6 +345,8 @@ describe('sync manifest', () => {
     assert.equal(manifest.files.harness.includes('scripts/vibe-browser-smoke.mjs'), true);
     assert.equal(manifest.files.harness.includes('src/commands/bundle-size.ts'), true);
     assert.equal(manifest.files.harness.includes('.claude/skills/vibe-init/templates/readme-skeleton.md'), true);
+    assert.equal(manifest.files.harness.includes('.gitignore'), false);
+    assert.equal(manifest.files.hybrid['.gitignore']?.strategy, 'line-union');
     assert.equal(manifest.files.harness.includes('test/bundle-size.test.ts'), true);
     assert.equal(manifest.files.harness.includes('test/phase0-seal.test.ts'), true);
     assert.equal(manifest.files.harness.includes('test/browser-smoke-contract.test.ts'), true);

@@ -36,7 +36,6 @@
       "docs/context/orchestration.md",
       "docs/orchestration/providers.md",
       ".gitattributes",
-      ".gitignore",
       ".editorconfig",
       ".env.example",
       ".github/workflows/ci.yml",
@@ -186,7 +185,8 @@
       "docs/release/v1.4.3.md",
       "docs/release/v1.5.1.md",
       "docs/release/v1.5.2.md",
-      "docs/release/v1.5.3.md"
+      "docs/release/v1.5.3.md",
+      "docs/release/v1.5.4.md"
     ],
     "hybrid": {
       "CLAUDE.md": {
@@ -214,6 +214,10 @@
         "strategy": "json-deep-merge",
         "harnessKeys": ["hooks", "statusLine"],
         "projectKeys": ["permissions"]
+      },
+      ".gitignore": {
+        "strategy": "line-union",
+        "note": "Preserve project ignore entries while appending new upstream harness ignores"
       },
       "package.json": {
         "strategy": "json-deep-merge",

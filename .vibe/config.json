@@ -1,5 +1,5 @@
 {
-  "harnessVersion": "1.5.3",
+  "harnessVersion": "1.5.4",
   "orchestrator": "claude-opus",
   "sprintRoles": {
     "planner": "claude-opus",
@@ -54,5 +54,5 @@
     "everyN": 5
   },
   "mode": "human",
-  "harnessVersionInstalled": "1.5.3"
+  "harnessVersionInstalled": "1.5.4"
 }
