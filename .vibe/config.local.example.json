@@ -1,0 +1,42 @@
+{
+  "orchestrator": "claude-opus",
+  "sprintRoles": {
+    "planner": "claude-opus",
+    "generator": "codex",
+    "evaluator": "claude-opus"
+  },
+  "sprint": {
+    "unit": "feature",
+    "subAgentPerRole": true,
+    "freshContextPerSprint": true
+  },
+  "providers": {
+    "claude-opus": {
+      "command": "claude",
+      "args": ["-p", "{prompt}"],
+      "env": {}
+    },
+    "codex": {
+      "command": "./scripts/run-codex.sh",
+      "args": ["{prompt}"],
+      "env": {}
+    }
+  },
+  "qa": {
+    "preferScripts": [
+      "test:unit",
+      "test",
+      "typecheck",
+      "lint",
+      "build"
+    ]
+  },
+  "userDirectives": {
+    "auditSkippedMode": {
+      "enabled": false,
+      "reason": "temporary skip during planning",
+      "expiresAt": "2026-04-30T00:00:00.000Z",
+      "recordedAt": "2026-04-16T00:00:00.000Z"
+    }
+  }
+}

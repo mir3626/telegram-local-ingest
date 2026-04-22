@@ -1,0 +1,83 @@
+{
+  "$ref": "#/definitions/ProjectMap",
+  "definitions": {
+    "ProjectMap": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "string",
+          "const": "0.1"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastSprintId": {
+          "type": "string"
+        },
+        "modules": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "exports": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "imports": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sprintAdded": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exports",
+              "imports"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "activePlatformRules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string"
+              },
+              "sprintAdded": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "rule",
+              "location",
+              "sprintAdded"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "updatedAt",
+        "modules",
+        "activePlatformRules"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

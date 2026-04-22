@@ -1,0 +1,21 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = true
+
+# Unity/.NET C# sources
+# ---------------------
+# Use UTF-8 BOM + CRLF. On Korean Windows (chcp 949), tools that fail to
+# force UTF-8 in their environment can mis-detect BOMless UTF-8 .cs files
+# as CP949 and corrupt non-ASCII string literals during read/write
+# round-trips. The BOM removes that ambiguity. See docs/context/codex-execution.md.
+[*.cs]
+charset = utf-8-bom
+end_of_line = crlf
+indent_size = 4
+trim_trailing_whitespace = false

@@ -1,0 +1,58 @@
+{
+  "harnessVersion": "1.5.0",
+  "orchestrator": "claude-opus",
+  "sprintRoles": {
+    "planner": "claude-opus",
+    "generator": "codex",
+    "evaluator": "claude-opus"
+  },
+  "sprint": {
+    "unit": "feature",
+    "subAgentPerRole": true,
+    "freshContextPerSprint": true
+  },
+  "providers": {
+    "claude-opus": {
+      "command": "claude",
+      "args": [
+        "-p",
+        "{prompt}"
+      ],
+      "env": {}
+    },
+    "codex": {
+      "command": "./scripts/run-codex.sh",
+      "args": [
+        "{prompt}"
+      ],
+      "env": {},
+      "note": "UTF-8 safety wrapper for `codex exec`. 자동 재시도 + shell_environment_policy 주입. 상세: docs/context/codex-execution.md. 플러그인(codex:rescue)은 Windows 불안정으로 보류."
+    }
+  },
+  "qa": {
+    "preferScripts": [
+      "test:unit",
+      "test",
+      "typecheck",
+      "lint",
+      "build"
+    ]
+  },
+  "bundle": {
+    "enabled": false,
+    "dir": "dist",
+    "limitGzipKB": 80,
+    "excludeExt": [
+      ".map"
+    ]
+  },
+  "browserSmoke": {
+    "enabled": false,
+    "configPath": ".vibe/smoke.config.js"
+  },
+  "audit": {
+    "everyN": 5
+  },
+  "mode": "human",
+  "harnessVersionInstalled": "1.5.0"
+}

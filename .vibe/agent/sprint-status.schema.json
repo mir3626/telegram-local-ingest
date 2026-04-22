@@ -1,0 +1,313 @@
+{
+  "$ref": "#/definitions/SprintStatus",
+  "definitions": {
+    "SprintStatus": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "string",
+          "const": "0.1"
+        },
+        "project": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "runtime": {
+              "type": "string"
+            },
+            "framework": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        },
+        "sprints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "planned",
+                  "in_progress",
+                  "passed",
+                  "failed",
+                  "skipped"
+                ]
+              },
+              "startedAt": {
+                "type": "string"
+              },
+              "completedAt": {
+                "type": "string"
+              },
+              "planPromptPath": {
+                "type": "string"
+              },
+              "generatorReportPath": {
+                "type": "string"
+              },
+              "evaluatorVerdict": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "skipped"
+                ]
+              },
+              "addedVerificationCommands": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "command": {
+                      "type": "string"
+                    },
+                    "expectExitCode": {
+                      "type": "integer",
+                      "default": 0
+                    },
+                    "expectStdoutContains": {
+                      "type": "string"
+                    },
+                    "introducedInSprint": {
+                      "type": "string"
+                    },
+                    "runOutsideSandbox": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "command"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "deviations": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actualLoc": {
+                "type": "object",
+                "properties": {
+                  "added": {
+                    "type": "integer"
+                  },
+                  "deleted": {
+                    "type": "integer"
+                  },
+                  "net": {
+                    "type": "integer"
+                  },
+                  "filesChanged": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "added",
+                  "deleted",
+                  "net",
+                  "filesChanged"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "verificationCommands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SprintStatus/properties/sprints/items/properties/addedVerificationCommands/items"
+          }
+        },
+        "handoff": {
+          "type": "object",
+          "properties": {
+            "currentSprintId": {
+              "type": "string"
+            },
+            "lastActionSummary": {
+              "type": "string"
+            },
+            "openIssues": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "orchestratorContextBudget": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "preferencesActive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "handoffDocPath": {
+              "type": "string"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "currentSprintId",
+            "lastActionSummary",
+            "orchestratorContextBudget",
+            "preferencesActive"
+          ],
+          "additionalProperties": true
+        },
+        "sandboxNotes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "runOutsideSandbox": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "command",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "pendingRisks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "raisedBy": {
+                "type": "string"
+              },
+              "targetSprint": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "acknowledged",
+                  "resolved"
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "resolvedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "raisedBy",
+              "targetSprint",
+              "text",
+              "status",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "lastSprintScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "lastSprintScopeGlob": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "sprintsSinceLastAudit": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "stateUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "verifiedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "project",
+        "sprints",
+        "verificationCommands"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -1,0 +1,104 @@
+{
+  "$schema": "./sprint-status.schema.json",
+  "schemaVersion": "0.1",
+  "project": {
+    "name": "telegram-local-ingest",
+    "createdAt": "2026-04-22T00:00:00.000Z",
+    "runtime": "node24",
+    "framework": "vibe-doctor"
+  },
+  "sprints": [
+    {
+      "id": "sprint-0-phase0-seed",
+      "name": "Phase 0 Seed And Repository Skeleton",
+      "status": "passed",
+      "startedAt": "2026-04-22T00:00:00.000Z",
+      "completedAt": "2026-04-22T08:17:16.553Z"
+    },
+    {
+      "id": "sprint-1-telegram-local-baseline",
+      "name": "Telegram Local Bot API Baseline",
+      "status": "passed",
+      "startedAt": "2026-04-22T08:00:00.000Z",
+      "completedAt": "2026-04-22T08:17:16.553Z"
+    },
+    {
+      "id": "sprint-2-sqlite-job-model",
+      "name": "SQLite Job Model And State Machine",
+      "status": "planned"
+    },
+    {
+      "id": "sprint-3-telegram-capture",
+      "name": "Telegram Capture And Command Parser",
+      "status": "planned"
+    },
+    {
+      "id": "sprint-4-local-file-import",
+      "name": "Local File Import And Archive",
+      "status": "planned"
+    },
+    {
+      "id": "sprint-5-vault-bundle-writer",
+      "name": "Obsidian Raw Bundle Writer",
+      "status": "planned"
+    },
+    {
+      "id": "sprint-6-rtzr-stt",
+      "name": "RTZR STT Audio Processor",
+      "status": "planned"
+    },
+    {
+      "id": "sprint-7-wiki-ingest-adapter",
+      "name": "Wiki Ingest Adapter",
+      "status": "planned"
+    },
+    {
+      "id": "sprint-8-status-retry-cancel",
+      "name": "Status, Retry, Cancel, And Operator Polish",
+      "status": "planned"
+    }
+  ],
+  "handoff": {
+    "currentSprintId": "sprint-2-sqlite-job-model",
+    "lastActionSummary": "Completed Sprint 0/1: seeded the downstream project, added npm workspace skeleton, implemented config loading, Telegram Local Bot API client, startup health check, tests, and operator setup docs.",
+    "orchestratorContextBudget": "medium",
+    "preferencesActive": [
+      "Telegram Local Bot API Server for large files",
+      "Dropbox excluded from V1",
+      "npm workspaces for vibe-doctor compatibility",
+      "Obsidian raw bundles are immutable",
+      "LLM agent only updates wiki through adapter"
+    ],
+    "handoffDocPath": ".vibe/agent/handoff.md",
+    "updatedAt": "2026-04-22T08:17:16.553Z"
+  },
+  "policies": {
+    "scratchpadPath": ".vibe/agent/handoff.md",
+    "sessionLogPath": ".vibe/agent/session-log.md",
+    "verificationCommands": [
+      "npm run typecheck",
+      "npm test",
+      "npm run build"
+    ]
+  },
+  "pendingRisks": [],
+  "lastSprintScope": [],
+  "lastSprintScopeGlob": [],
+  "sprintsSinceLastAudit": 0,
+  "stateUpdatedAt": "2026-04-22T08:17:16.553Z",
+  "verifiedAt": null,
+  "verificationCommands": [
+    {
+      "id": "typecheck",
+      "command": "npm run typecheck"
+    },
+    {
+      "id": "test",
+      "command": "npm test"
+    },
+    {
+      "id": "build",
+      "command": "npm run build"
+    }
+  ]
+}

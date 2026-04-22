@@ -1,0 +1,30 @@
+{
+  "presetName": "agent-delegation",
+  "presetVersion": "1.0.0",
+  "description": "Scope-bound permissions for autonomous Sprint execution. Opt-in only.",
+  "rules": [
+    "Bash(npm install:*)",
+    "Bash(npm ci:*)",
+    "Bash(npm run build:*)",
+    "Bash(npm run dev:*)",
+    "Bash(npm run test:*)",
+    "Bash(npm run lint:*)",
+    "Bash(npm run vibe:*)",
+    "Bash(npx tsc:*)",
+    "Bash(npx vitest:*)",
+    "Bash(npx eslint:*)",
+    "Bash(npx playwright:*)",
+    "Bash(node --import tsx:*)",
+    "Bash(node --check:*)",
+    "Bash(node scripts/:*)",
+    "Bash(cat * | ./scripts/run-codex.sh:*)",
+    "Bash(git add:*)",
+    "Bash(git commit:*)",
+    "Bash(git status:*)",
+    "Bash(git diff:*)",
+    "Bash(git log:*)",
+    "Bash(git show:*)",
+    "Bash(git ls-files:*)",
+    "Bash(git push:*)"
+  ]
+}

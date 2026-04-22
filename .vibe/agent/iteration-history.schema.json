@@ -1,0 +1,84 @@
+{
+  "$ref": "#/definitions/IterationHistory",
+  "definitions": {
+    "IterationHistory": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string"
+        },
+        "currentIteration": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "iterations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "startedAt": {
+                "type": "string"
+              },
+              "completedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "goal": {
+                "type": "string"
+              },
+              "plannedSprints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "completedSprints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "milestoneProgress": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "startedAt",
+              "completedAt",
+              "goal",
+              "plannedSprints",
+              "completedSprints",
+              "milestoneProgress",
+              "summary"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "currentIteration",
+        "iterations"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

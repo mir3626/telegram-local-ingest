@@ -1,0 +1,76 @@
+{
+  "$schema": "./dimensions.schema.json",
+  "schemaVersion": 1,
+  "dimensions": [
+    {
+      "id": "goal",
+      "label": "프로젝트 목표 / 한 줄 정의",
+      "weight": 1,
+      "subFields": ["one_liner", "primary_value"],
+      "required": true
+    },
+    {
+      "id": "target_user",
+      "label": "핵심 사용자 및 이해관계자",
+      "weight": 0.9,
+      "subFields": ["primary_persona", "secondary_stakeholders", "user_scale"],
+      "required": true
+    },
+    {
+      "id": "platform",
+      "label": "플랫폼 / 배포 대상",
+      "weight": 0.7,
+      "subFields": ["platform_type", "runtime_constraints"],
+      "required": true
+    },
+    {
+      "id": "data_model",
+      "label": "주요 도메인 엔티티 및 관계",
+      "weight": 0.9,
+      "subFields": ["entities", "key_relations", "invariants"],
+      "required": true
+    },
+    {
+      "id": "primary_interaction",
+      "label": "핵심 사용자 시나리오",
+      "weight": 0.9,
+      "subFields": ["happy_path", "failure_paths"],
+      "required": true
+    },
+    {
+      "id": "success_metric",
+      "label": "성공 기준 / 측정 지표",
+      "weight": 0.8,
+      "subFields": ["acceptance_criteria", "kpi"],
+      "required": true
+    },
+    {
+      "id": "non_goals",
+      "label": "v1 의도적 제외 (non-goals)",
+      "weight": 0.5,
+      "subFields": [],
+      "required": false
+    },
+    {
+      "id": "constraints",
+      "label": "법·규제·비용·보안 제약",
+      "weight": 0.8,
+      "subFields": ["legal_regulatory", "budget", "security_privacy"],
+      "required": true
+    },
+    {
+      "id": "tech_stack",
+      "label": "기술 스택 선호·제약",
+      "weight": 0.6,
+      "subFields": ["language_runtime", "framework", "datastore", "hosting"],
+      "required": false
+    },
+    {
+      "id": "domain_specifics",
+      "label": "도메인 특화 이슈 (전문가 probing)",
+      "weight": 1,
+      "subFields": [],
+      "required": true
+    }
+  ]
+}

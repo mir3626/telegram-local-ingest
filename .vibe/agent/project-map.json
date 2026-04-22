@@ -1,0 +1,7 @@
+{
+  "$schema": "./project-map.schema.json",
+  "schemaVersion": "0.1",
+  "updatedAt": "2026-04-16T00:00:00.000Z",
+  "modules": {},
+  "activePlatformRules": []
+}

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run test:*)",
+      "Bash(npm run test:unit:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run preview:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run vibe:*)",
+      "Bash(node --check:*)",
+      "Bash(node --import tsx --test:*)",
+      "Bash(node scripts/vibe-:*)",
+      "Bash(bash -n:*)",
+      "Bash(cmd //c \"npx tsc:*)",
+      "Bash(cmd //c \"npm run:*)",
+      "Bash(cmd //c \"node:*)",
+      "Bash(cmd //c \"node --import tsx:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git tag -l:*)",
+      "Bash(git tag --list:*)",
+      "Bash(git branch:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git config --get:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./config/credentials.json)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "VIBE_STATUSLINE_READ_STDIN=1 bash .claude/statusline.sh",
+    "padding": 0
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/vibe-version-check.mjs 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "node scripts/vibe-model-registry-check.mjs 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npm run vibe:config-audit --silent"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/vibe-stop-qa-gate.mjs"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/vibe-checkpoint.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}

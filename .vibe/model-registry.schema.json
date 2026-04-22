@@ -1,0 +1,79 @@
+{
+  "$ref": "#/definitions/ModelRegistry",
+  "definitions": {
+    "ModelRegistry": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "type": "string"
+        },
+        "providers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "tiers": {
+                "type": "object",
+                "properties": {
+                  "flagship": {
+                    "type": "string"
+                  },
+                  "performant": {
+                    "type": "string"
+                  },
+                  "efficient": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "knownModels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "apiId": {
+                      "type": "string"
+                    },
+                    "release": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "apiId",
+                    "release"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "tiers",
+              "knownModels"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "updatedAt",
+        "source",
+        "providers"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

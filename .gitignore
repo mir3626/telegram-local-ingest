@@ -1,0 +1,26 @@
+node_modules/
+dist/
+coverage/
+.vscode/
+.DS_Store
+.vibe/config.local.json
+.vibe/runs/
+.env
+.env.*
+!.env.example
+secrets/
+config/credentials.json
+.claude/settings.local.json
+# legacy ouroboros sessions (no longer written)
+.ouroboros/
+.vibe/sync-backup/
+.vibe/sync-cache.json
+.vibe/sync-hashes.json
+scripts/tmp-*.ts
+scripts/tmp-*.mjs
+# dashboard runtime artifacts (M14-B)
+.vibe/agent/dashboard.pid
+.vibe/agent/daily/
+.vibe/agent/attention.jsonl
+# run-codex.sh unavailable signal (runtime artifact, auto-cleared on next success)
+.vibe/agent/codex-unavailable.flag

@@ -1,0 +1,29 @@
+{
+  "$schema": "./model-registry.schema.json",
+  "schemaVersion": 1,
+  "updatedAt": "2026-04-15T00:00:00.000Z",
+  "source": "vibe-doctor-upstream",
+  "providers": {
+    "anthropic": {
+      "tiers": {
+        "flagship": "opus",
+        "performant": "sonnet",
+        "efficient": "haiku"
+      },
+      "knownModels": {
+        "opus": {
+          "apiId": "claude-opus-4-6",
+          "release": "2026-04"
+        },
+        "sonnet": {
+          "apiId": "claude-sonnet-4-6",
+          "release": "2026-04"
+        },
+        "haiku": {
+          "apiId": "claude-haiku-4-5",
+          "release": "2025-10"
+        }
+      }
+    }
+  }
+}

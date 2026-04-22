@@ -1,0 +1,30 @@
+{
+  "$schema": "./iteration-history.schema.json",
+  "currentIteration": "iter-1",
+  "iterations": [
+    {
+      "id": "iter-1",
+      "label": "telegram-local-ingest-mvp",
+      "startedAt": "2026-04-22T00:00:00.000Z",
+      "completedAt": null,
+      "goal": "Build a Telegram Local Bot API Server based local ingest worker that writes immutable Obsidian raw bundles and triggers a constrained LLM wiki ingest adapter.",
+      "plannedSprints": [
+        "sprint-0-phase0-seed",
+        "sprint-1-telegram-local-baseline",
+        "sprint-2-sqlite-job-model",
+        "sprint-3-telegram-capture",
+        "sprint-4-local-file-import",
+        "sprint-5-vault-bundle-writer",
+        "sprint-6-rtzr-stt",
+        "sprint-7-wiki-ingest-adapter",
+        "sprint-8-status-retry-cancel"
+      ],
+      "completedSprints": [
+        "sprint-0-phase0-seed",
+        "sprint-1-telegram-local-baseline"
+      ],
+      "milestoneProgress": {},
+      "summary": "In progress. Sprint 0 seeded the downstream project from vibe-doctor. Sprint 1 added the Telegram Local Bot API baseline, startup checks, tests, and operator setup docs. Next is Sprint 2 SQLite job model."
+    }
+  ]
+}
