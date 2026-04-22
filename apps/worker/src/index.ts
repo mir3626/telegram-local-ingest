@@ -16,6 +16,7 @@ import {
   mustGetJob,
   mustGetSourceBundleForJob,
   openIngestDatabase,
+  requestRetry,
   setTelegramOffset,
   transitionJob,
   type DbHandle,
@@ -237,7 +238,8 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
     if (callback) {
       try {
         if (isTelegramUserAllowed(callback.userId, context.config.telegram.allowedUserIds)) {
-          const handled = await handleRtzrPresetCallback(context, callback);
+          const handled = await handleRetryCallback(context, callback)
+            || await handleRtzrPresetCallback(context, callback);
           operatorCommandsHandled += handled ? 1 : 0;
         }
       } finally {
@@ -383,13 +385,54 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
   } catch (error) {
     const failed = transitionToFailedIfPossible(context.db, jobId, error);
     if (failed?.chatId) {
-      await context.telegram.sendMessage(failed.chatId, buildJobFailureMessage(failed));
+      await context.telegram.sendMessage(
+        failed.chatId,
+        buildJobFailureMessage(failed),
+        failed.status === "FAILED" ? { replyMarkup: buildRetryKeyboard(failed.id) } : {},
+      );
     }
     if (error instanceof Error) {
       throw error;
     }
     throw new Error(String(error));
   }
+}
+
+async function handleRetryCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
+  const parsed = parseRetryCallbackData(callback.data);
+  if (!parsed) {
+    return false;
+  }
+
+  if (!callback.chatId) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 재시도할 작업을 확인할 수 없습니다.");
+    return true;
+  }
+
+  const job = getJob(context.db, parsed.jobId);
+  if (!job) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
+    return true;
+  }
+
+  if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔒 이 작업을 재시도할 권한이 없습니다.");
+    return true;
+  }
+
+  if (job.status !== "FAILED") {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, `⏳ 현재 상태에서는 재시도할 수 없습니다: ${job.status}`);
+    return true;
+  }
+
+  const retryRequested = requestRetry(context.db, job.id, { message: "Retry requested from Telegram button" });
+  const queued = transitionJob(context.db, retryRequested.id, "QUEUED", {
+    message: "Retry queued from Telegram button",
+  });
+  await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔁 재시도 대기열에 넣었습니다.");
+  await context.telegram.sendMessage(callback.chatId, `🔁 재시도 대기열에 넣었어요: ${queued.id}`);
+  logWorker(`retry queued job=${queued.id} from=telegram_button`, "info", "RETRY");
+  return true;
 }
 
 async function handleRtzrPresetCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
@@ -668,6 +711,15 @@ function buildSttPresetKeyboard(jobId: string): InlineKeyboardMarkup {
   };
 }
 
+function buildRetryKeyboard(jobId: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[{
+      text: "🔁 다시 처리",
+      callback_data: `retry:${jobId}`,
+    }]],
+  };
+}
+
 function buildPresetQueuedMessage(jobId: string, preset: RtzrPreset): string {
   return [
     `✅ ${preset.emoji} ${preset.label} 설정을 저장했어요.`,
@@ -743,6 +795,14 @@ function parseRtzrPresetCallbackData(data: string | undefined): { presetKey: str
     return null;
   }
   return { presetKey: match[1], jobId: match[2] };
+}
+
+function parseRetryCallbackData(data: string | undefined): { jobId: string } | null {
+  const match = /^retry:(.+)$/.exec(data ?? "");
+  if (!match?.[1]) {
+    return null;
+  }
+  return { jobId: match[1] };
 }
 
 function selectedSttPresetEvent(events: StoredJobEvent[]): StoredJobEvent | undefined {

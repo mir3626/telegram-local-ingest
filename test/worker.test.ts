@@ -5,12 +5,27 @@ import path from "node:path";
 import test from "node:test";
 
 import type { AppConfig } from "@telegram-local-ingest/core";
-import { getJob, getTelegramOffset, listJobEvents, migrate, mustGetSourceBundleForJob, openIngestDatabase } from "@telegram-local-ingest/db";
+import {
+  createJob,
+  getJob,
+  getTelegramOffset,
+  listJobEvents,
+  migrate,
+  mustGetSourceBundleForJob,
+  openIngestDatabase,
+  transitionJob,
+} from "@telegram-local-ingest/db";
 import type { RtzrTranscribeConfig, RtzrTranscript, WaitForTranscriptionOptions } from "@telegram-local-ingest/rtzr";
 import type { SenseVoiceTranscribeOptions, SenseVoiceTranscript } from "@telegram-local-ingest/sensevoice";
 import { TelegramBotApiClient, type FetchLike } from "@telegram-local-ingest/telegram";
 
-import { runWorkerOnce, type RtzrTranscriber, type SenseVoiceTranscriber, type WorkerContext } from "../apps/worker/src/index.js";
+import {
+  pollTelegramUpdatesOnce,
+  runWorkerOnce,
+  type RtzrTranscriber,
+  type SenseVoiceTranscriber,
+  type WorkerContext,
+} from "../apps/worker/src/index.js";
 
 test("runWorkerOnce captures, imports, bundles, completes, and notifies", async () => {
   const fixture = createFixture();
@@ -192,6 +207,78 @@ test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles arti
     assert.match(manifest, /call\.transcript\.md/);
     assert.match(fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "extracted", "call.transcript.md"), "utf8"), /센스보이스 전사입니다/);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "sensevoice.transcribed"));
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce sends a retry button when processing fails", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const answeredCallbacks: unknown[] = [];
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.stt.provider = "sensevoice";
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockAudioPresetFetch(sentMessages, answeredCallbacks),
+      ),
+      sensevoice: mockFailingSenseVoiceTranscriber("sensevoice failed"),
+    };
+
+    await runWorkerOnce(context);
+    await assert.rejects(() => runWorkerOnce(context), /sensevoice failed/);
+
+    const failureMessage = sentMessages.at(-1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "FAILED");
+    assert.match(failureMessage?.text ?? "", /⚠️ 처리 실패: tg_300_21\nsensevoice failed/);
+    assert.match(JSON.stringify(failureMessage?.reply_markup), /retry:tg_300_21/);
+    assert.match(JSON.stringify(failureMessage?.reply_markup), /다시 처리/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("pollTelegramUpdatesOnce retries a failed job from a retry button", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const answeredCallbacks: unknown[] = [];
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, {
+      id: "job-retry",
+      source: "telegram-local-bot-api",
+      chatId: "300",
+      userId: "400",
+      now: "2026-04-22T12:00:00.000Z",
+    });
+    transitionJob(dbHandle.db, "job-retry", "QUEUED", { now: "2026-04-22T12:00:01.000Z" });
+    transitionJob(dbHandle.db, "job-retry", "IMPORTING", { now: "2026-04-22T12:00:02.000Z" });
+    transitionJob(dbHandle.db, "job-retry", "FAILED", { now: "2026-04-22T12:00:03.000Z", error: "boom" });
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockRetryCallbackFetch(sentMessages, answeredCallbacks),
+      ),
+    };
+
+    const result = await pollTelegramUpdatesOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(getJob(dbHandle.db, "job-retry")?.status, "QUEUED");
+    assert.equal(getJob(dbHandle.db, "job-retry")?.retryCount, 1);
+    assert.match(JSON.stringify(answeredCallbacks[0]), /재시도 대기열/);
+    assert.equal(sentMessages.at(-1)?.text, "🔁 재시도 대기열에 넣었어요: job-retry");
   } finally {
     dbHandle.close();
   }
@@ -431,6 +518,52 @@ function mockAudioPresetFetch(
   };
 }
 
+function mockRetryCallbackFetch(
+  sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }>,
+  answeredCallbacks: unknown[],
+): FetchLike {
+  return async (input, init) => {
+    const method = input.split("/").at(-1);
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    if (method === "getUpdates") {
+      return jsonResponse({
+        ok: true,
+        result: [{
+          update_id: 31,
+          callback_query: {
+            id: "retry-callback-1",
+            from: { id: 400, is_bot: false, first_name: "Tony" },
+            message: {
+              message_id: 32,
+              date: 1_777_000_003,
+              chat: { id: 300, type: "private" },
+              text: "failed",
+            },
+            data: "retry:job-retry",
+          },
+        }],
+      });
+    }
+    if (method === "sendMessage") {
+      sentMessages.push(body as { chat_id: string; text: string; reply_markup?: unknown });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: 100,
+          date: 1,
+          chat: { id: Number((body as { chat_id: string }).chat_id), type: "private" },
+          text: (body as { text: string }).text,
+        },
+      });
+    }
+    if (method === "answerCallbackQuery") {
+      answeredCallbacks.push(body);
+      return jsonResponse({ ok: true, result: true });
+    }
+    return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
 function mockSenseVoiceTranscriber(
   calls: Array<{ filePath: string; options: SenseVoiceTranscribeOptions }>,
 ): SenseVoiceTranscriber {
@@ -448,6 +581,14 @@ function mockSenseVoiceTranscriber(
           segments: [{ text: "센스보이스 전사입니다", language: "ko" }],
         },
       };
+    },
+  };
+}
+
+function mockFailingSenseVoiceTranscriber(message: string): SenseVoiceTranscriber {
+  return {
+    async transcribeFile(): Promise<SenseVoiceTranscript> {
+      throw new Error(message);
     },
   };
 }
