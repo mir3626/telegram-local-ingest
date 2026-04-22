@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 
 set "PROJECT=/home/tony/workspace/telegram-local-ingest"
 
@@ -21,7 +21,7 @@ echo.
 if "%STACK_STATUS%"=="0" (
   echo The local ingest stack is already running.
   set /p "ANSWER=Stop it now? [y/N] "
-  if /I "%ANSWER%"=="Y" (
+  if /I "!ANSWER!"=="Y" (
     echo.
     wsl.exe bash -lc "cd %PROJECT% && bash scripts/stop-local-stack.sh"
     echo.
@@ -38,7 +38,7 @@ if "%STACK_STATUS%"=="0" (
 if "%STACK_STATUS%"=="2" (
   echo The local ingest stack appears to be partially running.
   set /p "ANSWER=Stop managed processes now? [y/N] "
-  if /I "%ANSWER%"=="Y" (
+  if /I "!ANSWER!"=="Y" (
     echo.
     wsl.exe bash -lc "cd %PROJECT% && bash scripts/stop-local-stack.sh"
     echo.
