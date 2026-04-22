@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-8-status-retry-cancel
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter
-> **Pending**: sprint-8-status-retry-cancel
+> **Current**: completed
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
+> **Pending**: none
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -168,6 +168,7 @@ Telegram mobile/desktop
   - User can see job progress from Telegram.
   - Retry does not duplicate immutable artifacts.
   - Operator can run the MVP from a documented local setup.
+- **status**: completed. Added `packages/operator` for `/status`, `/retry`, `/cancel`, concise completion/failure messages, daily failed job report text, and README operator startup guidance.
 
 ## Deferred
 

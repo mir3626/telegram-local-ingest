@@ -31,9 +31,11 @@ Telegram clients
    - `packages/capture`: Telegram polling/capture orchestration, allowlist enforcement, command-to-job creation.
    - `packages/db`: SQLite schema, migrations, repositories, dashboard-friendly queries.
    - `packages/importer`: Telegram Local Bot API file import into controlled runtime staging/archive with hashing and duplicate detection.
+   - `packages/operator`: Telegram `/status`, `/retry`, `/cancel`, completion/failure notifications, and daily report message builders.
    - `packages/telegram`: Bot API client, update parser, Local Bot API file import semantics.
    - `packages/rtzr`: RTZR auth, submit, polling, result persistence.
    - `packages/vault`: Obsidian raw bundle layout, manifest writer, source markdown writer, write lock helpers.
+   - `packages/wiki-adapter`: Protected CLI adapter boundary for LLM/wiki updates.
 
 ## Runtime Directories
 
@@ -120,6 +122,8 @@ Sprint 5 adds immutable raw bundle writing through `packages/vault`: bundle path
 Sprint 6 adds RTZR batch STT primitives through `packages/rtzr`: OAuth token retrieval, multipart file submission, polling with rate-limit backoff, failed-result handling, transcript artifact writing, supported audio format checks, and ffmpeg conversion helpers for unsupported Telegram audio containers.
 
 Sprint 7 adds the wiki ingest adapter boundary through `packages/wiki-adapter`: deterministic command arguments, a filesystem write lock, stdout/stderr capture, raw bundle snapshot checks before/after adapter execution, and validation that `rawRoot` and `wikiRoot` do not overlap.
+
+Sprint 8 adds Telegram operator commands through `packages/operator`: `/status` summary/detail responses, failed-job retry back to `QUEUED`, active-job cancellation, concise completion/failure messages, and a daily failed-job report text builder.
 
 ## Security Boundaries
 

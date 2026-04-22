@@ -67,12 +67,14 @@
     {
       "id": "sprint-8-status-retry-cancel",
       "name": "Status, Retry, Cancel, And Operator Polish",
-      "status": "planned"
+      "status": "passed",
+      "startedAt": "2026-04-22T09:08:52.326Z",
+      "completedAt": "2026-04-22T09:14:36.164Z"
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-8-status-retry-cancel",
-    "lastActionSummary": "Completed Sprint 7: added protected wiki ingest adapter command contract with write lock, stdout/stderr capture, raw snapshot protection, and root overlap checks.",
+    "currentSprintId": "completed",
+    "lastActionSummary": "Completed Sprint 8: added Telegram status, retry, cancel, completion/failure messages, daily failed report text, and README operator flow. MVP roadmap complete.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -82,7 +84,7 @@
       "LLM agent only updates wiki through adapter"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-22T09:08:52.326Z"
+    "updatedAt": "2026-04-22T09:14:36.164Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -97,8 +99,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-22T09:08:52.326Z",
-  "verifiedAt": "2026-04-22T09:08:52.326Z",
+  "stateUpdatedAt": "2026-04-22T09:14:36.164Z",
+  "verifiedAt": "2026-04-22T09:14:36.164Z",
   "verificationCommands": [
     {
       "id": "typecheck",

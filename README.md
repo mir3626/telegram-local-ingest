@@ -27,8 +27,12 @@ Dropbox is intentionally out of scope for V1. Large files are handled through Te
 apps/worker                 # long-running local worker
 packages/core               # job model, config, state machine
 packages/telegram           # Telegram Bot API client and update parser
+packages/capture            # Telegram update capture and /ingest job creation
+packages/importer           # local file import, archive, hashes, duplicate detection
+packages/operator           # /status, /retry, /cancel, notify/report message builders
 packages/rtzr               # RTZR STT client
 packages/vault              # Obsidian raw bundle writer
+packages/wiki-adapter       # protected wiki ingest command boundary
 docs/context                # project context for AI coding sessions
 docs/plans/sprint-roadmap.md
 .vibe, .claude, scripts     # vibe-doctor development harness
@@ -65,6 +69,18 @@ npm test
 npm run build
 npm run worker:dev
 ```
+
+## Operator Flow
+
+1. Start Telegram Local Bot API Server in `--local` mode.
+2. Move the bot session to the local server with the documented `logOut` flow.
+3. Start the worker with `npm run worker:dev`.
+4. Send `/ingest project:<name> tag:<tag>` with files or captions from an allowlisted Telegram user.
+5. Use `/status` or `/status <job_id>` to inspect progress.
+6. Use `/retry <job_id>` only for failed jobs.
+7. Use `/cancel <job_id>` for active jobs that should stop.
+
+Operational state is in SQLite at `SQLITE_DB_PATH`. This is sufficient for the later dashboard because jobs, files, source bundles, Telegram offsets, and append-only events are all queryable without scraping logs.
 
 ## Development Process
 
