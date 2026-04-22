@@ -208,6 +208,7 @@ function uniqueDestinationPath(destinationDir: string, name: string, usedNames: 
 }
 
 function renderManifest(input: RawBundleWriteInput, result: RawBundleWriteResult): string {
+  const processingContext = buildProcessingContext(input.events ?? []);
   const lines = [
     "schema_version: 1",
     `bundle_id: ${yamlScalar(result.id)}`,
@@ -225,6 +226,8 @@ function renderManifest(input: RawBundleWriteInput, result: RawBundleWriteResult
     ...yamlFileRecords(result.normalizedFiles, "normalized"),
     "extracted:",
     ...yamlFileRecords(result.extractedFiles, "extracted"),
+    "processing_context:",
+    ...yamlProcessingContext(processingContext),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -308,6 +311,64 @@ function yamlFileRecords(records: BundleFileRecord[], kind: string): string[] {
   });
 }
 
+interface ProcessingContext {
+  rtzrPreset?: {
+    key: string;
+    label: string;
+    description?: string;
+    config: unknown;
+  };
+  translation?: {
+    defaultRelation: string;
+  };
+}
+
+function buildProcessingContext(events: StoredJobEvent[]): ProcessingContext {
+  const selected = [...events].reverse().find((event) => event.type === "rtzr.preset_selected");
+  if (!selected || !isRecord(selected.data)) {
+    return {};
+  }
+
+  const context: ProcessingContext = {};
+  const presetKey = typeof selected.data.presetKey === "string" ? selected.data.presetKey : undefined;
+  const presetLabel = typeof selected.data.presetLabel === "string" ? selected.data.presetLabel : undefined;
+  if (presetKey && presetLabel) {
+    context.rtzrPreset = {
+      key: presetKey,
+      label: presetLabel,
+      ...(typeof selected.data.presetDescription === "string" ? { description: selected.data.presetDescription } : {}),
+      config: selected.data.rtzrConfig,
+    };
+  }
+  if (typeof selected.data.translationDefaultRelation === "string") {
+    context.translation = {
+      defaultRelation: selected.data.translationDefaultRelation,
+    };
+  }
+  return context;
+}
+
+function yamlProcessingContext(context: ProcessingContext): string[] {
+  if (!context.rtzrPreset && !context.translation) {
+    return ["  {}"];
+  }
+  const lines: string[] = [];
+  if (context.rtzrPreset) {
+    lines.push("  rtzr_preset:");
+    lines.push(`    key: ${yamlScalar(context.rtzrPreset.key)}`);
+    lines.push(`    label: ${yamlScalar(context.rtzrPreset.label)}`);
+    if (context.rtzrPreset.description) {
+      lines.push(`    description: ${yamlScalar(context.rtzrPreset.description)}`);
+    }
+    lines.push(`    config_json: ${yamlScalar(JSON.stringify(context.rtzrPreset.config ?? {}))}`);
+  }
+  if (context.translation) {
+    lines.push("  translation:");
+    lines.push(`    default_relation: ${yamlScalar(context.translation.defaultRelation)}`);
+  }
+  return lines;
+}
+
 function markdownFileList(records: BundleFileRecord[]): string[] {
   if (records.length === 0) {
     return ["- None"];
@@ -317,6 +378,10 @@ function markdownFileList(records: BundleFileRecord[]): string[] {
 
 function yamlScalar(value: string): string {
   return JSON.stringify(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function datePart(value: string): string {

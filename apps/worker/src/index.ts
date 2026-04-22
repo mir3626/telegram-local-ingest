@@ -2,11 +2,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 
-import { createQueuedJobFromTelegramMessage } from "@telegram-local-ingest/capture";
+import { createIngestJobFromTelegramMessage, createQueuedJobFromTelegramMessage } from "@telegram-local-ingest/capture";
 import { type AppConfig, ConfigError, loadConfig, loadNearestEnvFile } from "@telegram-local-ingest/core";
 import {
   appendJobEvent,
   createSourceBundle,
+  getJob,
   getTelegramOffset,
   listJobEvents,
   listJobFiles,
@@ -29,9 +30,13 @@ import {
 import {
   checkTelegramLocalBotApi,
   getMessageCommand,
+  type InlineKeyboardMarkup,
   isTelegramUserAllowed,
+  parseTelegramCallbackQuery,
   parseTelegramUpdate,
   TelegramBotApiClient,
+  type ParsedTelegramCallback,
+  type ParsedTelegramFile,
 } from "@telegram-local-ingest/telegram";
 import { writeRawBundle } from "@telegram-local-ingest/vault";
 import { runWikiIngestAdapter } from "@telegram-local-ingest/wiki-adapter";
@@ -53,6 +58,73 @@ export interface WorkerLoopOptions {
   pollIntervalMs?: number;
   abortSignal?: AbortSignal;
 }
+
+interface RtzrPreset {
+  key: string;
+  label: string;
+  emoji: string;
+  description: string;
+  config: {
+    domain: "GENERAL" | "CALL";
+    use_diarization: boolean;
+    diarization?: { spk_count: number };
+    use_itn: boolean;
+    use_disfluency_filter: boolean;
+    use_profanity_filter: boolean;
+    use_paragraph_splitter: boolean;
+    paragraph_splitter: { max: number };
+  };
+}
+
+const RTZR_PRESETS: RtzrPreset[] = [
+  {
+    key: "meeting",
+    label: "회의",
+    emoji: "🧑‍💼",
+    description: "여러 사람이 회의실/온라인 회의에서 말한 녹음",
+    config: {
+      domain: "GENERAL",
+      use_diarization: true,
+      diarization: { spk_count: 0 },
+      use_itn: true,
+      use_disfluency_filter: false,
+      use_profanity_filter: false,
+      use_paragraph_splitter: true,
+      paragraph_splitter: { max: 50 },
+    },
+  },
+  {
+    key: "call",
+    label: "통화",
+    emoji: "☎️",
+    description: "전화/콜센터처럼 통화 품질에 가까운 녹음",
+    config: {
+      domain: "CALL",
+      use_diarization: true,
+      diarization: { spk_count: 2 },
+      use_itn: true,
+      use_disfluency_filter: false,
+      use_profanity_filter: false,
+      use_paragraph_splitter: true,
+      paragraph_splitter: { max: 50 },
+    },
+  },
+  {
+    key: "memo",
+    label: "음성 메모",
+    emoji: "🎙️",
+    description: "한 사람이 남긴 메모/독백 형태의 녹음",
+    config: {
+      domain: "GENERAL",
+      use_diarization: false,
+      use_itn: true,
+      use_disfluency_filter: false,
+      use_profanity_filter: false,
+      use_paragraph_splitter: true,
+      paragraph_splitter: { max: 50 },
+    },
+  },
+];
 
 export async function main(): Promise<void> {
   loadNearestEnvFile();
@@ -107,7 +179,7 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
   const lastOffset = getTelegramOffset(context.db, botKey);
   const updates = await context.telegram.getUpdates({
     timeout: context.config.telegram.pollTimeoutSeconds,
-    allowedUpdates: ["message"],
+    allowedUpdates: ["message", "callback_query"],
     ...(lastOffset === null ? {} : { offset: lastOffset + 1 }),
   });
   if (updates.length > 0) {
@@ -117,6 +189,19 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
   let operatorCommandsHandled = 0;
   let jobsCreated = 0;
   for (const update of updates) {
+    const callback = parseTelegramCallbackQuery(update);
+    if (callback) {
+      try {
+        if (isTelegramUserAllowed(callback.userId, context.config.telegram.allowedUserIds)) {
+          const handled = await handleRtzrPresetCallback(context, callback);
+          operatorCommandsHandled += handled ? 1 : 0;
+        }
+      } finally {
+        setTelegramOffset(context.db, botKey, update.update_id);
+      }
+      continue;
+    }
+
     const parsed = parseTelegramUpdate(update);
     try {
       if (parsed && isTelegramUserAllowed(parsed.userId, context.config.telegram.allowedUserIds)) {
@@ -125,13 +210,27 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
           const result = await sendOperatorCommandResponse(context.db, context.telegram, parsed);
           operatorCommandsHandled += result.handled ? 1 : 0;
         } else {
-          const created = createQueuedJobFromTelegramMessage(context.db, parsed);
+          const needsRtzrPreset = hasAudioOrVoice(parsed.files);
+          const created = needsRtzrPreset
+            ? createIngestJobFromTelegramMessage(context.db, parsed, { queue: false })
+            : createQueuedJobFromTelegramMessage(context.db, parsed);
           if (!created) {
             continue;
           }
           jobsCreated += 1;
           logWorker(`job queued id=${created.id} files=${parsed.files.length} command=${created.command ? "yes" : "no"}`);
-          await context.telegram.sendMessage(parsed.chatId, buildQueuedMessage(created.id, parsed.files.map((file) => file.fileName ?? file.kind)));
+          if (needsRtzrPreset) {
+            appendJobEvent(context.db, created.id, "rtzr.preset_requested", "RTZR preset selection requested", {
+              translationDefaultRelation: context.config.translation.defaultRelation,
+            });
+            await context.telegram.sendMessage(
+              parsed.chatId,
+              buildRtzrPresetPrompt(created.id, parsed.files),
+              { replyMarkup: buildRtzrPresetKeyboard(created.id) },
+            );
+          } else {
+            await context.telegram.sendMessage(parsed.chatId, buildQueuedMessage(created.id, parsed.files.map((file) => file.fileName ?? file.kind)));
+          }
         }
       }
     } catch (error) {
@@ -237,6 +336,51 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
   }
 }
 
+async function handleRtzrPresetCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
+  const parsed = parseRtzrPresetCallbackData(callback.data);
+  if (!parsed || !callback.chatId) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 처리할 수 없는 선택입니다.");
+    return false;
+  }
+
+  const preset = RTZR_PRESETS.find((candidate) => candidate.key === parsed.presetKey);
+  if (!preset) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 알 수 없는 녹음 환경입니다.");
+    return false;
+  }
+
+  const job = getJob(context.db, parsed.jobId);
+  if (!job) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
+    return true;
+  }
+
+  if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔒 이 작업을 변경할 권한이 없습니다.");
+    return true;
+  }
+
+  if (job.status !== "RECEIVED") {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⏳ 이미 처리 중인 작업입니다.");
+    return true;
+  }
+
+  appendJobEvent(context.db, job.id, "rtzr.preset_selected", `${preset.emoji} ${preset.label}`, {
+    presetKey: preset.key,
+    presetLabel: preset.label,
+    presetDescription: preset.description,
+    rtzrConfig: preset.config,
+    translationDefaultRelation: context.config.translation.defaultRelation,
+  });
+  const queued = transitionJob(context.db, job.id, "QUEUED", {
+    message: `RTZR preset selected: ${preset.label}`,
+  });
+  await context.telegram.answerCallbackQuery(callback.callbackQueryId, `${preset.emoji} ${preset.label} 설정을 저장했습니다.`);
+  await context.telegram.sendMessage(callback.chatId, buildPresetQueuedMessage(queued.id, preset));
+  logWorker(`rtzr preset selected job=${queued.id} preset=${preset.key}`);
+  return true;
+}
+
 async function runConfiguredWikiAdapter(context: WorkerContext, job: StoredJob): Promise<void> {
   if (!context.config.wiki.ingestCommand) {
     appendJobEvent(context.db, job.id, "wiki.skipped", "WIKI_INGEST_COMMAND is not configured");
@@ -283,7 +427,45 @@ function logWorker(message: string, level: "info" | "warn" = "info"): void {
 }
 
 function buildQueuedMessage(jobId: string, fileNames: string[]): string {
-  return [`Queued: ${jobId}`, ...fileNames.map((name) => `- ${name}`)].join("\n");
+  return [`📥 접수했어요: ${jobId}`, ...fileNames.map((name) => `- ${name}`)].join("\n");
+}
+
+function buildRtzrPresetPrompt(jobId: string, files: ParsedTelegramFile[]): string {
+  return [
+    `🎧 음성 파일 업로드를 감지했어요: ${jobId}`,
+    ...files.map((file) => `- ${file.fileName ?? file.kind}`),
+    "",
+    "어떤 환경에서 녹음된 파일인가요?",
+    "선택값은 전사 품질 개선과 이후 번역/후처리 컨텍스트에 함께 저장됩니다.",
+  ].join("\n");
+}
+
+function buildRtzrPresetKeyboard(jobId: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: RTZR_PRESETS.map((preset) => [{
+      text: `${preset.emoji} ${preset.label}`,
+      callback_data: `rtzr:${preset.key}:${jobId}`,
+    }]),
+  };
+}
+
+function buildPresetQueuedMessage(jobId: string, preset: RtzrPreset): string {
+  return [
+    `✅ ${preset.emoji} ${preset.label} 설정을 저장했어요.`,
+    `📥 처리 대기열에 넣었습니다: ${jobId}`,
+  ].join("\n");
+}
+
+function parseRtzrPresetCallbackData(data: string | undefined): { presetKey: string; jobId: string } | null {
+  const match = /^rtzr:([a-z0-9_-]+):(.+)$/.exec(data ?? "");
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+  return { presetKey: match[1], jobId: match[2] };
+}
+
+function hasAudioOrVoice(files: ParsedTelegramFile[]): boolean {
+  return files.some((file) => file.kind === "audio" || file.kind === "voice");
 }
 
 async function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {

@@ -27,10 +27,10 @@ test("buildStatusResponse lists recent jobs and details one job", () => {
     createTelegramJob(handle.db, "job-1");
     transitionJob(handle.db, "job-1", "IMPORTING", { now: NOW });
 
-    assert.match(buildStatusResponse(handle.db, undefined, message("/status")), /Recent jobs:\njob-1 IMPORTING sales/);
+    assert.match(buildStatusResponse(handle.db, undefined, message("/status")), /최근 작업:\njob-1 IMPORTING sales/);
     const detail = buildStatusResponse(handle.db, "job-1", message("/status job-1"));
-    assert.match(detail, /Job job-1/);
-    assert.match(detail, /Recent events:/);
+    assert.match(detail, /작업 job-1/);
+    assert.match(detail, /최근 이벤트:/);
   } finally {
     handle.close();
   }
@@ -47,7 +47,7 @@ test("handleOperatorCommand retries failed jobs back to QUEUED", () => {
     const result = handleOperatorCommand(handle.db, message("/retry job-2"), NOW);
 
     assert.equal(result.handled, true);
-    assert.equal(result.text, "Retry queued: job-2");
+    assert.equal(result.text, "🔁 재시도 대기열에 넣었어요: job-2");
     assert.equal(getJob(handle.db, "job-2")?.status, "QUEUED");
     assert.equal(getJob(handle.db, "job-2")?.retryCount, 1);
   } finally {
@@ -62,10 +62,10 @@ test("handleOperatorCommand cancels active jobs and enforces chat ownership", ()
     createTelegramJob(handle.db, "job-3");
     transitionJob(handle.db, "job-3", "IMPORTING", { now: NOW });
 
-    assert.throws(() => handleOperatorCommand(handle.db, { ...message("/cancel job-3"), chatId: "999" }, NOW), /not visible/);
+    assert.throws(() => handleOperatorCommand(handle.db, { ...message("/cancel job-3"), chatId: "999" }, NOW), /볼 수 없습니다/);
     const result = handleOperatorCommand(handle.db, message("/cancel job-3"), NOW);
 
-    assert.equal(result.text, "Cancelled: job-3");
+    assert.equal(result.text, "🛑 취소했어요: job-3");
     assert.equal(getJob(handle.db, "job-3")?.status, "CANCELLED");
   } finally {
     handle.close();
@@ -97,7 +97,7 @@ test("completion, failure, and daily failed report messages are concise", () => 
     transitionJob(handle.db, "job-5", "IMPORTING", { now: NOW });
     const failed = transitionJob(handle.db, "job-5", "FAILED", { now: NOW, error: "boom" });
 
-    assert.equal(buildJobCompletionMessage({ ...failed, status: "COMPLETED" }), "Completed: job-5 (sales)");
+    assert.equal(buildJobCompletionMessage({ ...failed, status: "COMPLETED" }), "✅ 처리 완료: job-5 (sales)");
     assert.equal(
       buildJobCompletionMessage({ ...failed, status: "COMPLETED" }, [{
         id: "file-1",
@@ -105,10 +105,10 @@ test("completion, failure, and daily failed report messages are concise", () => 
         originalName: "lead.pdf",
         createdAt: NOW,
       }]),
-      "Completed: job-5 (sales)\n- lead.pdf",
+      "✅ 처리 완료: job-5 (sales)\n- lead.pdf",
     );
-    assert.equal(buildJobFailureMessage(failed), "Failed: job-5\nboom");
-    assert.match(buildDailyFailedJobsReport(handle.db, "2026-04-22"), /Failed jobs for 2026-04-22: 1/);
+    assert.equal(buildJobFailureMessage(failed), "⚠️ 처리 실패: job-5\nboom");
+    assert.match(buildDailyFailedJobsReport(handle.db, "2026-04-22"), /2026-04-22 실패 작업: 1/);
   } finally {
     handle.close();
   }

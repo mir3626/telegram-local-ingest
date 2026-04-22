@@ -51,7 +51,7 @@ export function handleOperatorCommand(db: DatabaseSync, message: ParsedTelegramM
     return {
       handled: true,
       chatId: message.chatId,
-      text: `Retry queued: ${retried.id}`,
+      text: `🔁 재시도 대기열에 넣었어요: ${retried.id}`,
       job: retried,
     };
   }
@@ -65,7 +65,7 @@ export function handleOperatorCommand(db: DatabaseSync, message: ParsedTelegramM
   return {
     handled: true,
     chatId: message.chatId,
-    text: `Cancelled: ${cancelled.id}`,
+    text: `🛑 취소했어요: ${cancelled.id}`,
     job: cancelled,
   };
 }
@@ -88,52 +88,52 @@ export function buildStatusResponse(db: DatabaseSync, targetJobId: string | unde
     const job = assertJobVisibleToMessage(db, targetJobId, requester);
     const events = listJobEvents(db, job.id).slice(-5);
     return [
-      `Job ${job.id}`,
-      `Status: ${job.status}`,
-      `Project: ${job.project ?? "-"}`,
-      `Tags: ${job.tags.length > 0 ? job.tags.join(", ") : "-"}`,
-      `Updated: ${job.updatedAt}`,
-      job.error ? `Error: ${job.error}` : undefined,
-      events.length > 0 ? "Recent events:" : undefined,
+      `📌 작업 ${job.id}`,
+      `상태: ${job.status}`,
+      `프로젝트: ${job.project ?? "-"}`,
+      `태그: ${job.tags.length > 0 ? job.tags.join(", ") : "-"}`,
+      `업데이트: ${job.updatedAt}`,
+      job.error ? `오류: ${job.error}` : undefined,
+      events.length > 0 ? "최근 이벤트:" : undefined,
       ...events.map((event) => `- ${event.createdAt} ${event.type}${event.message ? `: ${event.message}` : ""}`),
     ].filter((line): line is string => line !== undefined).join("\n");
   }
 
   const jobs = listJobs(db, 5).filter((job) => requester === undefined || jobMatchesRequester(job, requester));
   if (jobs.length === 0) {
-    return "No jobs found.";
+    return "📭 작업이 없습니다.";
   }
   return [
-    "Recent jobs:",
+    "📋 최근 작업:",
     ...jobs.map((job) => `${job.id} ${job.status} ${job.project ?? "-"}`),
   ].join("\n");
 }
 
 export function buildJobCompletionMessage(job: StoredJob, files: StoredJobFile[] = []): string {
   return [
-    `Completed: ${job.id}${job.project ? ` (${job.project})` : ""}`,
+    `✅ 처리 완료: ${job.id}${job.project ? ` (${job.project})` : ""}`,
     ...files.map((file) => `- ${file.originalName ?? file.id}`),
   ].join("\n");
 }
 
 export function buildJobFailureMessage(job: StoredJob): string {
-  return `Failed: ${job.id}${job.error ? `\n${job.error}` : ""}`;
+  return `⚠️ 처리 실패: ${job.id}${job.error ? `\n${job.error}` : ""}`;
 }
 
 export function buildDailyFailedJobsReport(db: DatabaseSync, date: string): string {
   const failed = listJobs(db, 500).filter((job) => job.status === "FAILED" && job.updatedAt.startsWith(date));
   if (failed.length === 0) {
-    return `Failed jobs for ${date}: none`;
+    return `📅 ${date} 실패 작업: 없음`;
   }
   return [
-    `Failed jobs for ${date}: ${failed.length}`,
+    `📅 ${date} 실패 작업: ${failed.length}`,
     ...failed.map((job) => `- ${job.id} ${job.project ?? "-"} ${job.error ?? ""}`.trimEnd()),
   ].join("\n");
 }
 
 function requiredTargetJobId(command: ParsedTelegramCommand): string {
   if (!command.targetJobId) {
-    throw new Error(`/${command.name} requires a job id`);
+    throw new Error(`⚠️ /${command.name} 명령에는 작업 ID가 필요합니다.`);
   }
   return command.targetJobId;
 }
@@ -145,10 +145,10 @@ function assertJobVisibleToMessage(
 ): StoredJob {
   const job = getJob(db, jobId);
   if (!job) {
-    throw new Error(`Job not found: ${jobId}`);
+    throw new Error(`⚠️ 작업을 찾을 수 없습니다: ${jobId}`);
   }
   if (requester && !jobMatchesRequester(job, requester)) {
-    throw new Error(`Job is not visible from this Telegram chat/user: ${jobId}`);
+    throw new Error(`🔒 이 채팅에서는 해당 작업을 볼 수 없습니다: ${jobId}`);
   }
   return job;
 }

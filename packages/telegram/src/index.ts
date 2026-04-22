@@ -70,9 +70,17 @@ export interface TelegramMessage {
   video?: TelegramFilePayload;
 }
 
+export interface TelegramCallbackQuery {
+  id: string;
+  from: TelegramUser;
+  message?: TelegramMessage;
+  data?: string;
+}
+
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 }
 
 export interface GetUpdatesOptions {
@@ -104,6 +112,15 @@ export interface ParsedTelegramMessage {
   files: ParsedTelegramFile[];
 }
 
+export interface ParsedTelegramCallback {
+  updateId: number;
+  callbackQueryId: string;
+  chatId?: string;
+  messageId?: number;
+  userId?: string;
+  data?: string;
+}
+
 export type TelegramCommandName = "ingest" | "status" | "retry" | "cancel" | "unknown";
 
 export interface ParsedTelegramCommand {
@@ -129,6 +146,19 @@ export interface TelegramHealthReport {
   webhookInfo?: TelegramWebhookInfo;
   localBaseUrlLikely: boolean;
   issues: string[];
+}
+
+export interface InlineKeyboardButton {
+  text: string;
+  callback_data: string;
+}
+
+export interface InlineKeyboardMarkup {
+  inline_keyboard: InlineKeyboardButton[][];
+}
+
+export interface SendMessageOptions {
+  replyMarkup?: InlineKeyboardMarkup;
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -200,8 +230,19 @@ export class TelegramBotApiClient {
     return this.request<TelegramUpdate[]>("getUpdates", payload);
   }
 
-  async sendMessage(chatId: string, text: string): Promise<TelegramMessage> {
-    return this.request<TelegramMessage>("sendMessage", { chat_id: chatId, text });
+  async sendMessage(chatId: string, text: string, options: SendMessageOptions = {}): Promise<TelegramMessage> {
+    return this.request<TelegramMessage>("sendMessage", {
+      chat_id: chatId,
+      text,
+      ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
+    });
+  }
+
+  async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean> {
+    return this.request<boolean>("answerCallbackQuery", {
+      callback_query_id: callbackQueryId,
+      ...(text ? { text } : {}),
+    });
   }
 
   buildFileDownloadUrl(filePath: string): string {
@@ -323,6 +364,30 @@ export function parseTelegramUpdate(update: TelegramUpdate): ParsedTelegramMessa
   }
   if (message.caption !== undefined) {
     parsed.caption = message.caption;
+  }
+  return parsed;
+}
+
+export function parseTelegramCallbackQuery(update: TelegramUpdate): ParsedTelegramCallback | null {
+  const callback = update.callback_query;
+  if (!callback) {
+    return null;
+  }
+  const parsed: ParsedTelegramCallback = {
+    updateId: update.update_id,
+    callbackQueryId: callback.id,
+  };
+  if (callback.from.id !== undefined) {
+    parsed.userId = String(callback.from.id);
+  }
+  if (callback.message?.chat.id !== undefined) {
+    parsed.chatId = String(callback.message.chat.id);
+  }
+  if (callback.message?.message_id !== undefined) {
+    parsed.messageId = callback.message.message_id;
+  }
+  if (callback.data !== undefined) {
+    parsed.data = callback.data;
   }
   return parsed;
 }

@@ -94,6 +94,17 @@ export function createQueuedJobFromTelegramMessage(
   message: ParsedTelegramMessage,
   now?: string,
 ): StoredJob | null {
+  return createIngestJobFromTelegramMessage(db, message, {
+    queue: true,
+    ...(now ? { now } : {}),
+  });
+}
+
+export function createIngestJobFromTelegramMessage(
+  db: DatabaseSync,
+  message: ParsedTelegramMessage,
+  options: { queue: boolean; now?: string },
+): StoredJob | null {
   const command = getMessageCommand(message);
   if (command && command.name !== "ingest") {
     return null;
@@ -112,7 +123,7 @@ export function createQueuedJobFromTelegramMessage(
     ...(message.userId ? { userId: message.userId } : {}),
     ...(command?.project ? { project: command.project } : {}),
     ...(instructions ? { instructions } : {}),
-    ...(now ? { now } : {}),
+    ...(options.now ? { now: options.now } : {}),
   } as const;
   const job = createJob(db, jobInput);
 
@@ -125,14 +136,18 @@ export function createQueuedJobFromTelegramMessage(
       ...(file.fileName ? { originalName: file.fileName } : {}),
       ...(file.mimeType ? { mimeType: file.mimeType } : {}),
       ...(file.fileSize !== undefined ? { sizeBytes: file.fileSize } : {}),
-      ...(now ? { now } : {}),
+      ...(options.now ? { now: options.now } : {}),
     };
     addJobFile(db, fileInput);
   }
 
+  if (!options.queue) {
+    return job;
+  }
+
   return transitionJob(db, job.id, "QUEUED", {
     message: command ? "Queued from Telegram /ingest command" : "Queued from Telegram file upload",
-    ...(now ? { now } : {}),
+    ...(options.now ? { now: options.now } : {}),
   });
 }
 

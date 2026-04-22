@@ -6,6 +6,7 @@ import { getJob, getTelegramOffset, listJobEvents, listJobFiles, migrate, openIn
 import {
   getMessageCommand,
   isTelegramUserAllowed,
+  parseTelegramCallbackQuery,
   parseTelegramCommand,
   parseTelegramUpdate,
   TelegramBotApiClient,
@@ -39,6 +40,27 @@ test("parseTelegramUpdate extracts text, caption, user, and largest photo", () =
   assert.equal(parsed?.files[0]?.kind, "photo");
   assert.equal(parsed?.files[0]?.fileId, "large");
   assert.equal(getMessageCommand(parsed!)?.project, "wechat");
+});
+
+test("parseTelegramCallbackQuery extracts preset callback data", () => {
+  const parsed = parseTelegramCallbackQuery({
+    update_id: 99,
+    callback_query: {
+      id: "callback-1",
+      from: { id: 400, is_bot: false, first_name: "Tony" },
+      message: {
+        message_id: 22,
+        date: 1,
+        chat: { id: 300, type: "private" },
+      },
+      data: "rtzr:meeting:tg_300_21",
+    },
+  });
+
+  assert.equal(parsed?.callbackQueryId, "callback-1");
+  assert.equal(parsed?.chatId, "300");
+  assert.equal(parsed?.userId, "400");
+  assert.equal(parsed?.data, "rtzr:meeting:tg_300_21");
 });
 
 test("parseTelegramCommand supports ingest metadata and control command targets", () => {

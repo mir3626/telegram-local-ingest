@@ -57,12 +57,17 @@ export interface WikiAdapterConfig {
   ingestCommand?: string;
 }
 
+export interface TranslationConfig {
+  defaultRelation: string;
+}
+
 export interface AppConfig {
   telegram: TelegramConfig;
   runtime: RuntimeConfig;
   vault: VaultConfig;
   rtzr: RtzrConfig;
   wiki: WikiAdapterConfig;
+  translation: TranslationConfig;
 }
 
 export class ConfigError extends Error {
@@ -151,6 +156,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       ffmpegPath: readNonEmpty(env.FFMPEG_PATH) ?? "ffmpeg",
     },
     wiki: {},
+    translation: {
+      defaultRelation: readNonEmpty(env.TRANSLATION_DEFAULT_RELATION) ?? "business",
+    },
   };
 
   assignOptional(config.telegram, "apiId", optional("TELEGRAM_API_ID"));
