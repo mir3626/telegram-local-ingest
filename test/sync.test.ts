@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import {
+  applySyncPlan,
   buildSyncPlan,
   computeFileHash,
+  jsonArrayUnionMerge,
   jsonDeepMerge,
   lineUnionMerge,
   sectionMerge,
@@ -153,6 +155,29 @@ describe('jsonDeepMerge', () => {
   });
 });
 
+describe('jsonArrayUnionMerge', () => {
+  it('preserves project array entries and appends upstream recommendations', () => {
+    const merged = jsonArrayUnionMerge(
+      {
+        recommendations: ['project.extension'],
+        unwantedRecommendations: ['project.avoid'],
+      },
+      {
+        recommendations: ['EditorConfig.EditorConfig', 'project.extension'],
+      },
+      {
+        strategy: 'json-array-union',
+        harnessKeys: ['recommendations'],
+      },
+    );
+
+    assert.deepEqual(merged, {
+      recommendations: ['project.extension', 'EditorConfig.EditorConfig'],
+      unwantedRecommendations: ['project.avoid'],
+    });
+  });
+});
+
 describe('lineUnionMerge', () => {
   it('preserves local ignore entries and appends missing upstream entries', () => {
     const local = 'node_modules/\nruntime/\n.env\n';
@@ -193,10 +218,30 @@ describe('buildSyncPlan', () => {
             harnessMarkers: ['HARNESS:core'],
             preserveMarkers: ['SPRINT_ROLES'],
           },
+          'AGENTS.md': {
+            strategy: 'section-merge',
+            harnessMarkers: ['HARNESS:agent-memory'],
+            preserveMarkers: ['PROJECT:custom-rules'],
+          },
+          'GEMINI.md': {
+            strategy: 'section-merge',
+            harnessMarkers: ['HARNESS:agent-memory'],
+            preserveMarkers: ['PROJECT:custom-rules'],
+          },
           'package.json': {
             strategy: 'json-deep-merge',
             harnessKeys: ['scripts.vibe:*'],
             projectKeys: ['name'],
+          },
+          '.vscode/extensions.json': {
+            strategy: 'json-array-union',
+            harnessKeys: ['recommendations'],
+          },
+          '.env.example': {
+            strategy: 'replace-if-unmodified',
+          },
+          '.github/workflows/ci.yml': {
+            strategy: 'replace-if-unmodified',
           },
           '.gitignore': {
             strategy: 'line-union',
@@ -235,13 +280,6 @@ describe('buildSyncPlan', () => {
     await writeFile(path.join(upstreamRoot, 'scripts/b.mjs'), 'upstream', 'utf8');
     await writeFile(path.join(upstreamRoot, 'scripts/new.mjs'), 'new', 'utf8');
 
-    await writeJson(path.join(localRoot, '.vibe', 'sync-hashes.json'), {
-      files: {
-        'scripts/a.mjs': await computeFileHash(path.join(localRoot, 'scripts/a.mjs')),
-        'scripts/b.mjs': 'outdated-hash',
-      },
-    });
-
     await writeFile(
       path.join(localRoot, 'CLAUDE.md'),
       '<!-- BEGIN:SPRINT_ROLES -->\nlocal\n<!-- END:SPRINT_ROLES -->',
@@ -252,14 +290,48 @@ describe('buildSyncPlan', () => {
       '<!-- BEGIN:SPRINT_ROLES -->\nupstream\n<!-- END:SPRINT_ROLES -->',
       'utf8',
     );
+    await writeFile(path.join(localRoot, 'AGENTS.md'), 'legacy agent memory', 'utf8');
+    await writeFile(
+      path.join(upstreamRoot, 'AGENTS.md'),
+      '<!-- BEGIN:HARNESS:agent-memory -->\nagent\n<!-- END:HARNESS:agent-memory -->',
+      'utf8',
+    );
+    await writeFile(path.join(localRoot, 'GEMINI.md'), 'changed legacy memory', 'utf8');
+    await writeFile(
+      path.join(upstreamRoot, 'GEMINI.md'),
+      '<!-- BEGIN:HARNESS:agent-memory -->\ngemini\n<!-- END:HARNESS:agent-memory -->',
+      'utf8',
+    );
 
     await writeJson(path.join(localRoot, 'package.json'), { name: 'local' });
     await writeJson(path.join(upstreamRoot, 'package.json'), {
       name: 'upstream',
       scripts: { 'vibe:sync': 'sync' },
     });
+    await mkdir(path.join(localRoot, '.github', 'workflows'), { recursive: true });
+    await mkdir(path.join(upstreamRoot, '.github', 'workflows'), { recursive: true });
+    await writeJson(path.join(localRoot, '.vscode', 'extensions.json'), {
+      recommendations: ['project.extension'],
+    });
+    await writeJson(path.join(upstreamRoot, '.vscode', 'extensions.json'), {
+      recommendations: ['EditorConfig.EditorConfig'],
+    });
+    await writeFile(path.join(localRoot, '.env.example'), 'TOKEN=local\n', 'utf8');
+    await writeFile(path.join(upstreamRoot, '.env.example'), 'TOKEN=upstream\n', 'utf8');
+    await writeFile(path.join(localRoot, '.github/workflows/ci.yml'), 'local ci change\n', 'utf8');
+    await writeFile(path.join(upstreamRoot, '.github/workflows/ci.yml'), 'upstream ci\n', 'utf8');
     await writeFile(path.join(localRoot, '.gitignore'), 'node_modules/\nruntime/\n', 'utf8');
     await writeFile(path.join(upstreamRoot, '.gitignore'), 'node_modules/\ndist/\n', 'utf8');
+
+    await writeJson(path.join(localRoot, '.vibe', 'sync-hashes.json'), {
+      files: {
+        'scripts/a.mjs': await computeFileHash(path.join(localRoot, 'scripts/a.mjs')),
+        'scripts/b.mjs': 'outdated-hash',
+        'AGENTS.md': await computeFileHash(path.join(localRoot, 'AGENTS.md')),
+        '.env.example': await computeFileHash(path.join(localRoot, '.env.example')),
+        '.github/workflows/ci.yml': 'outdated-hash',
+      },
+    });
 
     const plan = await buildSyncPlan(localRoot, upstreamRoot, manifest);
 
@@ -271,7 +343,24 @@ describe('buildSyncPlan', () => {
     assert.equal(plan.actions.some((action) => action.type === 'conflict' && action.path === 'scripts/b.mjs'), true);
     assert.equal(plan.actions.some((action) => action.type === 'new-file' && action.path === 'scripts/new.mjs'), true);
     assert.equal(plan.actions.some((action) => action.type === 'section-merge' && action.path === 'CLAUDE.md'), true);
+    assert.equal(
+      plan.actions.some((action) => action.type === 'replace' && action.path === 'AGENTS.md'),
+      true,
+    );
+    assert.equal(plan.actions.some((action) => action.type === 'skip' && action.path === 'GEMINI.md'), true);
     assert.equal(plan.actions.some((action) => action.type === 'json-merge' && action.path === 'package.json'), true);
+    assert.equal(
+      plan.actions.some((action) => action.type === 'json-array-union' && action.path === '.vscode/extensions.json'),
+      true,
+    );
+    assert.equal(
+      plan.actions.some((action) => action.type === 'replace' && action.path === '.env.example'),
+      true,
+    );
+    assert.equal(
+      plan.actions.some((action) => action.type === 'skip' && action.path === '.github/workflows/ci.yml'),
+      true,
+    );
     assert.equal(plan.actions.some((action) => action.type === 'line-merge' && action.path === '.gitignore'), true);
   });
 
@@ -329,6 +418,119 @@ describe('buildSyncPlan', () => {
   });
 });
 
+describe('applySyncPlan', () => {
+  it('preserves existing non-executable file mode when copying from an executable source', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const localRoot = await makeTempDir('sync-local-mode-');
+    const upstreamRoot = await makeTempDir('sync-upstream-mode-');
+    const relativePath = 'docs/example.md';
+    const localPath = path.join(localRoot, relativePath);
+    const upstreamPath = path.join(upstreamRoot, relativePath);
+
+    await mkdir(path.dirname(localPath), { recursive: true });
+    await mkdir(path.dirname(upstreamPath), { recursive: true });
+    await writeFile(localPath, 'old\n', 'utf8');
+    await writeFile(upstreamPath, 'new\n', 'utf8');
+    await chmod(localPath, 0o644);
+    await chmod(upstreamPath, 0o755);
+
+    await applySyncPlan(
+      localRoot,
+      upstreamRoot,
+      {
+        fromVersion: '1.0.0',
+        toVersion: '1.0.1',
+        migrations: [],
+        actions: [{ type: 'replace', path: relativePath, reason: 'test' }],
+      },
+      {
+        manifestVersion: '1.0.1',
+        files: { harness: [relativePath], hybrid: {}, project: [] },
+        migrations: {},
+      },
+    );
+
+    assert.equal(await readFile(localPath, 'utf8'), 'new\n');
+    assert.equal((await stat(localPath)).mode & 0o777, 0o644);
+  });
+
+  it('uses non-executable mode for newly copied files on POSIX filesystems', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const localRoot = await makeTempDir('sync-local-new-mode-');
+    const upstreamRoot = await makeTempDir('sync-upstream-new-mode-');
+    const relativePath = 'docs/new.md';
+    const localPath = path.join(localRoot, relativePath);
+    const upstreamPath = path.join(upstreamRoot, relativePath);
+
+    await mkdir(path.dirname(upstreamPath), { recursive: true });
+    await writeFile(upstreamPath, 'new\n', 'utf8');
+    await chmod(upstreamPath, 0o755);
+
+    await applySyncPlan(
+      localRoot,
+      upstreamRoot,
+      {
+        fromVersion: '1.0.0',
+        toVersion: '1.0.1',
+        migrations: [],
+        actions: [{ type: 'new-file', path: relativePath }],
+      },
+      {
+        manifestVersion: '1.0.1',
+        files: { harness: [relativePath], hybrid: {}, project: [] },
+        migrations: {},
+      },
+    );
+
+    assert.equal(await readFile(localPath, 'utf8'), 'new\n');
+    assert.equal((await stat(localPath)).mode & 0o777, 0o644);
+  });
+
+  it('keeps synced shell wrappers executable on POSIX filesystems', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const localRoot = await makeTempDir('sync-local-shell-mode-');
+    const upstreamRoot = await makeTempDir('sync-upstream-shell-mode-');
+    const relativePath = 'scripts/run-codex.sh';
+    const localPath = path.join(localRoot, relativePath);
+    const upstreamPath = path.join(upstreamRoot, relativePath);
+
+    await mkdir(path.dirname(localPath), { recursive: true });
+    await mkdir(path.dirname(upstreamPath), { recursive: true });
+    await writeFile(localPath, '#!/usr/bin/env bash\necho old\n', 'utf8');
+    await writeFile(upstreamPath, '#!/usr/bin/env bash\necho new\n', 'utf8');
+    await chmod(localPath, 0o644);
+    await chmod(upstreamPath, 0o644);
+
+    await applySyncPlan(
+      localRoot,
+      upstreamRoot,
+      {
+        fromVersion: '1.0.0',
+        toVersion: '1.0.1',
+        migrations: [],
+        actions: [{ type: 'replace', path: relativePath, reason: 'test' }],
+      },
+      {
+        manifestVersion: '1.0.1',
+        files: { harness: [relativePath], hybrid: {}, project: [] },
+        migrations: {},
+      },
+    );
+
+    assert.equal(await readFile(localPath, 'utf8'), '#!/usr/bin/env bash\necho new\n');
+    assert.equal((await stat(localPath)).mode & 0o777, 0o755);
+  });
+});
+
 describe('sync manifest', () => {
   it('includes M1 schema foundation files and migration', async () => {
     const manifest = JSON.parse(await readFile(path.join(process.cwd(), '.vibe', 'sync-manifest.json'), 'utf8')) as SyncManifest;
@@ -345,8 +547,25 @@ describe('sync manifest', () => {
     assert.equal(manifest.files.harness.includes('scripts/vibe-browser-smoke.mjs'), true);
     assert.equal(manifest.files.harness.includes('src/commands/bundle-size.ts'), true);
     assert.equal(manifest.files.harness.includes('.claude/skills/vibe-init/templates/readme-skeleton.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.5.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.6.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.7.md'), true);
     assert.equal(manifest.files.harness.includes('.gitignore'), false);
+    assert.equal(manifest.files.harness.includes('.env.example'), false);
+    assert.equal(manifest.files.harness.includes('.github/workflows/ci.yml'), false);
+    assert.equal(manifest.files.harness.includes('.vscode/settings.json'), false);
+    assert.equal(manifest.files.harness.includes('.vscode/extensions.json'), false);
+    assert.equal(manifest.files.harness.includes('.editorconfig'), false);
+    assert.equal(manifest.files.harness.includes('.gitattributes'), false);
     assert.equal(manifest.files.hybrid['.gitignore']?.strategy, 'line-union');
+    assert.equal(manifest.files.hybrid['.env.example']?.strategy, 'replace-if-unmodified');
+    assert.equal(manifest.files.hybrid['.github/workflows/ci.yml']?.strategy, 'replace-if-unmodified');
+    assert.equal(manifest.files.hybrid['.vscode/settings.json']?.strategy, 'json-deep-merge');
+    assert.equal(manifest.files.hybrid['.vscode/extensions.json']?.strategy, 'json-array-union');
+    assert.equal(manifest.files.hybrid['.editorconfig']?.strategy, 'line-union');
+    assert.equal(manifest.files.hybrid['.gitattributes']?.strategy, 'line-union');
+    assert.equal(manifest.files.hybrid['AGENTS.md']?.strategy, 'section-merge');
+    assert.equal(manifest.files.hybrid['GEMINI.md']?.strategy, 'section-merge');
     assert.equal(manifest.files.harness.includes('test/bundle-size.test.ts'), true);
     assert.equal(manifest.files.harness.includes('test/phase0-seal.test.ts'), true);
     assert.equal(manifest.files.harness.includes('test/browser-smoke-contract.test.ts'), true);

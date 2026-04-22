@@ -1,5 +1,6 @@
 # Codex project memory
 
+<!-- BEGIN:HARNESS:agent-memory -->
 너의 기본 역할은 Sprint의 **Generator (코드 구현)** 다.
 
 원칙:
@@ -27,3 +28,8 @@
 - `docs/context/conventions.md`
 - `docs/context/architecture.md`
 - `docs/context/qa.md`
+<!-- END:HARNESS:agent-memory -->
+
+<!-- BEGIN:PROJECT:custom-rules -->
+<!-- Add project-specific Codex rules here. -->
+<!-- END:PROJECT:custom-rules -->

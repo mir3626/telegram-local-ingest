@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileExists, readJson, readText, writeJson, writeText } from './fs.js';
 import type { VibeConfig } from './config.js';
@@ -16,7 +16,13 @@ export interface SyncManifest {
 }
 
 export interface HybridFileConfig {
-  strategy: 'section-merge' | 'json-deep-merge' | 'template-regenerate' | 'line-union';
+  strategy:
+    | 'section-merge'
+    | 'json-deep-merge'
+    | 'json-array-union'
+    | 'template-regenerate'
+    | 'line-union'
+    | 'replace-if-unmodified';
   harnessMarkers?: string[];
   preserveMarkers?: string[];
   harnessKeys?: string[];
@@ -28,6 +34,7 @@ export type SyncAction =
   | { type: 'replace'; path: string; reason: string }
   | { type: 'section-merge'; path: string; sections: string[] }
   | { type: 'json-merge'; path: string; keys: string[] }
+  | { type: 'json-array-union'; path: string; keys: string[] }
   | { type: 'line-merge'; path: string; reason: string }
   | { type: 'template-regen'; path: string }
   | { type: 'skip'; path: string; reason: string }
@@ -140,6 +147,53 @@ function setAtPath(target: JsonValue | unknown, keyPath: string, nextValue: Json
     return;
   }
   current[leaf] = cloneJson(nextValue);
+}
+
+function jsonArrayUnion(left: JsonValue | undefined, right: JsonValue | undefined): JsonValue[] {
+  const result = Array.isArray(left) ? [...left] : [];
+  const seen = new Set(result.map((item) => JSON.stringify(item)));
+
+  if (!Array.isArray(right)) {
+    return result;
+  }
+
+  for (const item of right) {
+    const key = JSON.stringify(item);
+    if (seen.has(key)) {
+      continue;
+    }
+    result.push(cloneJson(item));
+    seen.add(key);
+  }
+
+  return result;
+}
+
+async function readFileMode(filePath: string): Promise<number | null> {
+  try {
+    return (await stat(filePath)).mode & 0o777;
+  } catch {
+    return null;
+  }
+}
+
+function desiredSyncedMode(relativePath: string, existingMode: number | null): number {
+  if (relativePath.endsWith('.sh')) {
+    return 0o755;
+  }
+
+  return existingMode ?? 0o644;
+}
+
+async function copySyncedFile(source: string, target: string, relativePath: string): Promise<void> {
+  const existingMode = await readFileMode(target);
+  await copyFile(source, target);
+
+  try {
+    await chmod(target, desiredSyncedMode(relativePath, existingMode));
+  } catch {
+    // Some filesystems do not support POSIX mode changes. Content sync should still proceed.
+  }
 }
 
 function deleteAtPath(target: JsonValue | unknown, keyPath: string): void {
@@ -269,6 +323,23 @@ async function loadSyncHashes(localRoot: string): Promise<SyncHashes> {
   } catch {
     return { files: {} };
   }
+}
+
+async function isLocalUnmodified(
+  localPath: string,
+  upstreamPath: string,
+  relativePath: string,
+  syncHashes: SyncHashes,
+): Promise<boolean> {
+  const localHash = await computeFileHash(localPath);
+  const trackedHash = syncHashes.files[relativePath];
+
+  if (trackedHash) {
+    return trackedHash === localHash;
+  }
+
+  const upstreamHash = await computeFileHash(upstreamPath);
+  return upstreamHash === localHash;
 }
 
 function collectMigrationPaths(
@@ -415,11 +486,19 @@ export async function buildSyncPlan(
       ]);
       const merged = sectionMerge(localContent, upstreamContent, config);
       if (merged === null) {
-        actions.push({
-          type: 'conflict',
-          path: relativePath,
-          reason: 'legacy file without sync markers',
-        });
+        if (await isLocalUnmodified(localPath, upstreamPath, relativePath, syncHashes)) {
+          actions.push({
+            type: 'replace',
+            path: relativePath,
+            reason: 'bootstrap sync markers for unmodified legacy file',
+          });
+        } else {
+          actions.push({
+            type: 'skip',
+            path: relativePath,
+            reason: 'kept local legacy file without sync markers',
+          });
+        }
       } else {
         const sections = [
           ...(config.harnessMarkers ?? []),
@@ -436,8 +515,31 @@ export async function buildSyncPlan(
       continue;
     }
 
+    if (config.strategy === 'json-array-union') {
+      const keys = [...(config.harnessKeys ?? []), ...(config.projectKeys ?? [])];
+      actions.push({ type: 'json-array-union', path: relativePath, keys });
+      continue;
+    }
+
     if (config.strategy === 'line-union') {
       actions.push({ type: 'line-merge', path: relativePath, reason: config.note ?? 'line union merge' });
+      continue;
+    }
+
+    if (config.strategy === 'replace-if-unmodified') {
+      if (await isLocalUnmodified(localPath, upstreamPath, relativePath, syncHashes)) {
+        actions.push({
+          type: 'replace',
+          path: relativePath,
+          reason: 'local file unmodified since last sync',
+        });
+      } else {
+        actions.push({
+          type: 'skip',
+          path: relativePath,
+          reason: 'kept local file changed since last sync',
+        });
+      }
       continue;
     }
 
@@ -532,6 +634,22 @@ export function jsonDeepMerge(
   return result as JsonValue;
 }
 
+export function jsonArrayUnionMerge(
+  localJson: JsonValue | unknown,
+  upstreamJson: JsonValue | unknown,
+  config: HybridFileConfig,
+): JsonValue {
+  const result = cloneJson((isRecord(localJson) ? localJson : {}) as JsonValue);
+
+  for (const keyPath of config.harnessKeys ?? []) {
+    const localValue = getAtPath(result, keyPath);
+    const upstreamValue = getAtPath(upstreamJson, keyPath);
+    setAtPath(result, keyPath, jsonArrayUnion(localValue, upstreamValue));
+  }
+
+  return result as JsonValue;
+}
+
 function splitLogicalLines(content: string): string[] {
   const lines = content.replace(/\r\n/g, '\n').split('\n');
   if (lines.at(-1) === '') {
@@ -610,7 +728,7 @@ export async function applySyncPlan(
 
     if (action.type === 'replace' || action.type === 'new-file' || action.type === 'template-regen') {
       await mkdir(path.dirname(localPath), { recursive: true });
-      await copyFile(upstreamPath, localPath);
+      await copySyncedFile(upstreamPath, localPath, action.path);
       hashTargets.add(action.path);
       continue;
     }
@@ -643,6 +761,21 @@ export async function applySyncPlan(
         readJson<JsonValue>(upstreamPath),
       ]);
       const merged = jsonDeepMerge(localJson, upstreamJson, config);
+      await writeJson(localPath, merged);
+      hashTargets.add(action.path);
+      continue;
+    }
+
+    if (action.type === 'json-array-union') {
+      const config = manifest.files.hybrid[action.path];
+      if (!config) {
+        throw new Error(`Missing hybrid config for ${action.path}`);
+      }
+      const [localJson, upstreamJson] = await Promise.all([
+        readJson<JsonValue>(localPath),
+        readJson<JsonValue>(upstreamPath),
+      ]);
+      const merged = jsonArrayUnionMerge(localJson, upstreamJson, config);
       await writeJson(localPath, merged);
       hashTargets.add(action.path);
       continue;

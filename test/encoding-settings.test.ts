@@ -18,9 +18,11 @@ test('editorconfig keeps repository text as UTF-8 by default', async () => {
 
 test('sync manifest includes workspace encoding files', async () => {
   const manifest = JSON.parse(await readFile('.vibe/sync-manifest.json', 'utf8')) as {
-    files?: { harness?: unknown[] };
+    files?: { harness?: unknown[]; hybrid?: Record<string, { strategy?: string }> };
   };
 
-  assert.equal(manifest.files?.harness?.includes('.vscode/settings.json'), true);
-  assert.equal(manifest.files?.harness?.includes('.vscode/extensions.json'), true);
+  assert.equal(manifest.files?.harness?.includes('.vscode/settings.json'), false);
+  assert.equal(manifest.files?.harness?.includes('.vscode/extensions.json'), false);
+  assert.equal(manifest.files?.hybrid?.['.vscode/settings.json']?.strategy, 'json-deep-merge');
+  assert.equal(manifest.files?.hybrid?.['.vscode/extensions.json']?.strategy, 'json-array-union');
 });

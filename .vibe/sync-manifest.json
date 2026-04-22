@@ -18,8 +18,6 @@
       ".vibe/agent/re-incarnation.md",
       ".vibe/agent/sprint-status.schema.json",
       ".vibe/agent/README.md",
-      ".vscode/settings.json",
-      ".vscode/extensions.json",
       ".vibe/sync-manifest.json",
       ".claude/skills/vibe-init/SKILL.md",
       ".claude/skills/vibe-review/SKILL.md",
@@ -35,10 +33,6 @@
       "docs/context/codex-execution.md",
       "docs/context/orchestration.md",
       "docs/orchestration/providers.md",
-      ".gitattributes",
-      ".editorconfig",
-      ".env.example",
-      ".github/workflows/ci.yml",
       "src/commands/audit-config.ts",
       "src/commands/bundle-size.ts",
       "src/commands/doctor.ts",
@@ -186,7 +180,10 @@
       "docs/release/v1.5.1.md",
       "docs/release/v1.5.2.md",
       "docs/release/v1.5.3.md",
-      "docs/release/v1.5.4.md"
+      "docs/release/v1.5.4.md",
+      "docs/release/v1.5.5.md",
+      "docs/release/v1.5.6.md",
+      "docs/release/v1.5.7.md"
     ],
     "hybrid": {
       "CLAUDE.md": {
@@ -204,16 +201,52 @@
         "note": "HARNESS:* sections replaced from upstream; SPRINT_ROLES and PROJECT:* preserved"
       },
       "AGENTS.md": {
-        "strategy": "template-regenerate",
-        "note": "Regenerated from template + provider selection from .vibe/config.local.json"
+        "strategy": "section-merge",
+        "harnessMarkers": ["HARNESS:agent-memory"],
+        "preserveMarkers": ["PROJECT:custom-rules"],
+        "note": "HARNESS section replaced from upstream; PROJECT:* sections preserved"
       },
       "GEMINI.md": {
-        "strategy": "template-regenerate"
+        "strategy": "section-merge",
+        "harnessMarkers": ["HARNESS:agent-memory"],
+        "preserveMarkers": ["PROJECT:custom-rules"],
+        "note": "HARNESS section replaced from upstream; PROJECT:* sections preserved"
       },
       ".claude/settings.json": {
         "strategy": "json-deep-merge",
         "harnessKeys": ["hooks", "statusLine"],
         "projectKeys": ["permissions"]
+      },
+      ".vscode/settings.json": {
+        "strategy": "json-deep-merge",
+        "harnessKeys": [
+          "files.autoGuessEncoding",
+          "files.encoding",
+          "files.eol",
+          "files.insertFinalNewline"
+        ],
+        "note": "Keep UTF-8 editor defaults while preserving project-specific VS Code settings"
+      },
+      ".vscode/extensions.json": {
+        "strategy": "json-array-union",
+        "harnessKeys": ["recommendations"],
+        "note": "Append harness extension recommendations without deleting project recommendations"
+      },
+      ".gitattributes": {
+        "strategy": "line-union",
+        "note": "Preserve project attributes while appending harness text/encoding defaults"
+      },
+      ".editorconfig": {
+        "strategy": "line-union",
+        "note": "Preserve project editor rules while appending harness UTF-8 defaults"
+      },
+      ".env.example": {
+        "strategy": "replace-if-unmodified",
+        "note": "Update only when the project has not customized its environment template"
+      },
+      ".github/workflows/ci.yml": {
+        "strategy": "replace-if-unmodified",
+        "note": "Update only when the project has not customized CI"
       },
       ".gitignore": {
         "strategy": "line-union",

@@ -1,5 +1,6 @@
 # Gemini project memory
 
+<!-- BEGIN:HARNESS:agent-memory -->
 너의 역할은 필요 시 투입되는 **보조 에이전트**다.
 
 활용 가능한 역할:
@@ -12,3 +13,8 @@
 - 격리된 컨텍스트(별도 sub-agent)에서 작업한다.
 - 구현안의 장단점을 명시한다.
 - 필요한 경우만 상세 shard 문서를 읽는다.
+<!-- END:HARNESS:agent-memory -->
+
+<!-- BEGIN:PROJECT:custom-rules -->
+<!-- Add project-specific Gemini rules here. -->
+<!-- END:PROJECT:custom-rules -->
