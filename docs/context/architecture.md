@@ -119,6 +119,8 @@ Sprint 5 adds immutable raw bundle writing through `packages/vault`: bundle path
 
 Sprint 6 adds RTZR batch STT primitives through `packages/rtzr`: OAuth token retrieval, multipart file submission, polling with rate-limit backoff, failed-result handling, transcript artifact writing, supported audio format checks, and ffmpeg conversion helpers for unsupported Telegram audio containers.
 
+Sprint 7 adds the wiki ingest adapter boundary through `packages/wiki-adapter`: deterministic command arguments, a filesystem write lock, stdout/stderr capture, raw bundle snapshot checks before/after adapter execution, and validation that `rawRoot` and `wikiRoot` do not overlap.
+
 ## Security Boundaries
 
 - Telegram user allowlist is mandatory.

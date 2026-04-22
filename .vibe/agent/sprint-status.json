@@ -60,7 +60,9 @@
     {
       "id": "sprint-7-wiki-ingest-adapter",
       "name": "Wiki Ingest Adapter",
-      "status": "planned"
+      "status": "passed",
+      "startedAt": "2026-04-22T09:05:03.972Z",
+      "completedAt": "2026-04-22T09:08:52.326Z"
     },
     {
       "id": "sprint-8-status-retry-cancel",
@@ -69,8 +71,8 @@
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-7-wiki-ingest-adapter",
-    "lastActionSummary": "Completed Sprint 6: added RTZR auth, batch submit/poll, 429 backoff, failed-result handling, transcript artifact writing, and ffmpeg availability/conversion helpers.",
+    "currentSprintId": "sprint-8-status-retry-cancel",
+    "lastActionSummary": "Completed Sprint 7: added protected wiki ingest adapter command contract with write lock, stdout/stderr capture, raw snapshot protection, and root overlap checks.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -80,7 +82,7 @@
       "LLM agent only updates wiki through adapter"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-22T09:05:03.972Z"
+    "updatedAt": "2026-04-22T09:08:52.326Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -95,8 +97,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-22T09:05:03.972Z",
-  "verifiedAt": "2026-04-22T09:05:03.972Z",
+  "stateUpdatedAt": "2026-04-22T09:08:52.326Z",
+  "verifiedAt": "2026-04-22T09:08:52.326Z",
   "verificationCommands": [
     {
       "id": "typecheck",

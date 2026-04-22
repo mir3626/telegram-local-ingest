@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-7-wiki-ingest-adapter
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt
-> **Pending**: sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
+> **Current**: sprint-8-status-retry-cancel
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter
+> **Pending**: sprint-8-status-retry-cancel
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -151,6 +151,7 @@ Telegram mobile/desktop
   - Adapter can be replaced by Codex, Claude Code, OpenClaw, Hermes, or a custom CLI without changing capture flow.
   - Failed adapter calls are retryable.
   - Raw immutability is enforced before and after adapter execution.
+- **status**: completed. Added `packages/wiki-adapter` with a CLI command contract, argument builder, write lock, stdout/stderr capture, raw bundle snapshot protection, and raw/wiki root overlap checks.
 
 ## Sprint 8 — Status, Retry, Cancel, And Operator Polish
 
