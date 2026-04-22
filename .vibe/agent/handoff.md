@@ -43,7 +43,7 @@ Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. The MVP roadmap is complete through commit e97e578 plus this handoff update. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: prepare and run a live smoke against a configured .env/local Telegram server/Obsidian vault, or add a small .env readiness checker before live smoke if credentials/server are not ready.
+Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. The MVP roadmap is complete through the WSL relocation handoff. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: prepare and run a live smoke against a configured .env/local Telegram server/Obsidian vault, or add a small .env readiness checker before live smoke if credentials/server are not ready.
 ```
 
 ## Latest Verification
@@ -56,6 +56,8 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 ## WSL Move Notes
 
 - Active workspace moved to `/home/tony/workspace/telegram-local-ingest`.
+- The old Windows workspace copy at `C:\workspace\telegram-local-ingest` is no longer present.
+- The temporary local `origin` remote pointing to `/mnt/c/workspace/telegram-local-ingest` was removed; the WSL repo is self-contained.
 - WSL Node installed with `nvm`: Node `v24.15.0`, npm `11.12.1`.
 - WSL app verification passed: `npm run typecheck`, `npm run build`, and app-focused tests (`44` passed).
 - Full `npm test` in WSL currently has harness-only failures in `test/run-codex-wrapper.test.ts` related to the Codex wrapper/locale environment; application tests pass.
