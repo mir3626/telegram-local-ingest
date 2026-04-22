@@ -266,6 +266,22 @@ agent_session_start() {
   node "$script_path" >&2 || true
 }
 
+resolve_utf8_locale() {
+  local available candidate
+
+  if command -v locale >/dev/null 2>&1; then
+    available="$(locale -a 2>/dev/null || true)"
+    for candidate in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8 UTF-8; do
+      if printf '%s\n' "$available" | grep -Fxq "$candidate"; then
+        printf '%s' "$candidate"
+        return 0
+      fi
+    done
+  fi
+
+  printf '%s' "C.UTF-8"
+}
+
 # ---------- 0. Subcommand dispatch ----------
 # Must run BEFORE locale forcing / chcp / stdin buffering so --health returns fast.
 if [[ $# -ge 1 ]]; then
@@ -392,16 +408,17 @@ emit_sandbox_only_summary() {
 }
 
 # ---------- 1. Force UTF-8 in the parent shell ----------
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
-export LANGUAGE=en_US.UTF-8
+utf8_locale="$(resolve_utf8_locale)"
+export LANG="$utf8_locale"
+export LC_ALL="$utf8_locale"
+export LANGUAGE="$utf8_locale"
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 export DOTNET_SYSTEM_GLOBALIZATION_USENLS=false
 
 # ---------- 2. Flip Windows console code page to UTF-8 ----------
 if command -v chcp.com >/dev/null 2>&1; then
-  chcp.com 65001 >/dev/null 2>&1 || true
+  chcp.com 65001 </dev/null >/dev/null 2>&1 || true
 fi
 
 # ---------- 3. Build codex argv ----------
@@ -411,9 +428,9 @@ codex_args=(
   exec
   -s "$sandbox"
   -c 'shell_environment_policy.inherit=all'
-  -c 'shell_environment_policy.set.LC_ALL="en_US.UTF-8"'
-  -c 'shell_environment_policy.set.LANG="en_US.UTF-8"'
-  -c 'shell_environment_policy.set.LANGUAGE="en_US.UTF-8"'
+  -c "shell_environment_policy.set.LC_ALL=\"$utf8_locale\""
+  -c "shell_environment_policy.set.LANG=\"$utf8_locale\""
+  -c "shell_environment_policy.set.LANGUAGE=\"$utf8_locale\""
   -c 'shell_environment_policy.set.PYTHONUTF8="1"'
   -c 'shell_environment_policy.set.PYTHONIOENCODING="utf-8"'
   -c 'shell_environment_policy.set.DOTNET_SYSTEM_GLOBALIZATION_USENLS="false"'

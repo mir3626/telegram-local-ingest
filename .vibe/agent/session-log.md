@@ -4,6 +4,7 @@ Append-only notes that should survive context compaction.
 
 ## Entries
 
+- 2026-04-22T15:42:30.000Z [harness] Synced local `/mnt/c/Users/Tony/Workspace/vibe-doctor` harness into WSL repo from `1.5.2` to `1.5.3`; preserved project `.gitignore` and Telegram-specific `.env.example` after sync. Full `npm test` now passes under WSL (`311` passed, `0` failed), including `test/run-codex-wrapper.test.ts`.
 - 2026-04-22T00:00:00.000Z [decision] Project seeded from `vibe-doctor` for `telegram-local-ingest`.
 - 2026-04-22T00:00:00.000Z [decision] Large file capture uses Telegram Local Bot API Server, not Dropbox.
 - 2026-04-22T00:00:00.000Z [decision] Initial package manager is npm workspaces to keep the `vibe-doctor` harness stable.

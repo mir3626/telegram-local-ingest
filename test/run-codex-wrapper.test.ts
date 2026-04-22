@@ -140,10 +140,23 @@ fi
 shift
 "\$@"
 `;
+  const chcpScript = `#!/usr/bin/env bash
+cat >/dev/null
+exit 0
+`;
+  const localeScript = `#!/usr/bin/env bash
+if [[ "\${1:-}" == "-a" ]]; then
+  printf 'C\\nC.UTF-8\\nPOSIX\\n'
+  exit 0
+fi
+printf 'LANG=C.UTF-8\\n'
+`;
   const sleepScript = '#!/usr/bin/env bash\nexit 0\n';
 
   await writeExecutable(path.join(binDir, 'codex'), codexScript);
   await writeExecutable(path.join(binDir, 'timeout'), timeoutScript);
+  await writeExecutable(path.join(binDir, 'chcp.com'), chcpScript);
+  await writeExecutable(path.join(binDir, 'locale'), localeScript);
   await writeExecutable(path.join(binDir, 'sleep'), sleepScript);
   return binDir;
 }
@@ -186,7 +199,10 @@ endlocal & exit /b 0
 }
 
 function shellEnv(binDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const inheritedEntries = Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path');
+  const inheritedEntries = Object.entries(process.env).filter(([key]) => {
+    const normalizedKey = key.toLowerCase();
+    return normalizedKey !== 'path' && !['lang', 'lc_all', 'language'].includes(normalizedKey);
+  });
   const extraEntries = Object.entries(extra).filter(([key]) => key.toLowerCase() !== 'path');
   const inheritedEnv = Object.fromEntries(inheritedEntries);
   const extraEnv = Object.fromEntries(extraEntries);
@@ -198,6 +214,9 @@ function shellEnv(binDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.Process
 
   return {
     ...inheritedEnv,
+    LANG: 'C',
+    LC_ALL: '',
+    LANGUAGE: '',
     ...extraEnv,
     VIBE_SKIP_AGENT_SESSION_START: extra.VIBE_SKIP_AGENT_SESSION_START ?? '1',
     PATH: basePath ? `${binDir}${path.delimiter}${basePath}` : binDir,
