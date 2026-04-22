@@ -24,6 +24,8 @@ Bot responses are now Korean-first and include suitable emoji in operator/status
 
 RTZR STT is now wired into the worker. When `RTZR_CLIENT_ID` and `RTZR_CLIENT_SECRET` are configured, audio/voice files are normalized if needed with ffmpeg, submitted to RTZR using the selected preset config, and written as `*.rtzr.json` plus `*.transcript.md` artifacts under raw bundle `extracted/`. The artifact paths are recorded in `rtzr.transcribed` job events before bundle writing, so `BUNDLE_WRITING` can reconstruct extracted artifacts after a restart. If RTZR credentials are not configured, audio jobs still complete with `rtzr.skipped` and preserve the raw original bundle.
 
+The Windows desktop launcher now behaves as a start/stop toggle. It calls `scripts/local-stack-status.sh` first; if both managed processes are already running, it asks whether to stop them and runs `scripts/stop-local-stack.sh` on `Y`. If only one managed process is running, it asks whether to stop the partial stack; otherwise it continues with `scripts/start-local-stack.sh`. The desktop copy at `C:\Users\Tony\Desktop\Start Telegram Local Ingest.cmd` was updated.
+
 Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot API Server storage. Those paths contain bot-token-derived directories, are intentionally deleted after completion, and make raw bundles non-portable. Keep raw bundle originals as copied, self-contained files; if links are needed later, use Obsidian-relative links to files already inside the finalized raw bundle.
 
 ## Durable Decisions
@@ -72,6 +74,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 - Latest app-focused verification after ops scripts/logging/UX changes: shell script syntax check, `npm run typecheck`, `npm run build`, and 50 focused app tests passed
 - Latest verification after Korean bot responses and RTZR preset capture: `npm run typecheck` passed, `npm run build` passed, and focused app tests passed (`28` passed for Telegram capture/operator/worker/vault/config/live smoke readiness). Full `npm test` still has harness-only WSL failures in `test/run-codex-wrapper.test.ts`; application tests pass (`307` passed, `3` harness failures).
 - Latest verification after RTZR STT worker wiring: `npm run typecheck` passed, `npm run build` passed, and focused app tests passed (`53` passed across DB/Telegram/importer/vault/RTZR/wiki/operator/worker/readiness). Full `npm test` still has only the known WSL `test/run-codex-wrapper.test.ts` failures (`308` passed, `3` failed).
+- Latest verification after launcher toggle update: `bash -n` passed for local stack scripts, `scripts/local-stack-status.sh` returned `0` for the currently running managed stack and `1` against an empty temp pid dir.
 
 ## WSL Move Notes
 
