@@ -1,5 +1,7 @@
 import process from 'node:process';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { parseArgs, getStringFlag, getBooleanFlag } from '../lib/args.js';
 import { runMain } from '../lib/cli.js';
 import { loadConfig } from '../lib/config.js';
@@ -24,6 +26,38 @@ async function resolvePrompt(
   }
 
   throw new Error('Provide --prompt or --prompt-file');
+}
+
+function runAgentSessionStart(cwd: string): void {
+  if (process.env.VIBE_SKIP_AGENT_SESSION_START === '1') {
+    return;
+  }
+
+  const scriptPath = path.join(cwd, 'scripts', 'vibe-agent-session-start.mjs');
+  if (!existsSync(scriptPath)) {
+    return;
+  }
+
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd,
+    env: { ...process.env, VIBE_ROOT: cwd },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  if (result.stdout) {
+    process.stderr.write(result.stdout);
+  }
+
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+
+  if (result.error) {
+    process.stderr.write(`[vibe:run-agent] session-start skipped: ${result.error.message}\n`);
+  } else if (typeof result.status === 'number' && result.status !== 0) {
+    process.stderr.write(`[vibe:run-agent] session-start exited ${result.status}\n`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -75,6 +109,8 @@ async function main(): Promise<void> {
     });
     return;
   }
+
+  runAgentSessionStart(cwd);
 
   const exists = await commandExists(plan.command);
   if (!exists) {

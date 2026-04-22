@@ -45,6 +45,17 @@ Generator 호출은 반드시 **Codex CLI** (`Bash("codex exec ...")`)를 사용
 - `codex:gpt-5-4-prompting` (내부) — Codex/GPT-5.4 프롬프트 가이드 (사용 가능)
 ## Troubleshooting
 
+## Provider-neutral lifecycle hooks
+
+Claude Code has native hooks, but Codex and other CLI providers usually do not. The harness uses the following portable fallback:
+
+- `node scripts/vibe-agent-session-start.mjs` is the canonical session-start command. It runs session-start logging, `vibe-version-check`, and `vibe-model-registry-check`.
+- Claude `SessionStart` calls that script through `.claude/settings.json`.
+- Codex calls it from `scripts/run-codex.sh` before non-health runs.
+- `npm run vibe:run-agent` calls it before any provider command when the script exists in the target workspace.
+
+Context compaction remains provider-specific. Providers without a native `PreCompact` hook must follow `_common-rules.md` Section 16: update `handoff.md` and `session-log.md`, then run `node scripts/vibe-checkpoint.mjs`.
+
 ### ouroboros 설치 실패 (`Could not find a version that satisfies the requirement ouroboros-ai`)
 
 **증상**: `pip install ouroboros-ai` 또는 `pip install ouroboros` 실행 시 패키지를 찾지 못한다는 에러.

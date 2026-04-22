@@ -2,6 +2,9 @@ node_modules/
 dist/
 coverage/
 .vscode/
+!.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
 .DS_Store
 .vibe/config.local.json
 .vibe/runs/

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback, execFileSync, spawnSync } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -25,6 +25,12 @@ afterEach(async () => {
 function detectWorkingBash(): string | null {
   try {
     execFileSync('bash', ['--version'], { stdio: 'ignore' });
+    if (process.platform === 'win32') {
+      const uname = execFileSync('bash', ['-lc', 'uname -s'], { encoding: 'utf8' }).trim();
+      if (!/^(MINGW|MSYS|CYGWIN)/.test(uname)) {
+        return null;
+      }
+    }
     return 'bash';
   } catch {
     return null;
@@ -193,6 +199,7 @@ function shellEnv(binDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.Process
   return {
     ...inheritedEnv,
     ...extraEnv,
+    VIBE_SKIP_AGENT_SESSION_START: extra.VIBE_SKIP_AGENT_SESSION_START ?? '1',
     PATH: basePath ? `${binDir}${path.delimiter}${basePath}` : binDir,
   };
 }
@@ -317,6 +324,29 @@ describe('run-codex.sh wrapper', { skip: bashCommand === null }, () => {
     assert.equal(child.status, 0);
     assert.match(child.stdout, /hello from stdin/);
     assert.match(child.stdout, new RegExp(firstRuleLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  });
+
+  it('runs provider-neutral session-start before non-health codex execution', async () => {
+    const binDir = await createShellStubBin('ok');
+    const cwd = await makeTempDir('run-codex-session-start-');
+    await mkdir(path.join(cwd, '.vibe'), { recursive: true });
+    await writeFile(path.join(cwd, '.vibe', 'config.json'), '{}\n', 'utf8');
+
+    const child = spawnSync(bashCommand ?? 'bash', [bashScriptPath, 'prompt text'], {
+      cwd,
+      env: shellEnv(binDir, { CODEX_RETRY: '1', VIBE_SKIP_AGENT_SESSION_START: '0' }),
+      input: '',
+      encoding: 'utf8',
+    });
+
+    assert.equal(child.status, 0, child.stderr);
+
+    const dailyDir = path.join(cwd, '.vibe', 'agent', 'daily');
+    const [dailyFile] = await readdir(dailyDir);
+    assert.match(dailyFile ?? '', /^\d{4}-\d{2}-\d{2}\.jsonl$/);
+
+    const raw = await readFile(path.join(dailyDir, dailyFile ?? ''), 'utf8');
+    assert.match(raw, /"type":"session-started"/);
   });
 
   it('injects §15 scope discipline rule into Generator context', async () => {

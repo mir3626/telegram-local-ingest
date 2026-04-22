@@ -1,7 +1,7 @@
 {
   "name": "telegram-local-ingest",
   "version": "0.1.0",
-  "harnessVersion": "1.5.0",
+  "harnessVersion": "1.5.2",
   "private": true,
   "type": "module",
   "description": "Telegram Local Bot API Server based local ingest worker for Obsidian LLM wiki raw bundles.",
@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.app.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.app.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
+    "smoke:ready": "npx tsx apps/worker/src/readiness.ts",
     "worker:dev": "npm --workspace @telegram-local-ingest/worker run dev",
     "worker:start": "npm --workspace @telegram-local-ingest/worker run start",
     "vibe:doctor": "npx tsx src/commands/doctor.ts",
@@ -32,7 +33,9 @@
     "vibe:gen-schemas": "node scripts/vibe-gen-schemas.mjs",
     "vibe:audit-lightweight": "node scripts/vibe-audit-lightweight.mjs",
     "vibe:rule-audit": "node scripts/vibe-rule-audit.mjs",
-    "vibe:dashboard": "node scripts/vibe-dashboard.mjs"
+    "vibe:dashboard": "node scripts/vibe-dashboard.mjs",
+    "vibe:session-start": "node scripts/vibe-agent-session-start.mjs",
+    "vibe:checkpoint": "node scripts/vibe-checkpoint.mjs"
   },
   "dependencies": {
     "zod": "^3.23.0"

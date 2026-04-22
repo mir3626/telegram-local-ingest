@@ -14,6 +14,12 @@ const powershellScriptPath = path.resolve('.claude', 'statusline.ps1');
 function detectWorkingBash(): string | null {
   try {
     execFileSync('bash', ['--version'], { stdio: 'ignore' });
+    if (process.platform === 'win32') {
+      const uname = execFileSync('bash', ['-lc', 'uname -s'], { encoding: 'utf8' }).trim();
+      if (!/^(MINGW|MSYS|CYGWIN)/.test(uname)) {
+        return null;
+      }
+    }
     return 'bash';
   } catch {
     return null;

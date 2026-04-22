@@ -168,3 +168,12 @@ vibe-doctor를 베이스로 새 프로젝트를 만들 때:
 - Orchestrator 대응: (1) 시간차 재시도 — dogfood10 에서는 edge block 인 경우 수십 분 후 복구가 관찰됐다. (2) 사용자 승인 하에 Orchestrator 직접 편집 — session-log 에 `[decision][orchestrator-hotfix]` 기록 필수. (3) `.vibe/config.json.providers` 에 fallback provider 추가 후 재시도.
 - 자동 복구: 다음 성공 호출 시 `scripts/run-codex.sh` 가 flag 파일을 `rm -f` 로 제거한다. 이 flag 는 "현재 Codex 가 계속 unreachable 한가" 의 snapshot 이다.
 - 알려진 root causes: rate-limit, CF edge block, 계정 fingerprint 중 하나일 수 있으나 명확한 판별 방법은 없다. dogfood10 에서는 사용자 토큰이 98% 여유였음에도 403 이 반환됐다.
+## Provider-neutral lifecycle
+
+Codex does not expose the same `SessionStart` and `PreCompact` hooks as Claude Code. The harness therefore routes Codex through generic lifecycle scripts where possible:
+
+- `scripts/run-codex.sh` calls `node scripts/vibe-agent-session-start.mjs` before non-health Codex runs.
+- `npm run vibe:run-agent -- --provider codex ...` also calls the same session-start entrypoint before executing the provider command.
+- `_common-rules.md` requires agents to update `.vibe/agent/handoff.md` and `.vibe/agent/session-log.md` before context compaction, handoff, or final response after meaningful work, then run `node scripts/vibe-checkpoint.mjs` when available.
+
+This is not a true Codex `PreCompact` hook. It is the portable fallback that works for Codex and other CLI providers without Claude-specific hook support.

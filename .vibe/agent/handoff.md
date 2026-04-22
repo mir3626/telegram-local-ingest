@@ -6,11 +6,13 @@
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-1`
 - **current sprint**: `completed`
-- **harnessVersion**: `1.5.0`
+- **harnessVersion**: `1.5.2`
 
 ## Status
 
 The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 8 are complete. The project context now targets a Telegram Local Bot API Server based local ingest worker, and the code has config loading, Telegram Bot API baseline, startup health checks, SQLite-backed operational state, Telegram capture-to-job creation, controlled Telegram file import into runtime staging/archive, immutable Obsidian raw bundle writing, RTZR STT client/helpers, a protected wiki ingest adapter boundary, Telegram operator command primitives, and an integrated worker dispatch loop.
+
+The harness has been synced from the local WSL-visible `vibe-doctor` template at `/mnt/c/Users/Tony/Workspace/vibe-doctor` from `1.5.0` to `1.5.2`. The Telegram-specific `.env.example` was preserved after sync because the upstream harness template is provider-only. A live smoke readiness checker now exists at `apps/worker/src/readiness.ts` and can be run with `npm run smoke:ready`.
 
 ## Durable Decisions
 
@@ -32,7 +34,7 @@ The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 8 ar
 
 ## Next Action
 
-MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is a live smoke against a local Telegram Bot API Server and a real Obsidian vault.
+MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to create a real `.env`, start/point at a local Telegram Bot API Server, point at a real temporary Obsidian vault, rerun `npm run smoke:ready`, then perform the live smoke.
 
 ```text
 Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import -> raw bundle -> optional RTZR/wiki adapter -> Telegram status.
@@ -43,15 +45,16 @@ Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. The MVP roadmap is complete through the WSL relocation handoff. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: prepare and run a live smoke against a configured .env/local Telegram server/Obsidian vault, or add a small .env readiness checker before live smoke if credentials/server are not ready.
+Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.2` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`. The MVP roadmap is complete and `npm run smoke:ready` now checks `.env`, local Telegram Bot API Server health, WSL-native vault/runtime paths, and optional RTZR/wiki config. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: create/populate `.env`, start or point at the local Telegram server and a real temporary Obsidian vault, rerun `npm run smoke:ready`, then run the live smoke flow.
 ```
 
 ## Latest Verification
 
-- `npm run typecheck`: passed
-- `npm test`: passed, 275 tests, 274 passed, 1 skipped
-- `npm run build`: passed
-- `git status`: clean before this handoff-only update
+- `npm run typecheck`: passed after harness sync and readiness checker
+- `npm run build`: passed after harness sync and readiness checker
+- App-focused tests passed: `47` passed, including `test/live-smoke-readiness.test.ts`
+- `npm test`: harness-only failures remain in `test/run-codex-wrapper.test.ts` under WSL locale/wrapper behavior; application tests pass
+- `npm run smoke:ready`: exits `1` because `.env` is missing; no live credentials or vault path are configured yet
 
 ## WSL Move Notes
 

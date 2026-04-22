@@ -4,6 +4,7 @@
   "files": {
     "harness": [
       "scripts/run-codex.sh",
+      "scripts/vibe-agent-session-start.mjs",
       "scripts/vibe-preflight.mjs",
       "scripts/vibe-checkpoint.mjs",
       "scripts/vibe-sprint-complete.mjs",
@@ -17,6 +18,8 @@
       ".vibe/agent/re-incarnation.md",
       ".vibe/agent/sprint-status.schema.json",
       ".vibe/agent/README.md",
+      ".vscode/settings.json",
+      ".vscode/extensions.json",
       ".vibe/sync-manifest.json",
       ".claude/skills/vibe-init/SKILL.md",
       ".claude/skills/vibe-review/SKILL.md",
@@ -33,6 +36,7 @@
       "docs/context/orchestration.md",
       "docs/orchestration/providers.md",
       ".gitattributes",
+      ".gitignore",
       ".editorconfig",
       ".env.example",
       ".github/workflows/ci.yml",
@@ -108,6 +112,7 @@
       "migrations/1.1.0.mjs",
       "scripts/run-codex.cmd",
       "test/run-codex-wrapper.test.ts",
+      "test/agent-session-start.test.ts",
       "scripts/vibe-sprint-commit.mjs",
       "scripts/vibe-session-log-sync.mjs",
       "src/lib/decisions.ts",
@@ -172,12 +177,15 @@
       "src/lib/daily-log.ts",
       "test/attention-notify.test.ts",
       "test/daily-log.test.ts",
+      "test/encoding-settings.test.ts",
       "test/dashboard-server.test.ts",
       "test/interview-coverage.test.ts",
       "test/sprint-planner-contract.test.ts",
       "test/sprint-commit-lockfile-blacklist.test.ts",
       "docs/release/v1.4.1.md",
-      "docs/release/v1.4.3.md"
+      "docs/release/v1.4.3.md",
+      "docs/release/v1.5.1.md",
+      "docs/release/v1.5.2.md"
     ],
     "hybrid": {
       "CLAUDE.md": {

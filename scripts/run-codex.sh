@@ -250,6 +250,22 @@ status_tick_after_success() {
   echo "[run-codex] status-tick: skipped reason=cli-failed rc=$tick_rc ${tick_output}" >&2
 }
 
+agent_session_start() {
+  if [[ "${VIBE_SKIP_AGENT_SESSION_START:-}" == "1" ]]; then
+    return 0
+  fi
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+  script_path="$script_dir/vibe-agent-session-start.mjs"
+
+  if [[ ! -f "$script_path" ]] || ! command -v node >/dev/null 2>&1; then
+    return 0
+  fi
+
+  node "$script_path" >&2 || true
+}
+
 # ---------- 0. Subcommand dispatch ----------
 # Must run BEFORE locale forcing / chcp / stdin buffering so --health returns fast.
 if [[ $# -ge 1 ]]; then
@@ -267,6 +283,8 @@ if [[ $# -ge 1 ]]; then
       ;;
   esac
 fi
+
+agent_session_start
 
 attempt_output="$(mktemp "${TMPDIR:-/tmp}/run-codex.XXXXXX")"
 attempt_stderr="$(mktemp "${TMPDIR:-/tmp}/run-codex.XXXXXX")"

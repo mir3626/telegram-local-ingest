@@ -282,3 +282,11 @@ Planner prompt 가 명시적으로 unit test 파일 생성을 요구하지 **않
 이 규칙은 프로토타입/MVP 가 명시적으로 smoke + type check 만으로 충분하다고 선언한
 conventions.md 의 테스트 섹션을 Generator 레벨로 hoist 한 것이다. 해제는 Planner 가
 "Tests to add: [...]" 섹션을 Sprint prompt 에 명시했을 때만.
+## Section 16 Provider-neutral context persistence
+
+This harness can be driven by Claude, Codex, Gemini, or another CLI provider. Provider-specific hooks are not equally available, so every agent must treat `.vibe/agent/handoff.md`, `.vibe/agent/session-log.md`, and `.vibe/agent/sprint-status.json` as the durable state boundary.
+
+- At session start, use `node scripts/vibe-agent-session-start.mjs` when available. It performs session-start logging, harness version checks, and model registry checks without relying on Claude-only hooks.
+- Before context compaction, handoff, or final response after meaningful work, update `handoff.md` and append a concise `session-log.md` entry. Then run `node scripts/vibe-checkpoint.mjs` when available.
+- If the provider has no PreCompact hook, this rule is mandatory process discipline. Do not assume chat history survives; preserve restart instructions in the files above.
+- If a compact/checkpoint cannot be completed, state the reason in the final report and leave the repo in a state that can be resumed by reading `handoff.md` and `session-log.md`.
