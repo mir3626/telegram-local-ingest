@@ -24,10 +24,11 @@
         "sprint-1-telegram-local-baseline",
         "sprint-2-sqlite-job-model",
         "sprint-3-telegram-capture",
-        "sprint-4-local-file-import"
+        "sprint-4-local-file-import",
+        "sprint-5-vault-bundle-writer"
       ],
       "milestoneProgress": {},
-      "summary": "In progress. Sprint 0 seeded the downstream project from vibe-doctor. Sprint 1 added the Telegram Local Bot API baseline, startup checks, tests, and operator setup docs. Sprint 2 added SQLite schema, repository functions, state transitions, retry eligibility, and event history. Sprint 3 added Telegram update parsing, command parsing, allowlist checks, durable offset polling, and /ingest job creation. Sprint 4 added controlled Telegram file import into runtime staging/archive with hashing, duplicate detection, max size policy, and path safety. Next is Sprint 5 Obsidian raw bundle writing."
+      "summary": "In progress. Sprint 0 seeded the downstream project from vibe-doctor. Sprint 1 added the Telegram Local Bot API baseline, startup checks, tests, and operator setup docs. Sprint 2 added SQLite schema, repository functions, state transitions, retry eligibility, and event history. Sprint 3 added Telegram update parsing, command parsing, allowlist checks, durable offset polling, and /ingest job creation. Sprint 4 added controlled Telegram file import into runtime staging/archive with hashing, duplicate detection, max size policy, and path safety. Sprint 5 added immutable Obsidian raw bundle writing with manifest/source/log files and finalized overwrite protection. Next is Sprint 6 RTZR STT."
     }
   ]
 }

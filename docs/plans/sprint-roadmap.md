@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-5-vault-bundle-writer
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import
-> **Pending**: sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
+> **Current**: sprint-6-rtzr-stt
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer
+> **Pending**: sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -119,6 +119,7 @@ Telegram mobile/desktop
   - Bundle output is deterministic and readable in Obsidian.
   - `source.md` is suitable as the LLM ingest entrypoint.
   - Existing finalized bundles are not overwritten.
+- **status**: completed. Added `packages/vault` raw bundle writer with deterministic `raw/<date>/<source_id>/` paths, `manifest.yaml`, `source.md`, `log.md`, original/normalized/extracted artifact directories, and `.finalized` overwrite protection.
 
 ## Sprint 6 — RTZR STT Audio Processor
 

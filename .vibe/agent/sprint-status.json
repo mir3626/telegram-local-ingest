@@ -46,7 +46,9 @@
     {
       "id": "sprint-5-vault-bundle-writer",
       "name": "Obsidian Raw Bundle Writer",
-      "status": "planned"
+      "status": "passed",
+      "startedAt": "2026-04-22T08:54:32.402Z",
+      "completedAt": "2026-04-22T08:59:41.251Z"
     },
     {
       "id": "sprint-6-rtzr-stt",
@@ -65,8 +67,8 @@
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-5-vault-bundle-writer",
-    "lastActionSummary": "Completed Sprint 4: added controlled Telegram file import into runtime staging/archive with SHA-256, duplicate detection, max file size policy, and unsafe path rejection.",
+    "currentSprintId": "sprint-6-rtzr-stt",
+    "lastActionSummary": "Completed Sprint 5: added immutable Obsidian raw bundle writing with deterministic paths, manifest/source/log files, artifact directories, and finalized overwrite protection.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -76,7 +78,7 @@
       "LLM agent only updates wiki through adapter"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-22T08:54:32.402Z"
+    "updatedAt": "2026-04-22T08:59:41.251Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -91,8 +93,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-22T08:54:32.402Z",
-  "verifiedAt": "2026-04-22T08:54:32.402Z",
+  "stateUpdatedAt": "2026-04-22T08:59:41.251Z",
+  "verifiedAt": "2026-04-22T08:59:41.251Z",
   "verificationCommands": [
     {
       "id": "typecheck",

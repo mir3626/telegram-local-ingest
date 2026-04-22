@@ -5,5 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@telegram-local-ingest/db": "0.1.0"
   }
 }

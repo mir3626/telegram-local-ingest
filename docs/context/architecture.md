@@ -115,6 +115,8 @@ Sprint 3 adds Telegram capture primitives: `getUpdates` polling payloads, update
 
 Sprint 4 adds controlled file import through `packages/importer`: each Telegram file is resolved through `getFile`, validated against `TELEGRAM_LOCAL_FILES_ROOT` when configured, copied into `runtime/staging`, archived under `runtime/archive/originals`, hashed with SHA-256, and marked as duplicate when identical bytes were already imported.
 
+Sprint 5 adds immutable raw bundle writing through `packages/vault`: bundle paths are deterministic under `raw/<date>/<source_id>/`, originals and derived artifacts are copied into `original/`, `normalized/`, and `extracted/`, and `manifest.yaml`, `source.md`, `log.md`, and `.finalized` are written as the Obsidian-facing source package.
+
 ## Security Boundaries
 
 - Telegram user allowlist is mandatory.
