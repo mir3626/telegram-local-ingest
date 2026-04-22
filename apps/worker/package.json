@@ -14,6 +14,7 @@
     "@telegram-local-ingest/importer": "0.1.0",
     "@telegram-local-ingest/operator": "0.1.0",
     "@telegram-local-ingest/rtzr": "0.1.0",
+    "@telegram-local-ingest/sensevoice": "0.1.0",
     "@telegram-local-ingest/telegram": "0.1.0",
     "@telegram-local-ingest/vault": "0.1.0",
     "@telegram-local-ingest/wiki-adapter": "0.1.0"

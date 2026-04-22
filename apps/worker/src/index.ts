@@ -38,6 +38,13 @@ import {
   type WaitForTranscriptionOptions,
 } from "@telegram-local-ingest/rtzr";
 import {
+  LocalSenseVoiceClient,
+  writeSenseVoiceTranscriptArtifacts,
+  type SenseVoiceProgressHandler,
+  type SenseVoiceTranscribeOptions,
+  type SenseVoiceTranscript,
+} from "@telegram-local-ingest/sensevoice";
+import {
   checkTelegramLocalBotApi,
   getMessageCommand,
   type InlineKeyboardMarkup,
@@ -56,6 +63,7 @@ export interface WorkerContext {
   db: DatabaseSync;
   telegram: TelegramBotApiClient;
   rtzr?: RtzrTranscriber;
+  sensevoice?: SenseVoiceTranscriber;
 }
 
 export interface RtzrTranscriber {
@@ -64,6 +72,14 @@ export interface RtzrTranscriber {
     config: RtzrTranscribeConfig,
     waitOptions: WaitForTranscriptionOptions,
   ): Promise<RtzrTranscript>;
+}
+
+export interface SenseVoiceTranscriber {
+  transcribeFile(
+    filePath: string,
+    options: SenseVoiceTranscribeOptions,
+    onProgress?: SenseVoiceProgressHandler,
+  ): Promise<SenseVoiceTranscript>;
 }
 
 export interface WorkerOnceResult {
@@ -167,17 +183,21 @@ export async function createWorkerContext(config: AppConfig): Promise<WorkerCont
       apiBaseUrl: config.rtzr.apiBaseUrl,
     })
     : undefined;
+  const sensevoice = config.stt.provider === "sensevoice"
+    ? new LocalSenseVoiceClient()
+    : undefined;
   const health = await checkTelegramLocalBotApi(telegram);
   if (!health.ok) {
     dbHandle.close();
     throw new Error(`Telegram startup check failed: ${health.issues.join("; ")}`);
   }
-  logWorker(`ready bot=${health.bot?.username ?? health.bot?.first_name ?? "unknown"}`);
+  logWorker(`ready bot=${health.bot?.username ?? health.bot?.first_name ?? "unknown"}`, "info", "STARTUP");
   return {
     ...dbHandle,
     config,
     telegram,
     ...(rtzr ? { rtzr } : {}),
+    ...(sensevoice ? { sensevoice } : {}),
   };
 }
 
@@ -207,7 +227,7 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
     ...(lastOffset === null ? {} : { offset: lastOffset + 1 }),
   });
   if (updates.length > 0) {
-    logWorker(`updates received count=${updates.length}`);
+    logWorker(`updates received count=${updates.length}`, "info", "TELEGRAM");
   }
 
   let operatorCommandsHandled = 0;
@@ -234,23 +254,24 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
           const result = await sendOperatorCommandResponse(context.db, context.telegram, parsed);
           operatorCommandsHandled += result.handled ? 1 : 0;
         } else {
-          const needsRtzrPreset = hasAudioOrVoice(parsed.files);
-          const created = needsRtzrPreset
+          const needsSttPreset = hasAudioOrVoice(parsed.files);
+          const created = needsSttPreset
             ? createIngestJobFromTelegramMessage(context.db, parsed, { queue: false })
             : createQueuedJobFromTelegramMessage(context.db, parsed);
           if (!created) {
             continue;
           }
           jobsCreated += 1;
-          logWorker(`job queued id=${created.id} files=${parsed.files.length} command=${created.command ? "yes" : "no"}`);
-          if (needsRtzrPreset) {
-            appendJobEvent(context.db, created.id, "rtzr.preset_requested", "RTZR preset selection requested", {
+          logWorker(`job queued id=${created.id} files=${parsed.files.length} command=${created.command ? "yes" : "no"}`, "info", "QUEUE");
+          if (needsSttPreset) {
+            appendJobEvent(context.db, created.id, "stt.preset_requested", "STT preset selection requested", {
+              sttProvider: context.config.stt.provider,
               translationDefaultRelation: context.config.translation.defaultRelation,
             });
             await context.telegram.sendMessage(
               parsed.chatId,
-              buildRtzrPresetPrompt(created.id, parsed.files),
-              { replyMarkup: buildRtzrPresetKeyboard(created.id) },
+              buildSttPresetPrompt(created.id, parsed.files),
+              { replyMarkup: buildSttPresetKeyboard(created.id) },
             );
           } else {
             await context.telegram.sendMessage(parsed.chatId, buildQueuedMessage(created.id, parsed.files.map((file) => file.fileName ?? file.kind)));
@@ -291,22 +312,27 @@ export async function processRunnableJobs(context: WorkerContext, limit = 5): Pr
 export async function processJob(context: WorkerContext, jobId: string): Promise<StoredJob> {
   try {
     let job = mustGetJob(context.db, jobId);
-    logWorker(`job processing id=${job.id} status=${job.status}`);
+    logWorker(`job processing id=${job.id} status=${job.status}`, "info", "JOB");
     if (job.status === "QUEUED") {
+      logWorker(`importing Telegram files job=${job.id}`, "info", "IMPORT");
       await importTelegramJobFiles(context.db, context.telegram, job.id, {
         runtimeDir: context.config.runtime.runtimeDir,
         maxFileSizeBytes: context.config.runtime.maxFileSizeBytes,
       });
       job = mustGetJob(context.db, job.id);
+      logWorker(`import complete job=${job.id} status=${job.status}`, "info", "IMPORT");
     }
 
     if (job.status === "NORMALIZING") {
-      await runConfiguredRtzrTranscription(context, job);
+      logWorker(`STT phase started job=${job.id} provider=${context.config.stt.provider}`, "info", "STT");
+      await runConfiguredSttTranscription(context, job);
+      logWorker(`STT phase finished job=${job.id} provider=${context.config.stt.provider}`, "info", "STT");
       transitionJob(context.db, job.id, "BUNDLE_WRITING", { message: "Writing Obsidian raw bundle" });
       job = mustGetJob(context.db, job.id);
     }
 
     if (job.status === "BUNDLE_WRITING") {
+      logWorker(`writing raw bundle job=${job.id}`, "info", "BUNDLE");
       const events = listJobEvents(context.db, job.id);
       const bundle = await writeRawBundle({
         vaultPath: context.config.vault.obsidianVaultPath,
@@ -324,29 +350,32 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
         sourceMarkdownPath: bundle.paths.sourceMarkdown,
         finalizedAt: bundle.finalizedAt,
       });
-      logWorker(`bundle written job=${job.id} path=${bundle.paths.root}`);
+      logWorker(`bundle written job=${job.id} path=${bundle.paths.root}`, "info", "BUNDLE");
       transitionJob(context.db, job.id, "INGESTING", { message: "Raw bundle ready for wiki ingest" });
       job = mustGetJob(context.db, job.id);
     }
 
     if (job.status === "INGESTING") {
+      logWorker(`wiki adapter phase started job=${job.id}`, "info", "WIKI");
       await runConfiguredWikiAdapter(context, job);
+      logWorker(`wiki adapter phase finished job=${job.id}`, "info", "WIKI");
       transitionJob(context.db, job.id, "NOTIFYING", { message: "Notifying Telegram" });
       job = mustGetJob(context.db, job.id);
     }
 
     if (job.status === "NOTIFYING") {
+      logWorker(`sending completion notification job=${job.id}`, "info", "NOTIFY");
       if (job.chatId) {
         await context.telegram.sendMessage(job.chatId, buildJobCompletionMessage(job, listJobFiles(context.db, job.id)));
       }
       const completed = transitionJob(context.db, job.id, "COMPLETED", { message: "Completed" });
       const cleanup = await cleanupTelegramSourceFiles(context.db, context.telegram, job.id);
       if (cleanup.failedFiles.length > 0) {
-        logWorker(`telegram source cleanup incomplete job=${job.id} failures=${cleanup.failedFiles.length}`, "warn");
+        logWorker(`telegram source cleanup incomplete job=${job.id} failures=${cleanup.failedFiles.length}`, "warn", "CLEANUP");
       } else {
-        logWorker(`telegram source cleanup complete job=${job.id} deleted=${cleanup.deletedPaths.length}`);
+        logWorker(`telegram source cleanup complete job=${job.id} deleted=${cleanup.deletedPaths.length}`, "info", "CLEANUP");
       }
-      logWorker(`job completed id=${completed.id}`);
+      logWorker(`job completed id=${completed.id}`, "info", "JOB");
       return completed;
     }
 
@@ -392,20 +421,38 @@ async function handleRtzrPresetCallback(context: WorkerContext, callback: Parsed
     return true;
   }
 
-  appendJobEvent(context.db, job.id, "rtzr.preset_selected", `${preset.emoji} ${preset.label}`, {
+  appendJobEvent(context.db, job.id, "stt.preset_selected", `${preset.emoji} ${preset.label}`, {
+    sttProvider: context.config.stt.provider,
     presetKey: preset.key,
     presetLabel: preset.label,
     presetDescription: preset.description,
     rtzrConfig: preset.config,
+    sensevoiceConfig: buildSenseVoiceTranscribeOptions(context.config),
     translationDefaultRelation: context.config.translation.defaultRelation,
   });
   const queued = transitionJob(context.db, job.id, "QUEUED", {
-    message: `RTZR preset selected: ${preset.label}`,
+    message: `STT preset selected: ${preset.label}`,
   });
   await context.telegram.answerCallbackQuery(callback.callbackQueryId, `${preset.emoji} ${preset.label} 설정을 저장했습니다.`);
   await context.telegram.sendMessage(callback.chatId, buildPresetQueuedMessage(queued.id, preset));
-  logWorker(`rtzr preset selected job=${queued.id} preset=${preset.key}`);
+  logWorker(`stt preset selected job=${queued.id} provider=${context.config.stt.provider} preset=${preset.key}`, "info", "STT");
   return true;
+}
+
+async function runConfiguredSttTranscription(context: WorkerContext, job: StoredJob): Promise<void> {
+  if (context.config.stt.provider === "sensevoice") {
+    await runConfiguredSenseVoiceTranscription(context, job);
+    return;
+  }
+  if (context.config.stt.provider === "rtzr") {
+    await runConfiguredRtzrTranscription(context, job);
+    return;
+  }
+
+  const files = listJobFiles(context.db, job.id).filter(isAudioJobFile);
+  if (files.length > 0) {
+    appendJobEvent(context.db, job.id, "stt.skipped", "STT_PROVIDER is none");
+  }
 }
 
 async function runConfiguredRtzrTranscription(context: WorkerContext, job: StoredJob): Promise<void> {
@@ -419,6 +466,7 @@ async function runConfiguredRtzrTranscription(context: WorkerContext, job: Store
     if (!events.some((event) => event.type === "rtzr.skipped")) {
       appendJobEvent(context.db, job.id, "rtzr.skipped", "RTZR credentials are not configured");
     }
+    logWorker(`RTZR skipped job=${job.id} reason=credentials_missing`, "warn", "RTZR");
     return;
   }
 
@@ -431,6 +479,7 @@ async function runConfiguredRtzrTranscription(context: WorkerContext, job: Store
 
   for (const file of files) {
     if (alreadyTranscribedFileIds.has(file.id)) {
+      logWorker(`RTZR skip already transcribed job=${job.id} file=${file.id}`, "info", "RTZR");
       continue;
     }
     const inputPath = file.localPath ?? file.archivePath;
@@ -439,15 +488,19 @@ async function runConfiguredRtzrTranscription(context: WorkerContext, job: Store
         fileId: file.id,
         reason: "Imported file path is missing",
       });
+      logWorker(`RTZR skipped file job=${job.id} file=${file.id} reason=missing_path`, "warn", "RTZR");
       continue;
     }
 
+    logWorker(`RTZR normalizing audio job=${job.id} file=${file.id}`, "info", "RTZR");
     const normalized = await ensureRtzrSupportedAudio({
       inputPath,
       outputDir: resolveRuntimePath(context.config.runtime.runtimeDir, "normalized", job.id, file.id),
       ffmpegPath: context.config.rtzr.ffmpegPath,
     });
+    logWorker(`RTZR transcribe start job=${job.id} file=${file.id} audio=${normalized.audioPath}`, "info", "RTZR");
     const transcript = await context.rtzr.transcribeFile(normalized.audioPath, config, buildRtzrWaitOptions(context.config));
+    logWorker(`RTZR transcribe complete job=${job.id} file=${file.id} transcribeId=${transcript.id}`, "info", "RTZR");
     const artifactDir = resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, file.id);
     const artifacts = await writeTranscriptArtifacts(transcript, artifactDir);
     const stem = artifactStem(file.originalName ?? file.id);
@@ -464,6 +517,85 @@ async function runConfiguredRtzrTranscription(context: WorkerContext, job: Store
         { kind: "transcript_markdown", sourcePath: artifacts.transcriptMarkdownPath, name: `${stem}.transcript.md` },
       ],
     });
+    logWorker(`RTZR artifacts written job=${job.id} file=${file.id}`, "info", "RTZR");
+  }
+}
+
+async function runConfiguredSenseVoiceTranscription(context: WorkerContext, job: StoredJob): Promise<void> {
+  const files = listJobFiles(context.db, job.id).filter(isAudioJobFile);
+  if (files.length === 0) {
+    return;
+  }
+
+  const events = listJobEvents(context.db, job.id);
+  if (!context.sensevoice) {
+    if (!events.some((event) => event.type === "sensevoice.skipped")) {
+      appendJobEvent(context.db, job.id, "sensevoice.skipped", "SenseVoice is not configured");
+    }
+    logWorker(`SenseVoice skipped job=${job.id} reason=not_configured`, "warn", "SENSEVOICE");
+    return;
+  }
+
+  const alreadyTranscribedFileIds = new Set(
+    events
+      .filter((event) => event.type === "sensevoice.transcribed" && isRecord(event.data) && typeof event.data.fileId === "string")
+      .map((event) => (event.data as { fileId: string }).fileId),
+  );
+  const config = selectedSenseVoiceConfig(context.config, events);
+
+  for (const file of files) {
+    if (alreadyTranscribedFileIds.has(file.id)) {
+      logWorker(`SenseVoice skip already transcribed job=${job.id} file=${file.id}`, "info", "SENSEVOICE");
+      continue;
+    }
+    const inputPath = file.localPath ?? file.archivePath;
+    if (!inputPath) {
+      appendJobEvent(context.db, job.id, "sensevoice.skipped_file", file.originalName ?? file.id, {
+        fileId: file.id,
+        reason: "Imported file path is missing",
+      });
+      logWorker(`SenseVoice skipped file job=${job.id} file=${file.id} reason=missing_path`, "warn", "SENSEVOICE");
+      continue;
+    }
+
+    logWorker(`SenseVoice normalizing audio job=${job.id} file=${file.id}`, "info", "SENSEVOICE");
+    const normalized = await ensureRtzrSupportedAudio({
+      inputPath,
+      outputDir: resolveRuntimePath(context.config.runtime.runtimeDir, "normalized", job.id, file.id),
+      ffmpegPath: context.config.rtzr.ffmpegPath,
+    });
+    const artifactDir = resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, file.id);
+    const startedAt = Date.now();
+    logWorker(
+      `SenseVoice transcribe start job=${job.id} file=${file.id} device=${config.device} audio=${normalized.audioPath}`,
+      "info",
+      "SENSEVOICE",
+    );
+    const transcript = await context.sensevoice.transcribeFile(normalized.audioPath, config, (progress) => {
+      const percent = progress.percent === undefined ? "" : `progress=${progress.percent}% `;
+      logWorker(`job=${job.id} file=${file.id} ${percent}stage=${progress.stage} ${progress.message}`, "info", "SENSEVOICE");
+    });
+    logWorker(
+      `SenseVoice transcribe complete job=${job.id} file=${file.id} transcriptId=${transcript.id} elapsedMs=${Date.now() - startedAt}`,
+      "info",
+      "SENSEVOICE",
+    );
+    const artifacts = await writeSenseVoiceTranscriptArtifacts(transcript, artifactDir);
+    const stem = artifactStem(file.originalName ?? file.id);
+    appendJobEvent(context.db, job.id, "sensevoice.transcribed", file.originalName ?? file.id, {
+      fileId: file.id,
+      originalName: file.originalName,
+      inputPath,
+      audioPath: normalized.audioPath,
+      converted: normalized.converted,
+      transcriptId: transcript.id,
+      config,
+      artifacts: [
+        { kind: "sensevoice_json", sourcePath: artifacts.senseVoiceJsonPath, name: `${stem}.sensevoice.json` },
+        { kind: "transcript_markdown", sourcePath: artifacts.transcriptMarkdownPath, name: `${stem}.transcript.md` },
+      ],
+    });
+    logWorker(`SenseVoice artifacts written job=${job.id} file=${file.id}`, "info", "SENSEVOICE");
   }
 }
 
@@ -503,8 +635,9 @@ function transitionToFailedIfPossible(db: DatabaseSync, jobId: string, error: un
   });
 }
 
-function logWorker(message: string, level: "info" | "warn" = "info"): void {
-  const line = `[worker] ${new Date().toISOString()} ${message}`;
+function logWorker(message: string, level: "info" | "warn" = "info", tag = "GENERAL"): void {
+  const normalizedTag = tag.replace(/[^A-Z0-9_-]/gi, "_").toUpperCase();
+  const line = `[WORKER] ${new Date().toISOString()} [${normalizedTag}] ${message}`;
   if (level === "warn") {
     console.warn(line);
     return;
@@ -516,7 +649,7 @@ function buildQueuedMessage(jobId: string, fileNames: string[]): string {
   return [`📥 접수했어요: ${jobId}`, ...fileNames.map((name) => `- ${name}`)].join("\n");
 }
 
-function buildRtzrPresetPrompt(jobId: string, files: ParsedTelegramFile[]): string {
+function buildSttPresetPrompt(jobId: string, files: ParsedTelegramFile[]): string {
   return [
     `🎧 음성 파일 업로드를 감지했어요: ${jobId}`,
     ...files.map((file) => `- ${file.fileName ?? file.kind}`),
@@ -526,11 +659,11 @@ function buildRtzrPresetPrompt(jobId: string, files: ParsedTelegramFile[]): stri
   ].join("\n");
 }
 
-function buildRtzrPresetKeyboard(jobId: string): InlineKeyboardMarkup {
+function buildSttPresetKeyboard(jobId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: RTZR_PRESETS.map((preset) => [{
       text: `${preset.emoji} ${preset.label}`,
-      callback_data: `rtzr:${preset.key}:${jobId}`,
+      callback_data: `stt:${preset.key}:${jobId}`,
     }]),
   };
 }
@@ -543,11 +676,37 @@ function buildPresetQueuedMessage(jobId: string, preset: RtzrPreset): string {
 }
 
 function selectedRtzrConfig(events: StoredJobEvent[]): RtzrTranscribeConfig {
-  const selected = [...events].reverse().find((event) => event.type === "rtzr.preset_selected");
+  const selected = selectedSttPresetEvent(events);
   if (!selected || !isRecord(selected.data) || !isRecord(selected.data.rtzrConfig)) {
     return {};
   }
   return selected.data.rtzrConfig as RtzrTranscribeConfig;
+}
+
+function selectedSenseVoiceConfig(config: AppConfig, events: StoredJobEvent[]): SenseVoiceTranscribeOptions {
+  const selected = selectedSttPresetEvent(events);
+  if (selected && isRecord(selected.data) && isRecord(selected.data.sensevoiceConfig)) {
+    return selected.data.sensevoiceConfig as unknown as SenseVoiceTranscribeOptions;
+  }
+  return buildSenseVoiceTranscribeOptions(config);
+}
+
+function buildSenseVoiceTranscribeOptions(config: AppConfig): SenseVoiceTranscribeOptions {
+  return {
+    pythonPath: resolveProjectRelativePath(config.sensevoice.pythonPath),
+    scriptPath: resolveProjectRelativePath(config.sensevoice.scriptPath),
+    model: config.sensevoice.model,
+    device: config.sensevoice.device,
+    language: config.sensevoice.language,
+    useItn: config.sensevoice.useItn,
+    batchSizeSeconds: config.sensevoice.batchSizeSeconds,
+    mergeVad: config.sensevoice.mergeVad,
+    mergeLengthSeconds: config.sensevoice.mergeLengthSeconds,
+    maxSingleSegmentTimeMs: config.sensevoice.maxSingleSegmentTimeMs,
+    timeoutMs: config.sensevoice.timeoutMs,
+    ...(config.sensevoice.vadModel ? { vadModel: config.sensevoice.vadModel } : {}),
+    ...(config.sensevoice.torchNumThreads !== undefined ? { torchNumThreads: config.sensevoice.torchNumThreads } : {}),
+  };
 }
 
 function buildRtzrWaitOptions(config: AppConfig): WaitForTranscriptionOptions {
@@ -560,7 +719,7 @@ function buildRtzrWaitOptions(config: AppConfig): WaitForTranscriptionOptions {
 
 function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactInput[] {
   return events.flatMap((event) => {
-    if (event.type !== "rtzr.transcribed" || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
+    if (!isTranscriptionEvent(event.type) || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
       return [];
     }
     return event.data.artifacts.flatMap((artifact) => {
@@ -579,11 +738,19 @@ function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactI
 }
 
 function parseRtzrPresetCallbackData(data: string | undefined): { presetKey: string; jobId: string } | null {
-  const match = /^rtzr:([a-z0-9_-]+):(.+)$/.exec(data ?? "");
+  const match = /^(?:rtzr|stt):([a-z0-9_-]+):(.+)$/.exec(data ?? "");
   if (!match?.[1] || !match[2]) {
     return null;
   }
   return { presetKey: match[1], jobId: match[2] };
+}
+
+function selectedSttPresetEvent(events: StoredJobEvent[]): StoredJobEvent | undefined {
+  return [...events].reverse().find((event) => event.type === "stt.preset_selected" || event.type === "rtzr.preset_selected");
+}
+
+function isTranscriptionEvent(type: string): boolean {
+  return type === "rtzr.transcribed" || type === "sensevoice.transcribed";
 }
 
 function hasAudioOrVoice(files: ParsedTelegramFile[]): boolean {
@@ -606,6 +773,10 @@ function artifactStem(value: string): string {
   const baseName = path.basename(value, path.extname(value));
   const sanitized = baseName.replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_").trim();
   return sanitized.length > 0 ? sanitized.slice(0, 120) : "audio";
+}
+
+function resolveProjectRelativePath(value: string): string {
+  return path.isAbsolute(value) ? value : path.resolve(process.env.INIT_CWD ?? process.cwd(), value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

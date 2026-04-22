@@ -7,9 +7,10 @@ import test from "node:test";
 import type { AppConfig } from "@telegram-local-ingest/core";
 import { getJob, getTelegramOffset, listJobEvents, migrate, mustGetSourceBundleForJob, openIngestDatabase } from "@telegram-local-ingest/db";
 import type { RtzrTranscribeConfig, RtzrTranscript, WaitForTranscriptionOptions } from "@telegram-local-ingest/rtzr";
+import type { SenseVoiceTranscribeOptions, SenseVoiceTranscript } from "@telegram-local-ingest/sensevoice";
 import { TelegramBotApiClient, type FetchLike } from "@telegram-local-ingest/telegram";
 
-import { runWorkerOnce, type RtzrTranscriber, type WorkerContext } from "../apps/worker/src/index.js";
+import { runWorkerOnce, type RtzrTranscriber, type SenseVoiceTranscriber, type WorkerContext } from "../apps/worker/src/index.js";
 
 test("runWorkerOnce captures, imports, bundles, completes, and notifies", async () => {
   const fixture = createFixture();
@@ -102,6 +103,7 @@ test("runWorkerOnce asks for RTZR preset on audio uploads and queues after callb
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "RECEIVED");
     assert.match(sentMessages[0]?.text ?? "", /🎧 음성 파일 업로드/);
     assert.match(JSON.stringify(sentMessages[0]?.reply_markup), /회의/);
+    assert.match(JSON.stringify(sentMessages[0]?.reply_markup), /stt:meeting/);
 
     const second = await runWorkerOnce(context);
 
@@ -110,7 +112,7 @@ test("runWorkerOnce asks for RTZR preset on audio uploads and queues after callb
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
     assert.equal(fs.existsSync(path.join(fixture.botRoot, "audio", "call.m4a")), false);
     assert.ok(answeredCallbacks.length > 0);
-    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "rtzr.preset_selected"));
+    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "stt.preset_selected"));
     assert.ok(
       fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml"), "utf8")
         .includes("default_relation: \"business\""),
@@ -151,6 +153,45 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     assert.match(manifest, /call\.transcript\.md/);
     assert.match(fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "rtzr.transcribed"));
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles artifacts", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const answeredCallbacks: unknown[] = [];
+  const senseVoiceCalls: Array<{ filePath: string; options: SenseVoiceTranscribeOptions }> = [];
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.stt.provider = "sensevoice";
+    config.sensevoice.pythonPath = ".venv-sensevoice/bin/python";
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockAudioPresetFetch(sentMessages, answeredCallbacks),
+      ),
+      sensevoice: mockSenseVoiceTranscriber(senseVoiceCalls),
+    };
+
+    await runWorkerOnce(context);
+    await runWorkerOnce(context);
+
+    const manifest = fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml"), "utf8");
+    assert.equal(senseVoiceCalls.length, 1);
+    assert.equal(senseVoiceCalls[0]?.options.device, "cpu");
+    assert.equal(senseVoiceCalls[0]?.options.language, "auto");
+    assert.match(manifest, /provider: "sensevoice"/);
+    assert.match(manifest, /call\.sensevoice\.json/);
+    assert.match(manifest, /call\.transcript\.md/);
+    assert.match(fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "extracted", "call.transcript.md"), "utf8"), /센스보이스 전사입니다/);
+    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "sensevoice.transcribed"));
   } finally {
     dbHandle.close();
   }
@@ -200,12 +241,29 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
       obsidianVaultPath: fixture.vaultPath,
       rawRoot: "raw",
     },
+    stt: {
+      provider: "rtzr",
+    },
     rtzr: {
       apiBaseUrl: "https://openapi.vito.ai",
       ffmpegPath: "ffmpeg",
       pollIntervalMs: 5000,
       timeoutMs: 30 * 60 * 1000,
       rateLimitBackoffMs: 30_000,
+    },
+    sensevoice: {
+      pythonPath: "python3",
+      scriptPath: "./scripts/sensevoice-transcribe.py",
+      model: "iic/SenseVoiceSmall",
+      vadModel: "fsmn-vad",
+      device: "cpu",
+      language: "auto",
+      useItn: true,
+      batchSizeSeconds: 60,
+      mergeVad: true,
+      mergeLengthSeconds: 15,
+      maxSingleSegmentTimeMs: 30_000,
+      timeoutMs: 60 * 60 * 1000,
     },
     wiki: {},
     translation: {
@@ -370,6 +428,27 @@ function mockAudioPresetFetch(
       return jsonResponse({ ok: true, result: true });
     }
     return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
+function mockSenseVoiceTranscriber(
+  calls: Array<{ filePath: string; options: SenseVoiceTranscribeOptions }>,
+): SenseVoiceTranscriber {
+  return {
+    async transcribeFile(filePath, options): Promise<SenseVoiceTranscript> {
+      calls.push({ filePath, options });
+      return {
+        id: "sensevoice-1",
+        text: "센스보이스 전사입니다",
+        segments: [{ text: "센스보이스 전사입니다", language: "ko" }],
+        raw: {
+          id: "sensevoice-1",
+          provider: "sensevoice",
+          text: "센스보이스 전사입니다",
+          segments: [{ text: "센스보이스 전사입니다", language: "ko" }],
+        },
+      };
+    },
   };
 }
 

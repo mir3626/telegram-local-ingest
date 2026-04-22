@@ -36,9 +36,29 @@ test("loadConfig applies local Bot API defaults and parses allowlist", () => {
   assert.equal(config.telegram.pollTimeoutSeconds, 25);
   assert.equal(config.runtime.maxFileSizeBytes, 2 * 1024 * 1024 * 1024);
   assert.equal(config.vault.rawRoot, "raw");
+  assert.equal(config.stt.provider, "rtzr");
   assert.equal(config.rtzr.pollIntervalMs, 5000);
   assert.equal(config.rtzr.timeoutMs, 30 * 60 * 1000);
   assert.equal(config.rtzr.rateLimitBackoffMs, 30_000);
+  assert.equal(config.sensevoice.device, "cpu");
+  assert.equal(config.sensevoice.language, "auto");
+  assert.equal(config.sensevoice.timeoutMs, 60 * 60 * 1000);
+});
+
+test("loadConfig supports SenseVoice local CPU STT", () => {
+  const config = loadConfig({
+    TELEGRAM_BOT_TOKEN: "123:abc",
+    OBSIDIAN_VAULT_PATH: "C:/vault",
+    STT_PROVIDER: "sensevoice",
+    SENSEVOICE_PYTHON: ".venv-sensevoice/bin/python",
+    SENSEVOICE_TORCH_NUM_THREADS: "4",
+  });
+
+  assert.equal(config.stt.provider, "sensevoice");
+  assert.equal(config.sensevoice.pythonPath, ".venv-sensevoice/bin/python");
+  assert.equal(config.sensevoice.model, "iic/SenseVoiceSmall");
+  assert.equal(config.sensevoice.vadModel, "fsmn-vad");
+  assert.equal(config.sensevoice.torchNumThreads, 4);
 });
 
 test("loadNearestEnvFile searches parent directories without overwriting env", () => {

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
 
 import {
   type AppConfig,
@@ -87,12 +88,31 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
     checks.push(warn("TELEGRAM_LOCAL_FILES_ROOT", "not set; live smoke depends on Local Bot API returning absolute file paths"));
   }
 
-  if ((config.rtzr.clientId && !config.rtzr.clientSecret) || (!config.rtzr.clientId && config.rtzr.clientSecret)) {
-    checks.push(fail("RTZR", "set both RTZR_CLIENT_ID and RTZR_CLIENT_SECRET, or leave both empty to skip STT"));
-  } else if (config.rtzr.clientId && config.rtzr.clientSecret) {
-    checks.push(ok("RTZR", "credentials present; audio/voice STT can run"));
+  checks.push(ok("STT_PROVIDER", config.stt.provider));
+  if (config.stt.provider === "rtzr") {
+    if ((config.rtzr.clientId && !config.rtzr.clientSecret) || (!config.rtzr.clientId && config.rtzr.clientSecret)) {
+      checks.push(fail("RTZR", "set both RTZR_CLIENT_ID and RTZR_CLIENT_SECRET, or leave both empty to skip STT"));
+    } else if (config.rtzr.clientId && config.rtzr.clientSecret) {
+      checks.push(ok("RTZR", "credentials present; audio/voice STT can run"));
+    } else {
+      checks.push(warn("RTZR", "credentials not set; audio/voice STT will be skipped until configured"));
+    }
+  } else if (config.stt.provider === "sensevoice") {
+    await checkReadableFile(checks, "SENSEVOICE_SCRIPT_PATH", resolveFrom(cwd, config.sensevoice.scriptPath));
+    const python = await checkCommandVersion(config.sensevoice.pythonPath, ["--version"]);
+    if (python.ok) {
+      checks.push(ok("SENSEVOICE_PYTHON", `${config.sensevoice.pythonPath}: ${python.output}`));
+    } else {
+      checks.push(fail("SENSEVOICE_PYTHON", `${config.sensevoice.pythonPath} is not runnable: ${python.output}`));
+    }
+    const funasr = await checkCommandVersion(config.sensevoice.pythonPath, ["-c", "import funasr; print('funasr ok')"]);
+    if (funasr.ok) {
+      checks.push(ok("SenseVoice dependencies", "funasr import succeeded"));
+    } else {
+      checks.push(fail("SenseVoice dependencies", "run scripts/setup-sensevoice-cpu.sh, then set SENSEVOICE_PYTHON=.venv-sensevoice/bin/python"));
+    }
   } else {
-    checks.push(warn("RTZR", "credentials not set; audio/voice STT will be skipped until configured"));
+    checks.push(warn("STT", "audio/voice transcription disabled by STT_PROVIDER=none"));
   }
 
   if (config.wiki.ingestCommand) {
@@ -171,6 +191,48 @@ async function checkReadableDirectory(checks: ReadinessCheck[], name: string, di
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
     checks.push(fail(name, code === "ENOENT" ? `${directoryPath} does not exist` : String(error)));
   }
+}
+
+async function checkReadableFile(checks: ReadinessCheck[], name: string, filePath: string): Promise<void> {
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) {
+      checks.push(fail(name, `${filePath} is not a file`));
+      return;
+    }
+    await checkAccess(checks, name, filePath, fs.constants.R_OK, "readable");
+  } catch (error) {
+    checks.push(fail(name, error instanceof Error ? error.message : String(error)));
+  }
+}
+
+function checkCommandVersion(command: string, args: string[]): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      resolve({ ok: false, output: "timed out" });
+    }, 10_000);
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      resolve({ ok: false, output: error.message });
+    });
+    child.on("close", (exitCode) => {
+      clearTimeout(timeout);
+      resolve({
+        ok: exitCode === 0,
+        output: (stdout || stderr).trim(),
+      });
+    });
+  });
 }
 
 async function checkAccess(

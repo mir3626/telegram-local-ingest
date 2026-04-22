@@ -24,6 +24,12 @@ Bot responses are now Korean-first and include suitable emoji in operator/status
 
 RTZR STT is now wired into the worker. When `RTZR_CLIENT_ID` and `RTZR_CLIENT_SECRET` are configured, audio/voice files are normalized if needed with ffmpeg, submitted to RTZR using the selected preset config, and written as `*.rtzr.json` plus `*.transcript.md` artifacts under raw bundle `extracted/`. The artifact paths are recorded in `rtzr.transcribed` job events before bundle writing, so `BUNDLE_WRITING` can reconstruct extracted artifacts after a restart. If RTZR credentials are not configured, audio jobs still complete with `rtzr.skipped` and preserve the raw original bundle.
 
+SenseVoice local CPU STT is available as an on-demand provider. Set `STT_PROVIDER=sensevoice`, run `scripts/setup-sensevoice-cpu.sh`, and point `SENSEVOICE_PYTHON` to `.venv-sensevoice/bin/python`. The worker does not start a persistent SenseVoice server; it spawns `scripts/sensevoice-transcribe.py` only while an audio/voice job is being processed. SenseVoice artifacts are written as `*.sensevoice.json` plus `*.transcript.md` under raw bundle `extracted/`, and the selected STT preset plus SenseVoice config are preserved in `processing_context.stt_preset`.
+
+`scripts/setup-sensevoice-cpu.sh` now prewarms the SenseVoice model cache by default through `scripts/sensevoice-prewarm.py`. This avoids the first live Telegram audio job blocking on ModelScope download. Set `SENSEVOICE_PREWARM=0` only when intentionally skipping model download during setup.
+
+Worker logs now use uppercase bracketed task tags, for example `[WORKER] ... [SENSEVOICE]`, `[IMPORT]`, `[STT]`, `[BUNDLE]`, and `[CLEANUP]`. SenseVoice helper progress is phase-based and streamed into the worker log while a job is running: START, CONFIG, THREADS, IMPORT, MODEL_LOAD, TRANSCRIBE, POSTPROCESS, WRITE_OUTPUT, DONE, or ERROR with approximate progress percentages.
+
 The Windows desktop launcher now behaves as a start/stop toggle. It calls `scripts/local-stack-status.sh` first; if both managed processes are already running, it asks whether to stop them and runs `scripts/stop-local-stack.sh` on `Y`. If only one managed process is running, it asks whether to stop the partial stack; otherwise it continues with `scripts/start-local-stack.sh`. The desktop copy at `C:\Users\Tony\Desktop\Start Telegram Local Ingest.cmd` was updated.
 
 Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot API Server storage. Those paths contain bot-token-derived directories, are intentionally deleted after completion, and make raw bundles non-portable. Keep raw bundle originals as copied, self-contained files; if links are needed later, use Obsidian-relative links to files already inside the finalized raw bundle.
@@ -40,6 +46,7 @@ Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot 
 - Use `packages/importer` as the Telegram file import boundary; never process files in-place from Bot API storage.
 - Use `packages/vault` as the immutable raw bundle writing boundary.
 - Use `packages/rtzr` as the RTZR STT boundary for auth, submit/poll, transcript artifacts, and ffmpeg conversion helpers.
+- Use `packages/sensevoice` as the on-demand local SenseVoice STT boundary; invoke it per job rather than as a resident service.
 - Use `packages/wiki-adapter` as the LLM/wiki command boundary, guarded by a write lock and raw snapshot checks.
 - Use `packages/operator` for Telegram status/retry/cancel and notification/report text.
 - Use RTZR STT for audio and voice files.
@@ -48,7 +55,7 @@ Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot 
 
 ## Next Action
 
-MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to run one real audio/voice smoke from the desktop launcher/background stack, choose an RTZR preset button in Telegram, and inspect the resulting raw bundle `extracted/*.transcript.md` plus `manifest.yaml`. After that, proceed to translation context/admin controls or wiki adapter wiring.
+MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to switch `.env` to `STT_PROVIDER=sensevoice`, run `scripts/setup-sensevoice-cpu.sh` if the virtualenv is not ready, restart the stack, upload the same audio file, choose a preset button in Telegram, and compare the resulting `extracted/*.transcript.md` against the RTZR output. After that, decide whether to keep SenseVoice as the default or add a provider bakeoff flow later.
 
 ```text
 Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import -> raw bundle -> optional RTZR/wiki adapter -> Telegram status.
@@ -59,7 +66,7 @@ Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.4` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`, including the WSL-safe Codex wrapper fix and project-safe `.gitignore` line merge. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and the Windows desktop launcher now starts/stops the pid/log-managed local stack. Bot responses are Korean-first. Audio/voice uploads ask for an RTZR preset button before queueing; the selected RTZR config plus translation default relation are stored in job events and raw bundle manifests. RTZR STT is wired into the worker when credentials are set and writes `*.rtzr.json`/`*.transcript.md` extracted artifacts into raw bundles. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: run one real audio preset smoke from the launcher/background stack, then proceed to translation context/admin controls or wiki adapter wiring.
+Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.4` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`, including the WSL-safe Codex wrapper fix and project-safe `.gitignore` line merge. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and the Windows desktop launcher now starts/stops the pid/log-managed local stack. Bot responses are Korean-first. Audio/voice uploads ask for an STT preset button before queueing; the selected preset, provider config, and translation default relation are stored in job events and raw bundle manifests. RTZR STT is wired into the worker when credentials are set. SenseVoice local CPU STT is also wired as `STT_PROVIDER=sensevoice`; it runs on demand through `scripts/sensevoice-transcribe.py` and writes `*.sensevoice.json`/`*.transcript.md` extracted artifacts into raw bundles. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: run the same audio file with SenseVoice and compare transcript quality before adding any bakeoff flow.
 ```
 
 ## Latest Verification
@@ -75,6 +82,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 - Latest verification after Korean bot responses and RTZR preset capture: `npm run typecheck` passed, `npm run build` passed, and focused app tests passed (`28` passed for Telegram capture/operator/worker/vault/config/live smoke readiness). Full `npm test` still has harness-only WSL failures in `test/run-codex-wrapper.test.ts`; application tests pass (`307` passed, `3` harness failures).
 - Latest verification after RTZR STT worker wiring: `npm run typecheck` passed, `npm run build` passed, and focused app tests passed (`53` passed across DB/Telegram/importer/vault/RTZR/wiki/operator/worker/readiness). Full `npm test` still has only the known WSL `test/run-codex-wrapper.test.ts` failures (`308` passed, `3` failed).
 - Latest verification after v1.5.4 harness sync: `npm run typecheck`, `npm run build`, and `npm test` passed in WSL. Post-sync dry-run now reports `.gitignore` as `line-merge` instead of conflict/replace; `.env.example` remains a project-specific conflict and is preserved locally.
+- Latest verification after SenseVoice prewarm setup improvement: `npm run typecheck`, `npm run build`, app-focused tests passed (`57`), Python helper syntax checks passed, and full `npm test` passed (`320` passed, `0` failed).
 
 ## WSL Move Notes
 

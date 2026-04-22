@@ -56,6 +56,28 @@ export interface RtzrConfig {
   rateLimitBackoffMs: number;
 }
 
+export type SttProvider = "rtzr" | "sensevoice" | "none";
+
+export interface SttConfig {
+  provider: SttProvider;
+}
+
+export interface SenseVoiceConfig {
+  pythonPath: string;
+  scriptPath: string;
+  model: string;
+  device: string;
+  language: string;
+  useItn: boolean;
+  batchSizeSeconds: number;
+  mergeVad: boolean;
+  mergeLengthSeconds: number;
+  maxSingleSegmentTimeMs: number;
+  timeoutMs: number;
+  vadModel?: string;
+  torchNumThreads?: number;
+}
+
 export interface WikiAdapterConfig {
   ingestCommand?: string;
 }
@@ -68,7 +90,9 @@ export interface AppConfig {
   telegram: TelegramConfig;
   runtime: RuntimeConfig;
   vault: VaultConfig;
+  stt: SttConfig;
   rtzr: RtzrConfig;
+  sensevoice: SenseVoiceConfig;
   wiki: WikiAdapterConfig;
   translation: TranslationConfig;
 }
@@ -139,6 +163,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const rtzrPollIntervalMs = parseInteger(env.RTZR_POLL_INTERVAL_MS, 5000, "RTZR_POLL_INTERVAL_MS", issues);
   const rtzrTimeoutMs = parseInteger(env.RTZR_TIMEOUT_MS, 30 * 60 * 1000, "RTZR_TIMEOUT_MS", issues);
   const rtzrRateLimitBackoffMs = parseInteger(env.RTZR_RATE_LIMIT_BACKOFF_MS, 30_000, "RTZR_RATE_LIMIT_BACKOFF_MS", issues);
+  const senseVoiceBatchSizeSeconds = parseInteger(env.SENSEVOICE_BATCH_SIZE_SECONDS, 60, "SENSEVOICE_BATCH_SIZE_SECONDS", issues);
+  const senseVoiceMergeLengthSeconds = parseInteger(env.SENSEVOICE_MERGE_LENGTH_SECONDS, 15, "SENSEVOICE_MERGE_LENGTH_SECONDS", issues);
+  const senseVoiceMaxSingleSegmentTimeMs = parseInteger(
+    env.SENSEVOICE_MAX_SINGLE_SEGMENT_TIME_MS,
+    30_000,
+    "SENSEVOICE_MAX_SINGLE_SEGMENT_TIME_MS",
+    issues,
+  );
+  const senseVoiceTimeoutMs = parseInteger(env.SENSEVOICE_TIMEOUT_MS, 60 * 60 * 1000, "SENSEVOICE_TIMEOUT_MS", issues);
+  const senseVoiceTorchNumThreads = parseOptionalInteger(env.SENSEVOICE_TORCH_NUM_THREADS, "SENSEVOICE_TORCH_NUM_THREADS", issues);
 
   const config: AppConfig = {
     telegram: {
@@ -157,12 +191,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       obsidianVaultPath: required("OBSIDIAN_VAULT_PATH"),
       rawRoot: readNonEmpty(env.OBSIDIAN_RAW_ROOT) ?? "raw",
     },
+    stt: {
+      provider: parseSttProvider(env.STT_PROVIDER, issues),
+    },
     rtzr: {
       apiBaseUrl: normalizeBaseUrl(readNonEmpty(env.RTZR_API_BASE_URL) ?? "https://openapi.vito.ai", "RTZR_API_BASE_URL", issues),
       ffmpegPath: readNonEmpty(env.FFMPEG_PATH) ?? "ffmpeg",
       pollIntervalMs: rtzrPollIntervalMs,
       timeoutMs: rtzrTimeoutMs,
       rateLimitBackoffMs: rtzrRateLimitBackoffMs,
+    },
+    sensevoice: {
+      pythonPath: readNonEmpty(env.SENSEVOICE_PYTHON) ?? "python3",
+      scriptPath: readNonEmpty(env.SENSEVOICE_SCRIPT_PATH) ?? "./scripts/sensevoice-transcribe.py",
+      model: readNonEmpty(env.SENSEVOICE_MODEL) ?? "iic/SenseVoiceSmall",
+      device: readNonEmpty(env.SENSEVOICE_DEVICE) ?? "cpu",
+      language: readNonEmpty(env.SENSEVOICE_LANGUAGE) ?? "auto",
+      useItn: parseBoolean(env.SENSEVOICE_USE_ITN, true, "SENSEVOICE_USE_ITN", issues),
+      batchSizeSeconds: senseVoiceBatchSizeSeconds,
+      mergeVad: parseBoolean(env.SENSEVOICE_MERGE_VAD, true, "SENSEVOICE_MERGE_VAD", issues),
+      mergeLengthSeconds: senseVoiceMergeLengthSeconds,
+      maxSingleSegmentTimeMs: senseVoiceMaxSingleSegmentTimeMs,
+      timeoutMs: senseVoiceTimeoutMs,
     },
     wiki: {},
     translation: {
@@ -175,6 +225,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   assignOptional(config.telegram, "localFilesRoot", optional("TELEGRAM_LOCAL_FILES_ROOT"));
   assignOptional(config.rtzr, "clientId", optional("RTZR_CLIENT_ID"));
   assignOptional(config.rtzr, "clientSecret", optional("RTZR_CLIENT_SECRET"));
+  assignOptional(config.sensevoice, "vadModel", optional("SENSEVOICE_VAD_MODEL") ?? "fsmn-vad");
+  if (senseVoiceTorchNumThreads !== undefined) {
+    config.sensevoice.torchNumThreads = senseVoiceTorchNumThreads;
+  }
   assignOptional(config.wiki, "ingestCommand", optional("WIKI_INGEST_COMMAND"));
 
   if (pollTimeoutSeconds < 1 || pollTimeoutSeconds > 100) {
@@ -191,6 +245,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (rtzrRateLimitBackoffMs < 1) {
     issues.push("RTZR_RATE_LIMIT_BACKOFF_MS must be at least 1");
+  }
+  if (senseVoiceBatchSizeSeconds < 1) {
+    issues.push("SENSEVOICE_BATCH_SIZE_SECONDS must be at least 1");
+  }
+  if (senseVoiceMergeLengthSeconds < 1) {
+    issues.push("SENSEVOICE_MERGE_LENGTH_SECONDS must be at least 1");
+  }
+  if (senseVoiceMaxSingleSegmentTimeMs < 1) {
+    issues.push("SENSEVOICE_MAX_SINGLE_SEGMENT_TIME_MS must be at least 1");
+  }
+  if (senseVoiceTimeoutMs < 1) {
+    issues.push("SENSEVOICE_TIMEOUT_MS must be at least 1");
+  }
+  if (senseVoiceTorchNumThreads !== undefined && senseVoiceTorchNumThreads < 1) {
+    issues.push("SENSEVOICE_TORCH_NUM_THREADS must be at least 1");
   }
 
   if (issues.length > 0) {
@@ -245,6 +314,39 @@ function parseInteger(
     return fallback;
   }
   return parsed;
+}
+
+function parseOptionalInteger(value: string | undefined, key: string, issues: string[]): number | undefined {
+  const raw = readNonEmpty(value);
+  if (!raw) {
+    return undefined;
+  }
+  return parseInteger(raw, 0, key, issues);
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean, key: string, issues: string[]): boolean {
+  const raw = readNonEmpty(value);
+  if (!raw) {
+    return fallback;
+  }
+  const normalized = raw.toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "n", "off"].includes(normalized)) {
+    return false;
+  }
+  issues.push(`${key} must be a boolean`);
+  return fallback;
+}
+
+function parseSttProvider(value: string | undefined, issues: string[]): SttProvider {
+  const raw = readNonEmpty(value) ?? "rtzr";
+  if (raw === "rtzr" || raw === "sensevoice" || raw === "none") {
+    return raw;
+  }
+  issues.push("STT_PROVIDER must be one of: rtzr, sensevoice, none");
+  return "rtzr";
 }
 
 function normalizeBaseUrl(value: string, key: string, issues: string[]): string {

@@ -312,11 +312,13 @@ function yamlFileRecords(records: BundleFileRecord[], kind: string): string[] {
 }
 
 interface ProcessingContext {
-  rtzrPreset?: {
+  sttPreset?: {
+    provider?: string;
     key: string;
     label: string;
     description?: string;
-    config: unknown;
+    rtzrConfig?: unknown;
+    sensevoiceConfig?: unknown;
   };
   translation?: {
     defaultRelation: string;
@@ -324,7 +326,7 @@ interface ProcessingContext {
 }
 
 function buildProcessingContext(events: StoredJobEvent[]): ProcessingContext {
-  const selected = [...events].reverse().find((event) => event.type === "rtzr.preset_selected");
+  const selected = [...events].reverse().find((event) => event.type === "stt.preset_selected" || event.type === "rtzr.preset_selected");
   if (!selected || !isRecord(selected.data)) {
     return {};
   }
@@ -333,11 +335,13 @@ function buildProcessingContext(events: StoredJobEvent[]): ProcessingContext {
   const presetKey = typeof selected.data.presetKey === "string" ? selected.data.presetKey : undefined;
   const presetLabel = typeof selected.data.presetLabel === "string" ? selected.data.presetLabel : undefined;
   if (presetKey && presetLabel) {
-    context.rtzrPreset = {
+    context.sttPreset = {
       key: presetKey,
       label: presetLabel,
+      ...(typeof selected.data.sttProvider === "string" ? { provider: selected.data.sttProvider } : {}),
       ...(typeof selected.data.presetDescription === "string" ? { description: selected.data.presetDescription } : {}),
-      config: selected.data.rtzrConfig,
+      ...(selected.data.rtzrConfig !== undefined ? { rtzrConfig: selected.data.rtzrConfig } : {}),
+      ...(selected.data.sensevoiceConfig !== undefined ? { sensevoiceConfig: selected.data.sensevoiceConfig } : {}),
     };
   }
   if (typeof selected.data.translationDefaultRelation === "string") {
@@ -349,18 +353,26 @@ function buildProcessingContext(events: StoredJobEvent[]): ProcessingContext {
 }
 
 function yamlProcessingContext(context: ProcessingContext): string[] {
-  if (!context.rtzrPreset && !context.translation) {
+  if (!context.sttPreset && !context.translation) {
     return ["  {}"];
   }
   const lines: string[] = [];
-  if (context.rtzrPreset) {
-    lines.push("  rtzr_preset:");
-    lines.push(`    key: ${yamlScalar(context.rtzrPreset.key)}`);
-    lines.push(`    label: ${yamlScalar(context.rtzrPreset.label)}`);
-    if (context.rtzrPreset.description) {
-      lines.push(`    description: ${yamlScalar(context.rtzrPreset.description)}`);
+  if (context.sttPreset) {
+    lines.push("  stt_preset:");
+    if (context.sttPreset.provider) {
+      lines.push(`    provider: ${yamlScalar(context.sttPreset.provider)}`);
     }
-    lines.push(`    config_json: ${yamlScalar(JSON.stringify(context.rtzrPreset.config ?? {}))}`);
+    lines.push(`    key: ${yamlScalar(context.sttPreset.key)}`);
+    lines.push(`    label: ${yamlScalar(context.sttPreset.label)}`);
+    if (context.sttPreset.description) {
+      lines.push(`    description: ${yamlScalar(context.sttPreset.description)}`);
+    }
+    if (context.sttPreset.rtzrConfig !== undefined) {
+      lines.push(`    rtzr_config_json: ${yamlScalar(JSON.stringify(context.sttPreset.rtzrConfig ?? {}))}`);
+    }
+    if (context.sttPreset.sensevoiceConfig !== undefined) {
+      lines.push(`    sensevoice_config_json: ${yamlScalar(JSON.stringify(context.sttPreset.sensevoiceConfig ?? {}))}`);
+    }
   }
   if (context.translation) {
     lines.push("  translation:");
