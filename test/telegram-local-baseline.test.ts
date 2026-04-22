@@ -36,6 +36,9 @@ test("loadConfig applies local Bot API defaults and parses allowlist", () => {
   assert.equal(config.telegram.pollTimeoutSeconds, 25);
   assert.equal(config.runtime.maxFileSizeBytes, 2 * 1024 * 1024 * 1024);
   assert.equal(config.vault.rawRoot, "raw");
+  assert.equal(config.rtzr.pollIntervalMs, 5000);
+  assert.equal(config.rtzr.timeoutMs, 30 * 60 * 1000);
+  assert.equal(config.rtzr.rateLimitBackoffMs, 30_000);
 });
 
 test("loadNearestEnvFile searches parent directories without overwriting env", () => {

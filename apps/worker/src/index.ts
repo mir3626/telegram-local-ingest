@@ -20,13 +20,23 @@ import {
   transitionJob,
   type DbHandle,
   type StoredJob,
+  type StoredJobEvent,
+  type StoredJobFile,
 } from "@telegram-local-ingest/db";
-import { cleanupTelegramSourceFiles, importTelegramJobFiles } from "@telegram-local-ingest/importer";
+import { cleanupTelegramSourceFiles, importTelegramJobFiles, resolveRuntimePath } from "@telegram-local-ingest/importer";
 import {
   buildJobCompletionMessage,
   buildJobFailureMessage,
   sendOperatorCommandResponse,
 } from "@telegram-local-ingest/operator";
+import {
+  ensureRtzrSupportedAudio,
+  RtzrOpenApiClient,
+  writeTranscriptArtifacts,
+  type RtzrTranscribeConfig,
+  type RtzrTranscript,
+  type WaitForTranscriptionOptions,
+} from "@telegram-local-ingest/rtzr";
 import {
   checkTelegramLocalBotApi,
   getMessageCommand,
@@ -38,13 +48,22 @@ import {
   type ParsedTelegramCallback,
   type ParsedTelegramFile,
 } from "@telegram-local-ingest/telegram";
-import { writeRawBundle } from "@telegram-local-ingest/vault";
+import { type RawBundleArtifactInput, writeRawBundle } from "@telegram-local-ingest/vault";
 import { runWikiIngestAdapter } from "@telegram-local-ingest/wiki-adapter";
 
 export interface WorkerContext {
   config: AppConfig;
   db: DatabaseSync;
   telegram: TelegramBotApiClient;
+  rtzr?: RtzrTranscriber;
+}
+
+export interface RtzrTranscriber {
+  transcribeFile(
+    filePath: string,
+    config: RtzrTranscribeConfig,
+    waitOptions: WaitForTranscriptionOptions,
+  ): Promise<RtzrTranscript>;
 }
 
 export interface WorkerOnceResult {
@@ -64,16 +83,7 @@ interface RtzrPreset {
   label: string;
   emoji: string;
   description: string;
-  config: {
-    domain: "GENERAL" | "CALL";
-    use_diarization: boolean;
-    diarization?: { spk_count: number };
-    use_itn: boolean;
-    use_disfluency_filter: boolean;
-    use_profanity_filter: boolean;
-    use_paragraph_splitter: boolean;
-    paragraph_splitter: { max: number };
-  };
+  config: RtzrTranscribeConfig;
 }
 
 const RTZR_PRESETS: RtzrPreset[] = [
@@ -83,6 +93,8 @@ const RTZR_PRESETS: RtzrPreset[] = [
     emoji: "🧑‍💼",
     description: "여러 사람이 회의실/온라인 회의에서 말한 녹음",
     config: {
+      model_name: "sommers",
+      language: "ko",
       domain: "GENERAL",
       use_diarization: true,
       diarization: { spk_count: 0 },
@@ -99,6 +111,8 @@ const RTZR_PRESETS: RtzrPreset[] = [
     emoji: "☎️",
     description: "전화/콜센터처럼 통화 품질에 가까운 녹음",
     config: {
+      model_name: "sommers",
+      language: "ko",
       domain: "CALL",
       use_diarization: true,
       diarization: { spk_count: 2 },
@@ -115,6 +129,8 @@ const RTZR_PRESETS: RtzrPreset[] = [
     emoji: "🎙️",
     description: "한 사람이 남긴 메모/독백 형태의 녹음",
     config: {
+      model_name: "sommers",
+      language: "ko",
       domain: "GENERAL",
       use_diarization: false,
       use_itn: true,
@@ -144,6 +160,13 @@ export async function createWorkerContext(config: AppConfig): Promise<WorkerCont
     baseUrl: config.telegram.botApiBaseUrl,
     ...(config.telegram.localFilesRoot ? { localFilesRoot: config.telegram.localFilesRoot } : {}),
   });
+  const rtzr = config.rtzr.clientId && config.rtzr.clientSecret
+    ? new RtzrOpenApiClient({
+      clientId: config.rtzr.clientId,
+      clientSecret: config.rtzr.clientSecret,
+      apiBaseUrl: config.rtzr.apiBaseUrl,
+    })
+    : undefined;
   const health = await checkTelegramLocalBotApi(telegram);
   if (!health.ok) {
     dbHandle.close();
@@ -154,6 +177,7 @@ export async function createWorkerContext(config: AppConfig): Promise<WorkerCont
     ...dbHandle,
     config,
     telegram,
+    ...(rtzr ? { rtzr } : {}),
   };
 }
 
@@ -277,17 +301,20 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     }
 
     if (job.status === "NORMALIZING") {
+      await runConfiguredRtzrTranscription(context, job);
       transitionJob(context.db, job.id, "BUNDLE_WRITING", { message: "Writing Obsidian raw bundle" });
       job = mustGetJob(context.db, job.id);
     }
 
     if (job.status === "BUNDLE_WRITING") {
+      const events = listJobEvents(context.db, job.id);
       const bundle = await writeRawBundle({
         vaultPath: context.config.vault.obsidianVaultPath,
         rawRoot: context.config.vault.rawRoot,
         job,
         files: listJobFiles(context.db, job.id),
-        events: listJobEvents(context.db, job.id),
+        events,
+        extractedArtifacts: collectExtractedArtifacts(events),
       });
       createSourceBundle(context.db, {
         id: bundle.id,
@@ -381,6 +408,65 @@ async function handleRtzrPresetCallback(context: WorkerContext, callback: Parsed
   return true;
 }
 
+async function runConfiguredRtzrTranscription(context: WorkerContext, job: StoredJob): Promise<void> {
+  const files = listJobFiles(context.db, job.id).filter(isAudioJobFile);
+  if (files.length === 0) {
+    return;
+  }
+
+  const events = listJobEvents(context.db, job.id);
+  if (!context.rtzr) {
+    if (!events.some((event) => event.type === "rtzr.skipped")) {
+      appendJobEvent(context.db, job.id, "rtzr.skipped", "RTZR credentials are not configured");
+    }
+    return;
+  }
+
+  const alreadyTranscribedFileIds = new Set(
+    events
+      .filter((event) => event.type === "rtzr.transcribed" && isRecord(event.data) && typeof event.data.fileId === "string")
+      .map((event) => (event.data as { fileId: string }).fileId),
+  );
+  const config = selectedRtzrConfig(events);
+
+  for (const file of files) {
+    if (alreadyTranscribedFileIds.has(file.id)) {
+      continue;
+    }
+    const inputPath = file.localPath ?? file.archivePath;
+    if (!inputPath) {
+      appendJobEvent(context.db, job.id, "rtzr.skipped_file", file.originalName ?? file.id, {
+        fileId: file.id,
+        reason: "Imported file path is missing",
+      });
+      continue;
+    }
+
+    const normalized = await ensureRtzrSupportedAudio({
+      inputPath,
+      outputDir: resolveRuntimePath(context.config.runtime.runtimeDir, "normalized", job.id, file.id),
+      ffmpegPath: context.config.rtzr.ffmpegPath,
+    });
+    const transcript = await context.rtzr.transcribeFile(normalized.audioPath, config, buildRtzrWaitOptions(context.config));
+    const artifactDir = resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, file.id);
+    const artifacts = await writeTranscriptArtifacts(transcript, artifactDir);
+    const stem = artifactStem(file.originalName ?? file.id);
+    appendJobEvent(context.db, job.id, "rtzr.transcribed", file.originalName ?? file.id, {
+      fileId: file.id,
+      originalName: file.originalName,
+      inputPath,
+      audioPath: normalized.audioPath,
+      converted: normalized.converted,
+      transcribeId: transcript.id,
+      config,
+      artifacts: [
+        { kind: "rtzr_json", sourcePath: artifacts.rtzrJsonPath, name: `${stem}.rtzr.json` },
+        { kind: "transcript_markdown", sourcePath: artifacts.transcriptMarkdownPath, name: `${stem}.transcript.md` },
+      ],
+    });
+  }
+}
+
 async function runConfiguredWikiAdapter(context: WorkerContext, job: StoredJob): Promise<void> {
   if (!context.config.wiki.ingestCommand) {
     appendJobEvent(context.db, job.id, "wiki.skipped", "WIKI_INGEST_COMMAND is not configured");
@@ -456,6 +542,42 @@ function buildPresetQueuedMessage(jobId: string, preset: RtzrPreset): string {
   ].join("\n");
 }
 
+function selectedRtzrConfig(events: StoredJobEvent[]): RtzrTranscribeConfig {
+  const selected = [...events].reverse().find((event) => event.type === "rtzr.preset_selected");
+  if (!selected || !isRecord(selected.data) || !isRecord(selected.data.rtzrConfig)) {
+    return {};
+  }
+  return selected.data.rtzrConfig as RtzrTranscribeConfig;
+}
+
+function buildRtzrWaitOptions(config: AppConfig): WaitForTranscriptionOptions {
+  return {
+    pollIntervalMs: config.rtzr.pollIntervalMs,
+    timeoutMs: config.rtzr.timeoutMs,
+    rateLimitBackoffMs: config.rtzr.rateLimitBackoffMs,
+  };
+}
+
+function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactInput[] {
+  return events.flatMap((event) => {
+    if (event.type !== "rtzr.transcribed" || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
+      return [];
+    }
+    return event.data.artifacts.flatMap((artifact) => {
+      if (!isRecord(artifact) || typeof artifact.sourcePath !== "string") {
+        return [];
+      }
+      const result: RawBundleArtifactInput = {
+        sourcePath: artifact.sourcePath,
+      };
+      if (typeof artifact.name === "string") {
+        result.name = artifact.name;
+      }
+      return [result];
+    });
+  });
+}
+
 function parseRtzrPresetCallbackData(data: string | undefined): { presetKey: string; jobId: string } | null {
   const match = /^rtzr:([a-z0-9_-]+):(.+)$/.exec(data ?? "");
   if (!match?.[1] || !match[2]) {
@@ -466,6 +588,28 @@ function parseRtzrPresetCallbackData(data: string | undefined): { presetKey: str
 
 function hasAudioOrVoice(files: ParsedTelegramFile[]): boolean {
   return files.some((file) => file.kind === "audio" || file.kind === "voice");
+}
+
+function isAudioJobFile(file: StoredJobFile): boolean {
+  const mimeType = file.mimeType?.toLowerCase();
+  if (mimeType?.startsWith("audio/")) {
+    return true;
+  }
+  if (file.id.includes("_audio_") || file.id.includes("_voice_")) {
+    return true;
+  }
+  const extension = path.extname(file.originalName ?? "").toLowerCase();
+  return [".mp4", ".m4a", ".mp3", ".amr", ".flac", ".wav", ".ogg", ".opus"].includes(extension);
+}
+
+function artifactStem(value: string): string {
+  const baseName = path.basename(value, path.extname(value));
+  const sanitized = baseName.replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_").trim();
+  return sanitized.length > 0 ? sanitized.slice(0, 120) : "audio";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {

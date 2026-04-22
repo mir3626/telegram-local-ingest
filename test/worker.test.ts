@@ -6,9 +6,10 @@ import test from "node:test";
 
 import type { AppConfig } from "@telegram-local-ingest/core";
 import { getJob, getTelegramOffset, listJobEvents, migrate, mustGetSourceBundleForJob, openIngestDatabase } from "@telegram-local-ingest/db";
+import type { RtzrTranscribeConfig, RtzrTranscript, WaitForTranscriptionOptions } from "@telegram-local-ingest/rtzr";
 import { TelegramBotApiClient, type FetchLike } from "@telegram-local-ingest/telegram";
 
-import { runWorkerOnce, type WorkerContext } from "../apps/worker/src/index.js";
+import { runWorkerOnce, type RtzrTranscriber, type WorkerContext } from "../apps/worker/src/index.js";
 
 test("runWorkerOnce captures, imports, bundles, completes, and notifies", async () => {
   const fixture = createFixture();
@@ -119,6 +120,42 @@ test("runWorkerOnce asks for RTZR preset on audio uploads and queues after callb
   }
 });
 
+test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles artifacts", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const answeredCallbacks: unknown[] = [];
+  const rtzrCalls: Array<{ filePath: string; config: RtzrTranscribeConfig; waitOptions: WaitForTranscriptionOptions }> = [];
+  try {
+    migrate(dbHandle.db);
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockAudioPresetFetch(sentMessages, answeredCallbacks),
+      ),
+      rtzr: mockRtzrTranscriber(rtzrCalls),
+    };
+
+    await runWorkerOnce(context);
+    await runWorkerOnce(context);
+
+    const manifest = fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml"), "utf8");
+    assert.equal(rtzrCalls.length, 1);
+    assert.equal(rtzrCalls[0]?.config.domain, "GENERAL");
+    assert.equal(rtzrCalls[0]?.config.use_diarization, true);
+    assert.equal(rtzrCalls[0]?.waitOptions.pollIntervalMs, 5000);
+    assert.match(manifest, /call\.rtzr\.json/);
+    assert.match(manifest, /call\.transcript\.md/);
+    assert.match(fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
+    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "rtzr.transcribed"));
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce handles operator status without creating a job", async () => {
   const fixture = createFixture();
   const dbHandle = openIngestDatabase(":memory:");
@@ -166,6 +203,9 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
     rtzr: {
       apiBaseUrl: "https://openapi.vito.ai",
       ffmpegPath: "ffmpeg",
+      pollIntervalMs: 5000,
+      timeoutMs: 30 * 60 * 1000,
+      rateLimitBackoffMs: 30_000,
     },
     wiki: {},
     translation: {
@@ -330,6 +370,27 @@ function mockAudioPresetFetch(
       return jsonResponse({ ok: true, result: true });
     }
     return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
+function mockRtzrTranscriber(
+  calls: Array<{ filePath: string; config: RtzrTranscribeConfig; waitOptions: WaitForTranscriptionOptions }>,
+): RtzrTranscriber {
+  return {
+    async transcribeFile(filePath, config, waitOptions): Promise<RtzrTranscript> {
+      calls.push({ filePath, config, waitOptions });
+      return {
+        id: "rtzr-1",
+        text: "회의 내용입니다",
+        raw: {
+          id: "rtzr-1",
+          status: "completed",
+          results: {
+            utterances: [{ start_at: 0, duration: 1000, msg: "회의 내용입니다", spk: 0, lang: "ko" }],
+          },
+        },
+      };
+    },
   };
 }
 

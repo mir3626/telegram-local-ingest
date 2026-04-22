@@ -51,6 +51,9 @@ export interface RtzrConfig {
   clientSecret?: string;
   apiBaseUrl: string;
   ffmpegPath: string;
+  pollIntervalMs: number;
+  timeoutMs: number;
+  rateLimitBackoffMs: number;
 }
 
 export interface WikiAdapterConfig {
@@ -133,6 +136,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     "INGEST_MAX_FILE_SIZE_BYTES",
     issues,
   );
+  const rtzrPollIntervalMs = parseInteger(env.RTZR_POLL_INTERVAL_MS, 5000, "RTZR_POLL_INTERVAL_MS", issues);
+  const rtzrTimeoutMs = parseInteger(env.RTZR_TIMEOUT_MS, 30 * 60 * 1000, "RTZR_TIMEOUT_MS", issues);
+  const rtzrRateLimitBackoffMs = parseInteger(env.RTZR_RATE_LIMIT_BACKOFF_MS, 30_000, "RTZR_RATE_LIMIT_BACKOFF_MS", issues);
 
   const config: AppConfig = {
     telegram: {
@@ -154,6 +160,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     rtzr: {
       apiBaseUrl: normalizeBaseUrl(readNonEmpty(env.RTZR_API_BASE_URL) ?? "https://openapi.vito.ai", "RTZR_API_BASE_URL", issues),
       ffmpegPath: readNonEmpty(env.FFMPEG_PATH) ?? "ffmpeg",
+      pollIntervalMs: rtzrPollIntervalMs,
+      timeoutMs: rtzrTimeoutMs,
+      rateLimitBackoffMs: rtzrRateLimitBackoffMs,
     },
     wiki: {},
     translation: {
@@ -173,6 +182,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (maxFileSizeBytes < 1) {
     issues.push("INGEST_MAX_FILE_SIZE_BYTES must be at least 1");
+  }
+  if (rtzrPollIntervalMs < 1) {
+    issues.push("RTZR_POLL_INTERVAL_MS must be at least 1");
+  }
+  if (rtzrTimeoutMs < 1) {
+    issues.push("RTZR_TIMEOUT_MS must be at least 1");
+  }
+  if (rtzrRateLimitBackoffMs < 1) {
+    issues.push("RTZR_RATE_LIMIT_BACKOFF_MS must be at least 1");
   }
 
   if (issues.length > 0) {

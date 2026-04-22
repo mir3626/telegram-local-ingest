@@ -22,6 +22,8 @@ Operational hardening started: `scripts/start-local-stack.sh`, `scripts/stop-loc
 
 Bot responses are now Korean-first and include suitable emoji in operator/status, queued/completed/failure, and RTZR preset flows. Audio/voice uploads are held in `RECEIVED` until the operator selects an RTZR context preset with inline buttons: meeting, call, or voice memo. The selected preset is stored as a `rtzr.preset_selected` job event with the RTZR optional config and the translation default relation, then the job transitions to `QUEUED`. Raw bundle manifests now include `processing_context.rtzr_preset` and `processing_context.translation.default_relation` so later STT/translation/wiki processing can reuse the captured context. `TRANSLATION_DEFAULT_RELATION` defaults to `business` and is exposed in `.env.example` for easy future admin/env management.
 
+RTZR STT is now wired into the worker. When `RTZR_CLIENT_ID` and `RTZR_CLIENT_SECRET` are configured, audio/voice files are normalized if needed with ffmpeg, submitted to RTZR using the selected preset config, and written as `*.rtzr.json` plus `*.transcript.md` artifacts under raw bundle `extracted/`. The artifact paths are recorded in `rtzr.transcribed` job events before bundle writing, so `BUNDLE_WRITING` can reconstruct extracted artifacts after a restart. If RTZR credentials are not configured, audio jobs still complete with `rtzr.skipped` and preserve the raw original bundle.
+
 Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot API Server storage. Those paths contain bot-token-derived directories, are intentionally deleted after completion, and make raw bundles non-portable. Keep raw bundle originals as copied, self-contained files; if links are needed later, use Obsidian-relative links to files already inside the finalized raw bundle.
 
 ## Durable Decisions
@@ -44,7 +46,7 @@ Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot 
 
 ## Next Action
 
-MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to run one real audio/voice smoke from the desktop launcher/background stack, choose an RTZR preset button in Telegram, and inspect the resulting raw bundle manifest. After that, wire the stored RTZR preset into actual STT artifact generation before wiki adapter wiring.
+MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to run one real audio/voice smoke from the desktop launcher/background stack, choose an RTZR preset button in Telegram, and inspect the resulting raw bundle `extracted/*.transcript.md` plus `manifest.yaml`. After that, proceed to translation context/admin controls or wiki adapter wiring.
 
 ```text
 Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import -> raw bundle -> optional RTZR/wiki adapter -> Telegram status.
@@ -55,7 +57,7 @@ Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.2` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and the Windows desktop launcher now starts the pid/log-managed local stack. Bot responses are Korean-first. Audio/voice uploads now ask for an RTZR preset button before queueing, and the selected RTZR config plus translation default relation are stored in job events and raw bundle manifests. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: run one real audio preset smoke from the launcher/background stack, then wire the stored RTZR preset into actual STT artifact generation before wiki adapter wiring.
+Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.2` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and the Windows desktop launcher now starts the pid/log-managed local stack. Bot responses are Korean-first. Audio/voice uploads ask for an RTZR preset button before queueing; the selected RTZR config plus translation default relation are stored in job events and raw bundle manifests. RTZR STT is wired into the worker when credentials are set and writes `*.rtzr.json`/`*.transcript.md` extracted artifacts into raw bundles. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: run one real audio preset smoke from the launcher/background stack, then proceed to translation context/admin controls or wiki adapter wiring.
 ```
 
 ## Latest Verification
@@ -69,6 +71,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 - Latest app-focused verification after upload-only/source-cleanup/launcher changes: `npm run typecheck`, `npm run build`, and 50 focused app tests passed
 - Latest app-focused verification after ops scripts/logging/UX changes: shell script syntax check, `npm run typecheck`, `npm run build`, and 50 focused app tests passed
 - Latest verification after Korean bot responses and RTZR preset capture: `npm run typecheck` passed, `npm run build` passed, and focused app tests passed (`28` passed for Telegram capture/operator/worker/vault/config/live smoke readiness). Full `npm test` still has harness-only WSL failures in `test/run-codex-wrapper.test.ts`; application tests pass (`307` passed, `3` harness failures).
+- Latest verification after RTZR STT worker wiring: `npm run typecheck` passed, `npm run build` passed, and focused app tests passed (`53` passed across DB/Telegram/importer/vault/RTZR/wiki/operator/worker/readiness). Full `npm test` still has only the known WSL `test/run-codex-wrapper.test.ts` failures (`308` passed, `3` failed).
 
 ## WSL Move Notes
 
