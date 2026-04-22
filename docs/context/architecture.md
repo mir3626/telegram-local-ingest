@@ -58,7 +58,7 @@ runtime/
 
 1. Poll Telegram updates and advance durable offsets.
 2. Route `/status`, `/retry`, and `/cancel` through `packages/operator`.
-3. Route `/ingest` through `packages/capture`.
+3. Route file uploads, with or without `/ingest`, through `packages/capture`.
 4. Process queued jobs through file import, raw bundle writing, optional wiki adapter execution, Telegram notification, and terminal state transition.
 
 ## Obsidian Vault Layout
@@ -124,7 +124,7 @@ Sprint 2 uses Node 24's built-in `node:sqlite` module to avoid Windows native np
 
 Sprint 3 adds Telegram capture primitives: `getUpdates` polling payloads, update parsing, command parsing, allowlist checks, durable offset advancement, and `/ingest` job creation through `packages/capture`.
 
-Sprint 4 adds controlled file import through `packages/importer`: each Telegram file is resolved through `getFile`, validated against `TELEGRAM_LOCAL_FILES_ROOT` when configured, copied into `runtime/staging`, archived under `runtime/archive/originals`, hashed with SHA-256, and marked as duplicate when identical bytes were already imported.
+Sprint 4 adds controlled file import through `packages/importer`: each Telegram file is resolved through `getFile`, validated against `TELEGRAM_LOCAL_FILES_ROOT` when configured, copied into `runtime/staging`, archived under `runtime/archive/originals`, hashed with SHA-256, and marked as duplicate when identical bytes were already imported. After a job reaches `COMPLETED`, the worker deletes the Local Bot API Server source file returned by `getFile`; the retained copies are runtime archive/staging and the immutable raw bundle.
 
 Sprint 5 adds immutable raw bundle writing through `packages/vault`: bundle paths are deterministic under `raw/<date>/<source_id>/`, originals and derived artifacts are copied into `original/`, `normalized/`, and `extracted/`, and `manifest.yaml`, `source.md`, `log.md`, and `.finalized` are written as the Obsidian-facing source package.
 
@@ -143,6 +143,7 @@ Sprint 8 adds Telegram operator commands through `packages/operator`: `/status` 
 - File imports must reject path traversal and must verify resolved paths.
 - If `TELEGRAM_LOCAL_FILES_ROOT` is configured, both relative and absolute Telegram `file_path` values must resolve inside that root.
 - Commands such as `/retry` and `/cancel` operate only on jobs belonging to the allowlisted chat/user context.
+- Raw bundles remain self-contained copies. Do not place symlinks from `raw/**` to Telegram Local Bot API Server storage: those targets include bot-token-derived paths, may disappear after cleanup, and make raw bundles non-portable. If linking is needed, prefer Obsidian-relative links to files copied inside the finalized raw bundle.
 
 ## External Dependencies
 

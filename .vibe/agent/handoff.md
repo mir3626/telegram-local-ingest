@@ -18,6 +18,10 @@ Live smoke has passed against the local Telegram Bot API Server and temporary va
 
 Upload-only behavior is now supported: an authorized file upload creates an ingest job even without `/ingest` text. Plain captions are preserved as instructions; `/ingest` captions still provide optional `project:`/`tag:` metadata. After a job reaches `COMPLETED`, the worker deletes the corresponding Telegram Local Bot API Server source file from `TELEGRAM_LOCAL_FILES_ROOT` so `documents/file_*` does not duplicate the archived/runtime/raw copies. A Windows launcher exists as `Start Telegram Local Ingest.cmd` and has also been copied to `C:\Users\Tony\Desktop\Start Telegram Local Ingest.cmd`; it starts the local Bot API server and worker in separate WSL console windows using the project `.env`.
 
+Operational hardening started: `scripts/start-local-stack.sh`, `scripts/stop-local-stack.sh`, and `scripts/restart-local-stack.sh` now manage the local Bot API server and worker with pid files and logs under `runtime/pids` and `runtime/logs`. The desktop launcher now calls `scripts/start-local-stack.sh` instead of embedding long server commands. Worker logs now include update receipt, queued job, bundle path, cleanup result, and completion lines. Upload UX now includes uploaded filenames in queued/completed Telegram messages.
+
+Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot API Server storage. Those paths contain bot-token-derived directories, are intentionally deleted after completion, and make raw bundles non-portable. Keep raw bundle originals as copied, self-contained files; if links are needed later, use Obsidian-relative links to files already inside the finalized raw bundle.
+
 ## Durable Decisions
 
 - Use Telegram as the single capture, command, and notify channel.
@@ -38,7 +42,7 @@ Upload-only behavior is now supported: an authorized file upload creates an inge
 
 ## Next Action
 
-MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to run one real upload-only smoke from the desktop launcher, then decide whether to add richer worker logs, RTZR credentials, or wiki adapter wiring.
+MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to run one real upload-only smoke from the new desktop launcher/background stack, then proceed to RTZR credentials/audio smoke or wiki adapter wiring.
 
 ```text
 Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import -> raw bundle -> optional RTZR/wiki adapter -> Telegram status.
@@ -49,7 +53,7 @@ Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.2` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and `Start Telegram Local Ingest.cmd` exists in the repo plus the Windows desktop. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: run one real upload-only smoke from the launcher, then consider richer worker logs, RTZR credentials, or wiki adapter wiring.
+Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.2` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and the Windows desktop launcher now starts the pid/log-managed local stack. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: run one real upload-only smoke from the launcher/background stack, then proceed to RTZR credentials/audio smoke or wiki adapter wiring.
 ```
 
 ## Latest Verification
@@ -61,6 +65,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 - `npm run smoke:ready`: passed after `.env` was configured
 - Live smoke passed: job `tg_5985744318_2` completed and raw bundle was written under `/home/tony/obsidian-ingest-smoke-vault/raw/2026-04-22/tg_5985744318_2/`
 - Latest app-focused verification after upload-only/source-cleanup/launcher changes: `npm run typecheck`, `npm run build`, and 50 focused app tests passed
+- Latest app-focused verification after ops scripts/logging/UX changes: shell script syntax check, `npm run typecheck`, `npm run build`, and 50 focused app tests passed
 
 ## WSL Move Notes
 

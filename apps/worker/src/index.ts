@@ -77,7 +77,7 @@ export async function createWorkerContext(config: AppConfig): Promise<WorkerCont
     dbHandle.close();
     throw new Error(`Telegram startup check failed: ${health.issues.join("; ")}`);
   }
-  console.log(`telegram-local-ingest worker ready: bot=${health.bot?.username ?? health.bot?.first_name ?? "unknown"}`);
+  logWorker(`ready bot=${health.bot?.username ?? health.bot?.first_name ?? "unknown"}`);
   return {
     ...dbHandle,
     config,
@@ -110,6 +110,9 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
     allowedUpdates: ["message"],
     ...(lastOffset === null ? {} : { offset: lastOffset + 1 }),
   });
+  if (updates.length > 0) {
+    logWorker(`updates received count=${updates.length}`);
+  }
 
   let operatorCommandsHandled = 0;
   let jobsCreated = 0;
@@ -127,7 +130,8 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
             continue;
           }
           jobsCreated += 1;
-          await context.telegram.sendMessage(parsed.chatId, `Queued: ${created.id}`);
+          logWorker(`job queued id=${created.id} files=${parsed.files.length} command=${created.command ? "yes" : "no"}`);
+          await context.telegram.sendMessage(parsed.chatId, buildQueuedMessage(created.id, parsed.files.map((file) => file.fileName ?? file.kind)));
         }
       }
     } catch (error) {
@@ -164,6 +168,7 @@ export async function processRunnableJobs(context: WorkerContext, limit = 5): Pr
 export async function processJob(context: WorkerContext, jobId: string): Promise<StoredJob> {
   try {
     let job = mustGetJob(context.db, jobId);
+    logWorker(`job processing id=${job.id} status=${job.status}`);
     if (job.status === "QUEUED") {
       await importTelegramJobFiles(context.db, context.telegram, job.id, {
         runtimeDir: context.config.runtime.runtimeDir,
@@ -193,6 +198,7 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
         sourceMarkdownPath: bundle.paths.sourceMarkdown,
         finalizedAt: bundle.finalizedAt,
       });
+      logWorker(`bundle written job=${job.id} path=${bundle.paths.root}`);
       transitionJob(context.db, job.id, "INGESTING", { message: "Raw bundle ready for wiki ingest" });
       job = mustGetJob(context.db, job.id);
     }
@@ -205,13 +211,16 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
 
     if (job.status === "NOTIFYING") {
       if (job.chatId) {
-        await context.telegram.sendMessage(job.chatId, buildJobCompletionMessage(job));
+        await context.telegram.sendMessage(job.chatId, buildJobCompletionMessage(job, listJobFiles(context.db, job.id)));
       }
       const completed = transitionJob(context.db, job.id, "COMPLETED", { message: "Completed" });
       const cleanup = await cleanupTelegramSourceFiles(context.db, context.telegram, job.id);
       if (cleanup.failedFiles.length > 0) {
-        console.warn(`telegram source cleanup incomplete for ${job.id}: ${cleanup.failedFiles.length} failure(s)`);
+        logWorker(`telegram source cleanup incomplete job=${job.id} failures=${cleanup.failedFiles.length}`, "warn");
+      } else {
+        logWorker(`telegram source cleanup complete job=${job.id} deleted=${cleanup.deletedPaths.length}`);
       }
+      logWorker(`job completed id=${completed.id}`);
       return completed;
     }
 
@@ -262,6 +271,19 @@ function transitionToFailedIfPossible(db: DatabaseSync, jobId: string, error: un
     message: "Worker job failed",
     error: error instanceof Error ? error.message : String(error),
   });
+}
+
+function logWorker(message: string, level: "info" | "warn" = "info"): void {
+  const line = `[worker] ${new Date().toISOString()} ${message}`;
+  if (level === "warn") {
+    console.warn(line);
+    return;
+  }
+  console.log(line);
+}
+
+function buildQueuedMessage(jobId: string, fileNames: string[]): string {
+  return [`Queued: ${jobId}`, ...fileNames.map((name) => `- ${name}`)].join("\n");
 }
 
 async function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {

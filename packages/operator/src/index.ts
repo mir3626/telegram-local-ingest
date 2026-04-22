@@ -7,6 +7,7 @@ import {
   requestRetry,
   transitionJob,
   type StoredJob,
+  type StoredJobFile,
 } from "@telegram-local-ingest/db";
 import {
   getMessageCommand,
@@ -108,8 +109,11 @@ export function buildStatusResponse(db: DatabaseSync, targetJobId: string | unde
   ].join("\n");
 }
 
-export function buildJobCompletionMessage(job: StoredJob): string {
-  return `Completed: ${job.id}${job.project ? ` (${job.project})` : ""}`;
+export function buildJobCompletionMessage(job: StoredJob, files: StoredJobFile[] = []): string {
+  return [
+    `Completed: ${job.id}${job.project ? ` (${job.project})` : ""}`,
+    ...files.map((file) => `- ${file.originalName ?? file.id}`),
+  ].join("\n");
 }
 
 export function buildJobFailureMessage(job: StoredJob): string {

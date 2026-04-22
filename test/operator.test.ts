@@ -98,6 +98,15 @@ test("completion, failure, and daily failed report messages are concise", () => 
     const failed = transitionJob(handle.db, "job-5", "FAILED", { now: NOW, error: "boom" });
 
     assert.equal(buildJobCompletionMessage({ ...failed, status: "COMPLETED" }), "Completed: job-5 (sales)");
+    assert.equal(
+      buildJobCompletionMessage({ ...failed, status: "COMPLETED" }, [{
+        id: "file-1",
+        jobId: "job-5",
+        originalName: "lead.pdf",
+        createdAt: NOW,
+      }]),
+      "Completed: job-5 (sales)\n- lead.pdf",
+    );
     assert.equal(buildJobFailureMessage(failed), "Failed: job-5\nboom");
     assert.match(buildDailyFailedJobsReport(handle.db, "2026-04-22"), /Failed jobs for 2026-04-22: 1/);
   } finally {

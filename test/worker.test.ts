@@ -40,8 +40,8 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
     assert.ok(fs.existsSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml")));
     assert.equal(mustGetSourceBundleForJob(dbHandle.db, "tg_300_21").sourceMarkdownPath.endsWith("source.md"), true);
     assert.deepEqual(sentMessages.map((message) => message.text), [
-      "Queued: tg_300_21",
-      "Completed: tg_300_21 (sales)",
+      "Queued: tg_300_21\n- lead.txt",
+      "Completed: tg_300_21 (sales)\n- lead.txt",
     ]);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "wiki.skipped"));
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "telegram_source.deleted"));
