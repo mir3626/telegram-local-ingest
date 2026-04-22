@@ -53,6 +53,13 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 - `npm run build`: passed
 - `git status`: clean before this handoff-only update
 
+## WSL Move Notes
+
+- Active workspace moved to `/home/tony/workspace/telegram-local-ingest`.
+- WSL Node installed with `nvm`: Node `v24.15.0`, npm `11.12.1`.
+- WSL app verification passed: `npm run typecheck`, `npm run build`, and app-focused tests (`44` passed).
+- Full `npm test` in WSL currently has harness-only failures in `test/run-codex-wrapper.test.ts` related to the Codex wrapper/locale environment; application tests pass.
+
 ## Links
 
 - Product context: `docs/context/product.md`
