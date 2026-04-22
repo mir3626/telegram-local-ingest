@@ -7,6 +7,7 @@
 - Runtime style: local long-running worker plus deterministic processors.
 - Tests: Node `node:test` for harness and focused app unit tests unless a later Sprint adopts another runner.
 - Config: load from environment at process startup and validate before polling.
+- Database: use `packages/db` as the only SQL boundary. Application code should call repository functions instead of writing SQL inline.
 
 ## Implementation Rules
 
@@ -18,6 +19,7 @@
 - Store hashes for original and normalized artifacts.
 - Use idempotent job steps so `/retry` can resume from the last durable checkpoint.
 - Keep user-facing Telegram messages concise and operational: ACK, queued, processing, completed, failed, status.
+- Keep dashboard needs in mind when adding state: prefer append-only `job_events` plus indexed operational columns on `jobs`.
 
 ## Telegram Local Bot API Rules
 

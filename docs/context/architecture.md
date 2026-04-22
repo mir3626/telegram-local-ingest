@@ -28,6 +28,7 @@ Telegram clients
 
 3. **Domain packages**
    - `packages/core`: job model, state machine, config, hashes, queue contracts.
+   - `packages/db`: SQLite schema, migrations, repositories, dashboard-friendly queries.
    - `packages/telegram`: Bot API client, update parser, Local Bot API file import semantics.
    - `packages/rtzr`: RTZR auth, submit, polling, result persistence.
    - `packages/vault`: Obsidian raw bundle layout, manifest writer, source markdown writer, write lock helpers.
@@ -105,6 +106,8 @@ SQLite tables planned for Sprint 2:
 - `job_events`
 - `telegram_offsets`
 - `source_bundles`
+
+Sprint 2 uses Node 24's built-in `node:sqlite` module to avoid Windows native npm install friction. The module currently emits an experimental warning in Node 24.14.1, so all SQL access is isolated under `packages/db` and can be swapped later if needed.
 
 ## Security Boundaries
 

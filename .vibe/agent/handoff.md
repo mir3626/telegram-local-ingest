@@ -5,12 +5,12 @@
 - **repo**: `telegram-local-ingest`
 - **path**: `C:\Users\Tony\Workspace\telegram-local-ingest`
 - **current iteration**: `iter-1`
-- **current sprint**: `sprint-2-sqlite-job-model`
+- **current sprint**: `sprint-3-telegram-capture`
 - **harnessVersion**: `1.5.0`
 
 ## Status
 
-The repository has been created from `vibe-doctor`. Sprint 0 and Sprint 1 are complete. The project context now targets a Telegram Local Bot API Server based local ingest worker, and the code has a baseline config loader, Telegram Bot API client, startup health check, and mocked tests.
+The repository has been created from `vibe-doctor`. Sprint 0, Sprint 1, and Sprint 2 are complete. The project context now targets a Telegram Local Bot API Server based local ingest worker, and the code has config loading, Telegram Bot API baseline, startup health checks, and SQLite-backed operational state.
 
 ## Durable Decisions
 
@@ -19,16 +19,17 @@ The repository has been created from `vibe-doctor`. Sprint 0 and Sprint 1 are co
 - Do not include Dropbox in V1.
 - Use npm workspaces initially for harness compatibility.
 - Use deterministic TypeScript code for queue, state, file import, retry, permissions, and notifications.
+- Use `packages/db` as the SQL boundary; app code should call repository functions rather than writing SQL inline.
 - Use RTZR STT for audio and voice files.
 - Write immutable Obsidian raw bundles under `raw/<date>/<source_id>/`.
 - Let the LLM wiki adapter update `wiki/**` only, never `raw/**`.
 
 ## Next Action
 
-Start Sprint 2: SQLite job model and state machine.
+Start Sprint 3: Telegram capture and command parser.
 
 ```text
-Implement migrations and durable state for jobs, job_files, job_events, telegram_offsets, and source_bundles.
+Implement getUpdates polling with durable offset, update parsing, allowlist checks, /ingest command parsing, and job creation through packages/db.
 ```
 
 ## Links

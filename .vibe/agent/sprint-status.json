@@ -25,7 +25,9 @@
     {
       "id": "sprint-2-sqlite-job-model",
       "name": "SQLite Job Model And State Machine",
-      "status": "planned"
+      "status": "passed",
+      "startedAt": "2026-04-22T08:17:16.553Z",
+      "completedAt": "2026-04-22T08:26:27.473Z"
     },
     {
       "id": "sprint-3-telegram-capture",
@@ -59,8 +61,8 @@
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-2-sqlite-job-model",
-    "lastActionSummary": "Completed Sprint 0/1: seeded the downstream project, added npm workspace skeleton, implemented config loading, Telegram Local Bot API client, startup health check, tests, and operator setup docs.",
+    "currentSprintId": "sprint-3-telegram-capture",
+    "lastActionSummary": "Completed Sprint 2: added packages/db with node:sqlite migrations, dashboard-friendly operational schema, job state transitions, retry eligibility, events, files, Telegram offsets, and source bundle persistence.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -70,7 +72,7 @@
       "LLM agent only updates wiki through adapter"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-22T08:17:16.553Z"
+    "updatedAt": "2026-04-22T08:26:27.473Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -85,7 +87,7 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-22T08:17:16.553Z",
+  "stateUpdatedAt": "2026-04-22T08:26:27.473Z",
   "verifiedAt": null,
   "verificationCommands": [
     {

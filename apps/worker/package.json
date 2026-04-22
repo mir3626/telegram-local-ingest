@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@telegram-local-ingest/core": "0.1.0",
+    "@telegram-local-ingest/db": "0.1.0",
     "@telegram-local-ingest/rtzr": "0.1.0",
     "@telegram-local-ingest/telegram": "0.1.0",
     "@telegram-local-ingest/vault": "0.1.0"

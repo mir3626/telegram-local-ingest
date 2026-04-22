@@ -6,9 +6,12 @@ export type JobStatus =
   | "QUEUED"
   | "IMPORTING"
   | "NORMALIZING"
+  | "BUNDLE_WRITING"
   | "INGESTING"
+  | "NOTIFYING"
   | "COMPLETED"
   | "FAILED"
+  | "RETRY_REQUESTED"
   | "CANCELLED";
 
 export type IngestSource = "telegram-local-bot-api" | "local";

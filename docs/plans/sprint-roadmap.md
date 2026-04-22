@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-2-sqlite-job-model
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline
-> **Pending**: sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
+> **Current**: sprint-3-telegram-capture
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model
+> **Pending**: sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -69,6 +69,7 @@ Telegram mobile/desktop
   - Restart-safe job state is persisted.
   - Invalid transitions are rejected.
   - Events can reconstruct job history.
+- **status**: completed. Uses `node:sqlite` behind `packages/db`, with tests for persistence, transitions, retry eligibility, offsets, source bundles, files, and events.
 
 ## Sprint 3 — Telegram Capture And Command Parser
 
