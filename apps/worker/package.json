@@ -8,6 +8,7 @@
     "start": "node ../../dist/app/apps/worker/src/index.js"
   },
   "dependencies": {
+    "@telegram-local-ingest/capture": "0.1.0",
     "@telegram-local-ingest/core": "0.1.0",
     "@telegram-local-ingest/db": "0.1.0",
     "@telegram-local-ingest/rtzr": "0.1.0",

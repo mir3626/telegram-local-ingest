@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-3-telegram-capture
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model
-> **Pending**: sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
+> **Current**: sprint-4-local-file-import
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture
+> **Pending**: sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -86,6 +86,7 @@ Telegram mobile/desktop
   - Duplicate updates are not reprocessed after restart.
   - Unauthorized users are ignored or rejected with a safe message.
   - `/ingest project:foo tag:bar` creates a queued job.
+- **status**: completed. Added Telegram update parsing, command parsing, allowlist enforcement, durable offset polling, and `/ingest` job creation through `packages/capture`.
 
 ## Sprint 4 — Local File Import And Archive
 

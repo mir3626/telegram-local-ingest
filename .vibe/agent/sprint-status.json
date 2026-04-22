@@ -32,7 +32,9 @@
     {
       "id": "sprint-3-telegram-capture",
       "name": "Telegram Capture And Command Parser",
-      "status": "planned"
+      "status": "passed",
+      "startedAt": "2026-04-22T08:26:27.473Z",
+      "completedAt": "2026-04-22T08:46:31.224Z"
     },
     {
       "id": "sprint-4-local-file-import",
@@ -61,8 +63,8 @@
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-3-telegram-capture",
-    "lastActionSummary": "Completed Sprint 2: added packages/db with node:sqlite migrations, dashboard-friendly operational schema, job state transitions, retry eligibility, events, files, Telegram offsets, and source bundle persistence.",
+    "currentSprintId": "sprint-4-local-file-import",
+    "lastActionSummary": "Completed Sprint 3: added Telegram update parsing, command parsing, allowlist checks, getUpdates polling with durable offsets, and /ingest job creation through packages/capture.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -72,7 +74,7 @@
       "LLM agent only updates wiki through adapter"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-22T08:26:27.473Z"
+    "updatedAt": "2026-04-22T08:46:31.224Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -87,7 +89,7 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-22T08:26:27.473Z",
+  "stateUpdatedAt": "2026-04-22T08:46:31.224Z",
   "verifiedAt": null,
   "verificationCommands": [
     {

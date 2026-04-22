@@ -22,10 +22,11 @@
       "completedSprints": [
         "sprint-0-phase0-seed",
         "sprint-1-telegram-local-baseline",
-        "sprint-2-sqlite-job-model"
+        "sprint-2-sqlite-job-model",
+        "sprint-3-telegram-capture"
       ],
       "milestoneProgress": {},
-      "summary": "In progress. Sprint 0 seeded the downstream project from vibe-doctor. Sprint 1 added the Telegram Local Bot API baseline, startup checks, tests, and operator setup docs. Sprint 2 added SQLite schema, repository functions, state transitions, retry eligibility, and event history. Next is Sprint 3 Telegram capture."
+      "summary": "In progress. Sprint 0 seeded the downstream project from vibe-doctor. Sprint 1 added the Telegram Local Bot API baseline, startup checks, tests, and operator setup docs. Sprint 2 added SQLite schema, repository functions, state transitions, retry eligibility, and event history. Sprint 3 added Telegram update parsing, command parsing, allowlist checks, durable offset polling, and /ingest job creation. Next is Sprint 4 local file import."
     }
   ]
 }
