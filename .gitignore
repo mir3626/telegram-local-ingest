@@ -1,11 +1,13 @@
 node_modules/
 dist/
 coverage/
+runtime/
 .vscode/
 !.vscode/
 !.vscode/settings.json
 !.vscode/extensions.json
 .DS_Store
+*:Zone.Identifier
 .vibe/config.local.json
 .vibe/runs/
 .env
