@@ -122,6 +122,8 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
     assert.equal(outputs[0]?.fileName, "lead_translated.pdf");
     assert.equal(outputs[0]?.mimeType, "application/pdf");
     assert.equal(fs.readFileSync(outputs[0]?.filePath ?? "").subarray(0, 4).toString("utf8"), "%PDF");
+    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translated.md")), false);
+    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "lead_translated.pdf")), true);
     const completion = sentMessages.at(-1);
     assert.match(completion?.text ?? "", /자동번역이 완료되었습니다/);
     assert.match(completion?.text ?? "", /만료 시각/);
@@ -196,6 +198,7 @@ test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is av
     assert.doesNotMatch(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /# 원문/);
     const renderedDocx = path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "vendor-template_translated.docx");
     assert.match(fs.readFileSync(renderedDocx, "utf8"), /vendor-template\.docx/);
+    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translated.md")), false);
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
   } finally {
     restoreEnv("PANDOC_BIN", oldPandoc);

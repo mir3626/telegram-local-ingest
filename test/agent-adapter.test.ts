@@ -22,8 +22,8 @@ test("buildAgentPrompt constrains agents to raw read and output writes", () => {
   assert.match(prompt, /Business Document Translation Preset/);
   assert.match(prompt, /2 translators \+ 1 reviewer/);
   assert.match(prompt, /official Anthropic `docx` skill/);
-  assert.match(prompt, /exact heading `\[원문\]`/);
-  assert.match(prompt, /never call it an appendix or `부록`/);
+  assert.match(prompt, /Do not append the original\/source section yourself/);
+  assert.match(prompt, /worker may append `\[원문\]` itself/);
 });
 
 test("buildAgentCommand replaces placeholders and detects prompt file usage", () => {

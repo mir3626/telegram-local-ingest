@@ -148,7 +148,7 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "Run the translator/reviewer methodology internally; do not write separate draft files unless they are needed for the final deliverable.",
     "When producing DOCX, use the installed official Anthropic `docx` skill/workflow if available. Preserve headings, numbering, tables, lists, labels, and footnote references with DOCX-native structure.",
     "For DOCX deliverables, preserve the uploaded document's template and layout as the working template. Do not flatten paragraphs, tables, numbered clauses, or lists into one pasted block.",
-    "If you include the original source text after the translated document, never call it an appendix or `부록`. Start a new page/section with the exact heading `[원문]`, then reproduce the original content with the existing template structure preserved as much as possible.",
+    "Do not append the original/source section yourself unless the operator explicitly asks for agent-side source reproduction. The worker composes the final deliverable and appends the source section separately.",
     "Do not create PDF output yourself. The worker handles PDF delivery only for non-DOCX/HWP source files.",
     "",
     "## Prepared Artifacts",
@@ -161,7 +161,7 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     outputFormat === ".docx"
       ? "- For DOCX-derived artifacts, prefer `<original-file-stem>_translated.docx`; if the source filename is unclear, use `translated.docx`."
       : "- Prefer `translated.md` for translated or reformatted Markdown output. The worker may combine it with source text into a PDF for Telegram delivery.",
-    "- Put translation metadata, glossary, translated document, and translator notes into the final deliverable. Include the original/source section when practical because the deliverable may later become wiki reference material; label that section exactly `[원문]`.",
+    "- Put translation metadata, glossary, translated document, and translator notes into the deliverable. Do not append a duplicate original/source section unless explicitly requested, because the worker may append `[원문]` itself.",
     "- Keep any temporary reasoning or scratch files out of the output directory.",
     "",
     buildBusinessDocumentTranslationPreset(input, outputFormat),

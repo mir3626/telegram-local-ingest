@@ -4,6 +4,7 @@ import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import type { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import PDFDocument from "pdfkit";
@@ -1202,6 +1203,8 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
   const bundle = mustGetSourceBundleForJob(context.db, job.id);
   const outputDir = resolveRuntimePath(context.config.runtime.runtimeDir, "agent-postprocess", job.id, "outputs");
   await fs.rm(outputDir, { recursive: true, force: true });
+  const artifacts = readPreprocessedArtifacts(events);
+  const originalSections = await readOriginalPdfSections(artifacts);
   const agent = context.agent ?? { postprocess: (input: AgentPostprocessInput) => runAgentPostprocess(input) };
   const result = await agent.postprocess({
     command: context.config.agent.command,
@@ -1213,7 +1216,7 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
     targetLanguage: context.config.translation.targetLanguage,
     defaultRelation: context.config.translation.defaultRelation,
     language,
-    artifacts: readPreprocessedArtifacts(events),
+    artifacts,
     ...(job.instructions ? { instructions: job.instructions } : {}),
     timeoutMs: context.config.agent.timeoutMs,
   });
@@ -1223,13 +1226,13 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
     throw new Error(`Agent postprocess did not create any output files: ${result.outputDir}`);
   }
 
-  const artifacts = readPreprocessedArtifacts(events);
   const files = listJobFiles(context.db, job.id);
   const downloadableFiles = [
     await createDownloadableAgentFile({
       job,
       files,
       artifacts,
+      originalSections,
       generatedFiles,
       outputDir: result.outputDir,
     }),
@@ -1680,35 +1683,44 @@ async function createDownloadableAgentFile(input: {
   job: StoredJob;
   files: StoredJobFile[];
   artifacts: AgentPostprocessInput["artifacts"];
+  originalSections: PdfTextSection[];
   generatedFiles: GeneratedFile[];
   outputDir: string;
 }): Promise<GeneratedFile> {
+  let downloadableFile: GeneratedFile;
   const documentSource = findDocumentSourceFile(input.files);
   if (documentSource) {
     const documentOutput = await createDocumentTranslationDocx({
       job: input.job,
       artifacts: input.artifacts,
+      originalSections: input.originalSections,
       generatedFiles: input.generatedFiles,
       documentSource,
       outputDir: input.outputDir,
     });
     if (documentOutput) {
-      return documentOutput;
+      downloadableFile = documentOutput;
+      await removeIntermediateGeneratedFiles(input.outputDir, input.generatedFiles, downloadableFile.path);
+      return downloadableFile;
     }
   }
 
-  return await createOriginalAndTranslationPdf({
+  downloadableFile = await createOriginalAndTranslationPdf({
     job: input.job,
     artifacts: input.artifacts,
+    originalSections: input.originalSections,
     generatedFiles: input.generatedFiles,
     outputDir: input.outputDir,
     sourceFileName: primaryOutputSourceFileName(input.files, input.job),
   });
+  await removeIntermediateGeneratedFiles(input.outputDir, input.generatedFiles, downloadableFile.path);
+  return downloadableFile;
 }
 
 async function createOriginalAndTranslationPdf(input: {
   job: StoredJob;
   artifacts: AgentPostprocessInput["artifacts"];
+  originalSections: PdfTextSection[];
   generatedFiles: GeneratedFile[];
   outputDir: string;
   sourceFileName: string;
@@ -1718,8 +1730,7 @@ async function createOriginalAndTranslationPdf(input: {
     throw new Error(`Agent postprocess did not create translated markdown/text output in ${input.outputDir}`);
   }
 
-  const [originalSections, translationText, fontPath] = await Promise.all([
-    readOriginalPdfSections(input.artifacts),
+  const [translationText, fontPath] = await Promise.all([
     fs.readFile(translationFile.path, "utf8"),
     findPdfFontPath(),
   ]);
@@ -1729,7 +1740,7 @@ async function createOriginalAndTranslationPdf(input: {
   await writeOriginalAndTranslationPdf({
     pdfPath,
     job: input.job,
-    originalSections,
+    originalSections: input.originalSections,
     translation: {
       title: path.basename(translationFile.relativePath),
       text: translationText,
@@ -1772,6 +1783,7 @@ function findDocumentSourceFile(files: StoredJobFile[]): { kind: "docx" | "hwp";
 async function createDocumentTranslationDocx(input: {
   job: StoredJob;
   artifacts: AgentPostprocessInput["artifacts"];
+  originalSections: PdfTextSection[];
   generatedFiles: GeneratedFile[];
   documentSource: { kind: "docx" | "hwp"; path: string; fileName: string };
   outputDir: string;
@@ -1779,13 +1791,13 @@ async function createDocumentTranslationDocx(input: {
   const existingDocumentOutput = findDocumentOutput(input.generatedFiles);
   if (existingDocumentOutput) {
     logWorker(`document output selected job=${input.job.id} file=${existingDocumentOutput.relativePath}`, "info", "OUTPUT");
-    return {
-      path: existingDocumentOutput.path,
-      relativePath: buildTranslatedOutputFileName(
-        input.documentSource.fileName,
-        path.extname(existingDocumentOutput.relativePath) || ".docx",
-      ),
-    };
+    return await normalizeDocumentOutputFile({
+      job: input.job,
+      documentSource: input.documentSource,
+      sourcePath: existingDocumentOutput.path,
+      outputDir: input.outputDir,
+      extension: path.extname(existingDocumentOutput.relativePath) || ".docx",
+    });
   }
 
   const translationFile = findTranslationFile(input.generatedFiles);
@@ -1800,24 +1812,31 @@ async function createDocumentTranslationDocx(input: {
       "warn",
       "OUTPUT",
     );
-    return {
-      path: translationFile.path,
-      relativePath: buildTranslatedOutputFileName(input.documentSource.fileName, path.extname(translationFile.relativePath) || ".md"),
-    };
+    return await copyGeneratedFileWithTranslatedName(
+      translationFile.path,
+      input.outputDir,
+      buildTranslatedOutputFileName(input.documentSource.fileName, path.extname(translationFile.relativePath) || ".md"),
+    );
   }
 
-  const [originalSections, translationText] = await Promise.all([
-    readOriginalPdfSections(input.artifacts),
-    fs.readFile(translationFile.path, "utf8"),
-  ]);
+  const translationText = await fs.readFile(translationFile.path, "utf8");
   const workDir = path.join(path.dirname(input.outputDir), ".render-work");
-  const markdownPath = path.join(workDir, "original-and-translated.md");
+  const translationMarkdownPath = path.join(workDir, "translation.md");
+  const fallbackMarkdownPath = path.join(workDir, "original-and-translated.md");
   const docxName = buildTranslatedOutputFileName(input.documentSource.fileName, ".docx");
   const docxPath = path.join(input.outputDir, docxName);
+  const translatedOnlyDocxPath = path.join(workDir, docxName);
   await fs.mkdir(workDir, { recursive: true });
-  await fs.writeFile(markdownPath, renderOriginalAndTranslationMarkdown({
+  await fs.writeFile(translationMarkdownPath, renderTranslationOnlyMarkdown({
     job: input.job,
-    originalSections,
+    translation: {
+      title: path.basename(translationFile.relativePath),
+      text: translationText,
+    },
+  }), "utf8");
+  await fs.writeFile(fallbackMarkdownPath, renderOriginalAndTranslationMarkdown({
+    job: input.job,
+    originalSections: input.originalSections,
     translation: {
       title: path.basename(translationFile.relativePath),
       text: translationText,
@@ -1825,13 +1844,13 @@ async function createDocumentTranslationDocx(input: {
   }), "utf8");
   try {
     const args = [
-      markdownPath,
+      translationMarkdownPath,
       "--from",
       "markdown+raw_tex",
       "--to",
       "docx",
       "--output",
-      docxPath,
+      translatedOnlyDocxPath,
     ];
     if (input.documentSource.kind === "docx") {
       args.push("--reference-doc", input.documentSource.path);
@@ -1840,6 +1859,30 @@ async function createDocumentTranslationDocx(input: {
       timeout: COMMAND_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
     });
+    if (input.documentSource.kind === "docx") {
+      try {
+        await appendOriginalDocxSection({
+          translatedDocxPath: translatedOnlyDocxPath,
+          originalDocxPath: input.documentSource.path,
+          outputPath: docxPath,
+        });
+      } catch (error) {
+        logWorker(`docx source append failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
+        await renderCombinedMarkdownDocx({
+          pandocBin,
+          markdownPath: fallbackMarkdownPath,
+          outputPath: docxPath,
+          documentSource: input.documentSource,
+        });
+      }
+    } else {
+      await renderCombinedMarkdownDocx({
+        pandocBin,
+        markdownPath: fallbackMarkdownPath,
+        outputPath: docxPath,
+        documentSource: input.documentSource,
+      });
+    }
     logWorker(`document render complete job=${input.job.id} source=${input.documentSource.fileName}`, "info", "OUTPUT");
     return {
       path: docxPath,
@@ -1847,11 +1890,89 @@ async function createDocumentTranslationDocx(input: {
     };
   } catch (error) {
     logWorker(`document render failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
-    return {
-      path: translationFile.path,
-      relativePath: buildTranslatedOutputFileName(input.documentSource.fileName, path.extname(translationFile.relativePath) || ".md"),
-    };
+    return await copyGeneratedFileWithTranslatedName(
+      translationFile.path,
+      input.outputDir,
+      buildTranslatedOutputFileName(input.documentSource.fileName, path.extname(translationFile.relativePath) || ".md"),
+    );
   }
+}
+
+async function normalizeDocumentOutputFile(input: {
+  job: StoredJob;
+  documentSource: { kind: "docx" | "hwp"; path: string; fileName: string };
+  sourcePath: string;
+  outputDir: string;
+  extension: string;
+}): Promise<GeneratedFile> {
+  const fileName = buildTranslatedOutputFileName(input.documentSource.fileName, input.extension);
+  const destinationPath = path.join(input.outputDir, fileName);
+  if (path.extname(fileName).toLowerCase() === ".docx" && input.documentSource.kind === "docx") {
+    try {
+      await appendOriginalDocxSection({
+        translatedDocxPath: input.sourcePath,
+        originalDocxPath: input.documentSource.path,
+        outputPath: destinationPath,
+      });
+      return { path: destinationPath, relativePath: fileName };
+    } catch (error) {
+      logWorker(`docx source append failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
+    }
+  }
+  return await copyGeneratedFileWithTranslatedName(input.sourcePath, input.outputDir, fileName);
+}
+
+async function renderCombinedMarkdownDocx(input: {
+  pandocBin: string;
+  markdownPath: string;
+  outputPath: string;
+  documentSource: { kind: "docx" | "hwp"; path: string; fileName: string };
+}): Promise<void> {
+  const args = [
+    input.markdownPath,
+    "--from",
+    "markdown+raw_tex",
+    "--to",
+    "docx",
+    "--output",
+    input.outputPath,
+  ];
+  if (input.documentSource.kind === "docx") {
+    args.push("--reference-doc", input.documentSource.path);
+  }
+  await execFileAsync(input.pandocBin, args, {
+    timeout: COMMAND_TIMEOUT_MS,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+}
+
+async function copyGeneratedFileWithTranslatedName(sourcePath: string, outputDir: string, fileName: string): Promise<GeneratedFile> {
+  const destinationPath = path.join(outputDir, fileName);
+  if (path.resolve(sourcePath) !== path.resolve(destinationPath)) {
+    await fs.copyFile(sourcePath, destinationPath);
+  }
+  return {
+    path: destinationPath,
+    relativePath: fileName,
+  };
+}
+
+function renderTranslationOnlyMarkdown(input: {
+  job: StoredJob;
+  translation: PdfTextSection;
+}): string {
+  return [
+    "% 번역문",
+    `% Job: ${input.job.id}`,
+    `% Generated: ${formatKstDateTime(new Date().toISOString())}`,
+    "",
+    "# 번역문",
+    "",
+    `## ${input.translation.title}`,
+    "",
+    normalizeMarkdownText(input.translation.text),
+    "",
+  ].join("\n");
 }
 
 function renderOriginalAndTranslationMarkdown(input: {
@@ -1876,13 +1997,209 @@ function renderOriginalAndTranslationMarkdown(input: {
     "",
   ];
   for (const section of input.originalSections) {
-    lines.push(`## ${section.title}`, "", normalizeMarkdownText(section.text), "");
+    lines.push(`## ${section.title}`, "", preserveOriginalText(section.text), "");
   }
   return lines.join("\n");
 }
 
 function normalizeMarkdownText(value: string): string {
   return value.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function preserveOriginalText(value: string): string {
+  return value.replace(/\r\n/g, "\n").trim();
+}
+
+async function appendOriginalDocxSection(input: {
+  translatedDocxPath: string;
+  originalDocxPath: string;
+  outputPath: string;
+}): Promise<void> {
+  const [translatedEntries, originalEntries] = await Promise.all([
+    readZipEntries(input.translatedDocxPath),
+    readZipEntries(input.originalDocxPath),
+  ]);
+  const translatedDocument = translatedEntries.get("word/document.xml");
+  const originalDocument = originalEntries.get("word/document.xml");
+  if (!translatedDocument || !originalDocument) {
+    throw new Error("DOCX document.xml is missing");
+  }
+  translatedEntries.set(
+    "word/document.xml",
+    Buffer.from(
+      appendOriginalDocumentXml(translatedDocument.toString("utf8"), originalDocument.toString("utf8")),
+      "utf8",
+    ),
+  );
+  await writeZipEntries(input.outputPath, translatedEntries);
+}
+
+function appendOriginalDocumentXml(translatedXml: string, originalXml: string): string {
+  const translatedBody = splitWordBodyXml(translatedXml);
+  const originalBody = splitWordBodyXml(originalXml);
+  const headingXml = [
+    '<w:p><w:r><w:br w:type="page"/></w:r></w:p>',
+    '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>[원문]</w:t></w:r></w:p>',
+  ].join("");
+  return [
+    translatedBody.prefix,
+    translatedBody.contentWithoutSectPr,
+    headingXml,
+    originalBody.contentWithoutSectPr,
+    translatedBody.sectPr,
+    translatedBody.suffix,
+  ].join("");
+}
+
+function splitWordBodyXml(xml: string): {
+  prefix: string;
+  contentWithoutSectPr: string;
+  sectPr: string;
+  suffix: string;
+} {
+  const bodyMatch = /<w:body\b[^>]*>([\s\S]*?)<\/w:body>/.exec(xml);
+  if (!bodyMatch || bodyMatch.index === undefined) {
+    throw new Error("DOCX body is missing");
+  }
+  const bodyOpenIndex = xml.indexOf("<w:body", bodyMatch.index);
+  const bodyStartIndex = xml.indexOf(">", bodyOpenIndex);
+  const bodyCloseIndex = xml.indexOf("</w:body>", bodyStartIndex);
+  const prefix = xml.slice(0, bodyStartIndex + 1);
+  const bodyContent = xml.slice(bodyStartIndex + 1, bodyCloseIndex);
+  const sectPrMatch = /(\s*<w:sectPr\b[\s\S]*<\/w:sectPr>\s*)$/.exec(bodyContent);
+  return {
+    prefix,
+    contentWithoutSectPr: sectPrMatch ? bodyContent.slice(0, sectPrMatch.index).trim() : bodyContent.trim(),
+    sectPr: sectPrMatch?.[1] ?? "",
+    suffix: xml.slice(bodyCloseIndex),
+  };
+}
+
+async function readZipEntries(filePath: string): Promise<Map<string, Buffer>> {
+  const buffer = await fs.readFile(filePath);
+  return parseZipEntries(buffer);
+}
+
+function parseZipEntries(buffer: Buffer): Map<string, Buffer> {
+  const entries = new Map<string, Buffer>();
+  const endOffset = findZipEndOfCentralDirectory(buffer);
+  const totalEntries = buffer.readUInt16LE(endOffset + 10);
+  let centralOffset = buffer.readUInt32LE(endOffset + 16);
+
+  for (let index = 0; index < totalEntries; index += 1) {
+    if (buffer.readUInt32LE(centralOffset) !== 0x02014b50) {
+      throw new Error("Invalid ZIP central directory header");
+    }
+    const compressionMethod = buffer.readUInt16LE(centralOffset + 10);
+    const compressedSize = buffer.readUInt32LE(centralOffset + 20);
+    const fileNameLength = buffer.readUInt16LE(centralOffset + 28);
+    const extraLength = buffer.readUInt16LE(centralOffset + 30);
+    const commentLength = buffer.readUInt16LE(centralOffset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(centralOffset + 42);
+    const fileName = buffer.toString("utf8", centralOffset + 46, centralOffset + 46 + fileNameLength);
+    const localFileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraLength;
+    const compressed = buffer.subarray(dataStart, dataStart + compressedSize);
+    entries.set(fileName, unzipEntryPayload(compressionMethod, compressed));
+    centralOffset += 46 + fileNameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function unzipEntryPayload(compressionMethod: number, payload: Buffer): Buffer {
+  if (compressionMethod === 0) {
+    return Buffer.from(payload);
+  }
+  if (compressionMethod === 8) {
+    return inflateRawSync(payload);
+  }
+  throw new Error(`Unsupported ZIP compression method: ${compressionMethod}`);
+}
+
+function findZipEndOfCentralDirectory(buffer: Buffer): number {
+  for (let index = buffer.length - 22; index >= 0; index -= 1) {
+    if (buffer.readUInt32LE(index) === 0x06054b50) {
+      return index;
+    }
+  }
+  throw new Error("ZIP end of central directory not found");
+}
+
+async function writeZipEntries(filePath: string, entries: Map<string, Buffer>): Promise<void> {
+  const files = [...entries.entries()].sort(([left], [right]) => left.localeCompare(right));
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let localOffset = 0;
+
+  for (const [name, content] of files) {
+    const nameBuffer = Buffer.from(name, "utf8");
+    const compressed = deflateRawSync(content);
+    const crc = crc32(content);
+
+    const localHeader = Buffer.alloc(30 + nameBuffer.length);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0x0800, 6);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(crc, 14);
+    localHeader.writeUInt32LE(compressed.length, 18);
+    localHeader.writeUInt32LE(content.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    nameBuffer.copy(localHeader, 30);
+    localParts.push(localHeader, compressed);
+
+    const centralHeader = Buffer.alloc(46 + nameBuffer.length);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0x0800, 8);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(compressed.length, 20);
+    centralHeader.writeUInt32LE(content.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt32LE(localOffset, 42);
+    nameBuffer.copy(centralHeader, 46);
+    centralParts.push(centralHeader);
+
+    localOffset += localHeader.length + compressed.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const endRecord = Buffer.alloc(22);
+  endRecord.writeUInt32LE(0x06054b50, 0);
+  endRecord.writeUInt16LE(files.length, 8);
+  endRecord.writeUInt16LE(files.length, 10);
+  endRecord.writeUInt32LE(centralDirectory.length, 12);
+  endRecord.writeUInt32LE(localOffset, 16);
+
+  await fs.writeFile(filePath, Buffer.concat([...localParts, centralDirectory, endRecord]));
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 async function findExecutable(preferred: string | undefined, ...fallbacks: string[]): Promise<string | null> {
@@ -2050,31 +2367,30 @@ async function writeOriginalAndTranslationPdf(input: {
     if (input.fontPath) {
       doc.font(input.fontPath);
     }
-    doc.fontSize(18).text("원본 + 번역본", { align: "left" });
+    doc.fontSize(18).text("번역문 + 원문", { align: "left" });
     doc.moveDown(0.4);
     doc.fontSize(10).fillColor("#555555").text(`Job: ${input.job.id}`);
     doc.text(`Generated: ${formatKstDateTime(new Date().toISOString())}`);
     doc.fillColor("#000000");
     doc.moveDown(1);
 
-    doc.fontSize(15).text("원문", { underline: true });
-    doc.moveDown(0.5);
-    for (const section of input.originalSections) {
-      doc.fontSize(12).text(section.title, { underline: true });
-      doc.moveDown(0.25);
-      writeMarkdownLikePdfText(doc, section.text);
-      doc.moveDown(0.75);
-    }
-
-    doc.addPage();
-    if (input.fontPath) {
-      doc.font(input.fontPath);
-    }
     doc.fontSize(15).text("번역문", { underline: true });
     doc.moveDown(0.5);
     doc.fontSize(12).text(input.translation.title, { underline: true });
     doc.moveDown(0.25);
     writeMarkdownLikePdfText(doc, input.translation.text);
+    doc.addPage();
+    if (input.fontPath) {
+      doc.font(input.fontPath);
+    }
+    doc.fontSize(15).text("[원문]", { underline: true });
+    doc.moveDown(0.5);
+    for (const section of input.originalSections) {
+      doc.fontSize(12).text(section.title, { underline: true });
+      doc.moveDown(0.25);
+      writeOriginalPdfText(doc, section.text);
+      doc.moveDown(0.75);
+    }
     doc.end();
   });
 }
@@ -2102,6 +2418,50 @@ function writeMarkdownLikePdfText(doc: PDFKit.PDFDocument, markdown: string): vo
       lineGap: 2,
       paragraphGap: 1,
     });
+  }
+}
+
+function writeOriginalPdfText(doc: PDFKit.PDFDocument, text: string): void {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  for (const line of lines) {
+    if (line.length === 0) {
+      doc.moveDown(0.35);
+      continue;
+    }
+    doc.fontSize(10).text(line, {
+      align: "left",
+      lineGap: 2,
+      paragraphGap: 1,
+    });
+  }
+}
+
+async function removeIntermediateGeneratedFiles(outputDir: string, generatedFiles: GeneratedFile[], keepPath: string): Promise<void> {
+  const resolvedOutputDir = path.resolve(outputDir);
+  const resolvedKeepPath = path.resolve(keepPath);
+  for (const file of generatedFiles) {
+    const resolvedFilePath = path.resolve(file.path);
+    if (resolvedFilePath === resolvedKeepPath) {
+      continue;
+    }
+    if (!isPathInside(resolvedOutputDir, resolvedFilePath)) {
+      continue;
+    }
+    await fs.rm(resolvedFilePath, { force: true });
+    await removeEmptyDirectories(path.dirname(resolvedFilePath), resolvedOutputDir);
+  }
+}
+
+async function removeEmptyDirectories(current: string, stopDir: string): Promise<void> {
+  let directory = path.resolve(current);
+  const resolvedStopDir = path.resolve(stopDir);
+  while (isPathInside(resolvedStopDir, directory) && directory !== resolvedStopDir) {
+    const entries = await fs.readdir(directory);
+    if (entries.length > 0) {
+      return;
+    }
+    await fs.rmdir(directory);
+    directory = path.dirname(directory);
   }
 }
 
