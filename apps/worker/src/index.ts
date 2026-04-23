@@ -1,7 +1,9 @@
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
+import PDFDocument from "pdfkit";
 
 import {
   runAgentPostprocess,
@@ -1027,8 +1029,18 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
     throw new Error(`Agent postprocess did not create any output files: ${result.outputDir}`);
   }
 
+  const artifacts = readPreprocessedArtifacts(events);
+  const downloadableFiles = [
+    await createOriginalAndTranslationPdf({
+      job,
+      artifacts,
+      generatedFiles,
+      outputDir: result.outputDir,
+    }),
+  ];
+
   const outputs: StoredJobOutput[] = [];
-  for (const file of generatedFiles) {
+  for (const file of downloadableFiles) {
     const mimeType = inferMimeType(file.relativePath);
     outputs.push(await createRuntimeOutput({
       db: context.db,
@@ -1146,17 +1158,38 @@ function buildCompletionNotification(job: StoredJob, files: StoredJobFile[], out
     `✅ 업로드한 파일의 자동번역이 완료되었습니다: ${job.id}${job.project ? ` (${job.project})` : ""}`,
     ...files.map((file) => `- ${file.originalName ?? file.id}`),
     "",
-    "📎 결과 파일은 24시간 동안 다운로드할 수 있습니다.",
+    "📎 결과 파일은 아래 만료 시각까지 다운로드할 수 있습니다.",
+    ...outputs.map((output) => `- ${output.fileName}: ${formatKstDateTime(output.expiresAt)}`),
   ].join("\n");
 }
 
 function buildDownloadKeyboard(outputs: StoredJobOutput[]): InlineKeyboardMarkup {
   return {
     inline_keyboard: outputs.map((output, index) => [{
-      text: outputs.length === 1 ? "⬇️ 다운로드 (24시간)" : `⬇️ ${index + 1}. ${truncateButtonLabel(output.fileName)}`,
+      text: outputs.length === 1
+        ? `⬇️ PDF 다운로드 (${formatKstCompact(output.expiresAt)}까지)`
+        : `⬇️ ${index + 1}. ${truncateButtonLabel(output.fileName)} (${formatKstCompact(output.expiresAt)}까지)`,
       callback_data: `download:${output.id}`,
     }]),
   };
+}
+
+function formatKstDateTime(iso: string): string {
+  const date = new Date(Date.parse(iso) + 9 * 60 * 60 * 1000);
+  return [
+    `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`,
+    `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}`,
+    "KST",
+  ].join(" ");
+}
+
+function formatKstCompact(iso: string): string {
+  const date = new Date(Date.parse(iso) + 9 * 60 * 60 * 1000);
+  return `${pad2(date.getUTCMonth() + 1)}/${pad2(date.getUTCDate())} ${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}`;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
 }
 
 function buildQueuedMessage(jobId: string, fileNames: string[]): string {
@@ -1413,6 +1446,16 @@ function readPreprocessedArtifacts(events: StoredJobEvent[]): AgentPostprocessIn
   });
 }
 
+interface GeneratedFile {
+  path: string;
+  relativePath: string;
+}
+
+interface PdfTextSection {
+  title: string;
+  text: string;
+}
+
 function listActiveJobOutputs(db: DatabaseSync, jobId: string): StoredJobOutput[] {
   const now = new Date().toISOString();
   return listJobOutputs(db, jobId).filter((output) => !output.deletedAt && output.expiresAt > now);
@@ -1437,9 +1480,184 @@ function getOutputCallbackAccess(
   return { output, job };
 }
 
-async function listGeneratedFiles(root: string): Promise<Array<{ path: string; relativePath: string }>> {
+async function createOriginalAndTranslationPdf(input: {
+  job: StoredJob;
+  artifacts: AgentPostprocessInput["artifacts"];
+  generatedFiles: GeneratedFile[];
+  outputDir: string;
+}): Promise<GeneratedFile> {
+  const translationFile = findTranslationFile(input.generatedFiles);
+  if (!translationFile) {
+    throw new Error(`Agent postprocess did not create translated markdown/text output in ${input.outputDir}`);
+  }
+
+  const [originalSections, translationText, fontPath] = await Promise.all([
+    readOriginalPdfSections(input.artifacts),
+    fs.readFile(translationFile.path, "utf8"),
+    findPdfFontPath(),
+  ]);
+  const pdfPath = path.join(input.outputDir, "original-and-translated.pdf");
+  await writeOriginalAndTranslationPdf({
+    pdfPath,
+    job: input.job,
+    originalSections,
+    translation: {
+      title: path.basename(translationFile.relativePath),
+      text: translationText,
+    },
+    fontPath,
+  });
+  return {
+    path: pdfPath,
+    relativePath: path.basename(pdfPath),
+  };
+}
+
+function findTranslationFile(files: GeneratedFile[]): GeneratedFile | null {
+  const sorted = [...files].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return sorted.find((file) => file.relativePath.toLowerCase() === "translated.md")
+    ?? sorted.find((file) => path.extname(file.relativePath).toLowerCase() === ".md")
+    ?? sorted.find((file) => path.extname(file.relativePath).toLowerCase() === ".txt")
+    ?? null;
+}
+
+async function readOriginalPdfSections(artifacts: AgentPostprocessInput["artifacts"]): Promise<PdfTextSection[]> {
+  if (artifacts.length === 0) {
+    return [{ title: "원문", text: "전처리된 원문 텍스트가 없습니다." }];
+  }
+
+  const sections: PdfTextSection[] = [];
+  for (const artifact of artifacts) {
+    try {
+      sections.push({
+        title: artifact.fileName,
+        text: await fs.readFile(artifact.sourcePath, "utf8"),
+      });
+    } catch (error) {
+      sections.push({
+        title: artifact.fileName,
+        text: `원문 텍스트를 읽을 수 없습니다: ${errorMessage(error)}`,
+      });
+    }
+  }
+  return sections;
+}
+
+async function findPdfFontPath(): Promise<string | null> {
+  const candidates = [
+    process.env.PDF_FONT_PATH,
+    "/mnt/c/Windows/Fonts/malgun.ttf",
+    "/mnt/c/Windows/Fonts/malgunbd.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+  ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0);
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+async function writeOriginalAndTranslationPdf(input: {
+  pdfPath: string;
+  job: StoredJob;
+  originalSections: PdfTextSection[];
+  translation: PdfTextSection;
+  fontPath: string | null;
+}): Promise<void> {
+  await fs.mkdir(path.dirname(input.pdfPath), { recursive: true });
+  await new Promise<void>((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      margin: 48,
+      info: {
+        Title: `Original and Translation - ${input.job.id}`,
+        Subject: "Telegram Local Ingest output",
+        Author: "telegram-local-ingest",
+      },
+    });
+    const stream = createWriteStream(input.pdfPath);
+    const done = (error?: Error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+
+    doc.on("error", reject);
+    stream.on("error", reject);
+    stream.on("finish", () => done());
+    doc.pipe(stream);
+
+    if (input.fontPath) {
+      doc.font(input.fontPath);
+    }
+    doc.fontSize(18).text("원본 + 번역본", { align: "left" });
+    doc.moveDown(0.4);
+    doc.fontSize(10).fillColor("#555555").text(`Job: ${input.job.id}`);
+    doc.text(`Generated: ${formatKstDateTime(new Date().toISOString())}`);
+    doc.fillColor("#000000");
+    doc.moveDown(1);
+
+    doc.fontSize(15).text("원문", { underline: true });
+    doc.moveDown(0.5);
+    for (const section of input.originalSections) {
+      doc.fontSize(12).text(section.title, { underline: true });
+      doc.moveDown(0.25);
+      writeMarkdownLikePdfText(doc, section.text);
+      doc.moveDown(0.75);
+    }
+
+    doc.addPage();
+    if (input.fontPath) {
+      doc.font(input.fontPath);
+    }
+    doc.fontSize(15).text("번역문", { underline: true });
+    doc.moveDown(0.5);
+    doc.fontSize(12).text(input.translation.title, { underline: true });
+    doc.moveDown(0.25);
+    writeMarkdownLikePdfText(doc, input.translation.text);
+    doc.end();
+  });
+}
+
+function writeMarkdownLikePdfText(doc: PDFKit.PDFDocument, markdown: string): void {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trimEnd();
+    if (trimmed.length === 0) {
+      doc.moveDown(0.35);
+      continue;
+    }
+    const heading = /^(#{1,4})\s+(.+)$/.exec(trimmed);
+    if (heading) {
+      const headingLevel = heading[1]?.length ?? 1;
+      const headingText = heading[2] ?? "";
+      doc.moveDown(0.25);
+      doc.fontSize(headingLevel <= 2 ? 13 : 12).text(headingText, {
+        paragraphGap: 2,
+      });
+      continue;
+    }
+    doc.fontSize(10).text(trimmed, {
+      align: "left",
+      lineGap: 2,
+      paragraphGap: 1,
+    });
+  }
+}
+
+async function listGeneratedFiles(root: string): Promise<GeneratedFile[]> {
   const resolvedRoot = path.resolve(root);
-  const files: Array<{ path: string; relativePath: string }> = [];
+  const files: GeneratedFile[] = [];
   await collectGeneratedFiles(resolvedRoot, resolvedRoot, files);
   return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
@@ -1447,7 +1665,7 @@ async function listGeneratedFiles(root: string): Promise<Array<{ path: string; r
 async function collectGeneratedFiles(
   root: string,
   current: string,
-  files: Array<{ path: string; relativePath: string }>,
+  files: GeneratedFile[],
 ): Promise<void> {
   for (const entry of await fs.readdir(current, { withFileTypes: true })) {
     const fullPath = path.join(current, entry.name);

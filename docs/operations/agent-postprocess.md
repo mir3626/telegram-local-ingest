@@ -38,6 +38,12 @@ npm run smoke:agent:live
 
 This creates a temporary fixture under `runtime/agent-smoke/`, invokes Codex through `scripts/run-codex-postprocess.sh`, and verifies that at least one output file was written.
 
+## Telegram Downloads
+
+The worker converts the agent's translated Markdown/text result plus the preprocessed original text into one mobile-friendly `original-and-translated.pdf`. The Telegram completion message lists the real expiry timestamp in KST, and the download button includes the same deadline in compact form. Runtime download files are valid for 24 hours.
+
+For Korean/CJK PDF text, WSL normally auto-detects the Windows Malgun Gothic font at `/mnt/c/Windows/Fonts/malgun.ttf`. Set `PDF_FONT_PATH` when running on a host with a different font location.
+
 ## Boundaries
 
 - The worker decides queue, retry, file lifecycle, and Telegram notification state.
