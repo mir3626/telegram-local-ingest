@@ -224,6 +224,8 @@ If the marker blocks are absent, Planner may skip shard loading only for a brand
 | W13 | `docs/context/harness-gaps.md` 관련 gap status 갱신 (open → covered / partial → covered) | 기존 gap 을 해결하는 기능 추가 시 |
 | W14 | `.gitignore` 런타임 artifact 등록 | PID / cache / 로그 파일 생성되는 스크립트 추가 시 |
 
+Windows portability rule: commands stored in `.claude/settings.json` must be valid when Claude Code is launched from CMD or PowerShell. Do not use POSIX-only inline env syntax (`VAR=1 cmd`), `/dev/null`, or `|| true` in settings command strings; put failure swallowing inside Node scripts or shell-specific wrapper files.
+
 ### §14.2 파일·스크립트·스킬 삭제 또는 이름변경 시 — 참조 완전 제거
 
 | # | 체크포인트 |

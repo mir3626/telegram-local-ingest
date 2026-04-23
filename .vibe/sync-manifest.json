@@ -27,12 +27,14 @@
       ".claude/skills/write-report/SKILL.md",
       ".claude/skills/maintain-context/SKILL.md",
       ".claude/skills/vibe-sync/SKILL.md",
+      ".codex/skills/**",
       ".claude/agents/sprint-planner.md",
       ".claude/agents/context-curator.md",
       ".claude/agents/qa-guardian.md",
       "docs/context/codex-execution.md",
       "docs/context/orchestration.md",
       "docs/orchestration/providers.md",
+      "tsconfig.harness.json",
       "src/commands/audit-config.ts",
       "src/commands/bundle-size.ts",
       "src/commands/doctor.ts",
@@ -105,7 +107,11 @@
       "migrations/1.1.0.mjs",
       "scripts/run-codex.cmd",
       "test/run-codex-wrapper.test.ts",
+      "test/init-guard.test.ts",
+      "test/codex-skills.test.ts",
       "test/agent-session-start.test.ts",
+      "test/upstream-bootstrap.test.ts",
+      "test/vibe-sync-bootstrap.test.ts",
       "scripts/vibe-sprint-commit.mjs",
       "scripts/vibe-session-log-sync.mjs",
       "src/lib/decisions.ts",
@@ -124,6 +130,7 @@
       "scripts/vibe-sprint-mode.mjs",
       "migrations/1.2.0.mjs",
       "test/model-registry.test.ts",
+      ".claude/statusline.mjs",
       ".claude/statusline.sh",
       ".claude/statusline.ps1",
       ".vibe/settings-presets/agent-delegation.json",
@@ -183,7 +190,15 @@
       "docs/release/v1.5.4.md",
       "docs/release/v1.5.5.md",
       "docs/release/v1.5.6.md",
-      "docs/release/v1.5.7.md"
+      "docs/release/v1.5.7.md",
+      "docs/release/v1.5.8.md",
+      "docs/release/v1.5.9.md",
+      "docs/release/v1.5.10.md",
+      "docs/release/v1.5.11.md",
+      "docs/release/v1.5.12.md",
+      "docs/release/v1.5.13.md",
+      "docs/release/v1.5.14.md",
+      "docs/release/v1.5.15.md"
     ],
     "hybrid": {
       "CLAUDE.md": {
@@ -256,18 +271,6 @@
         "strategy": "json-deep-merge",
         "harnessKeys": ["scripts.vibe:*", "engines"],
         "projectKeys": ["name", "version", "description", "dependencies", "devDependencies"]
-      },
-      "tsconfig.json": {
-        "strategy": "json-deep-merge",
-        "harnessKeys": [
-          "compilerOptions.strict",
-          "compilerOptions.noUncheckedIndexedAccess",
-          "compilerOptions.exactOptionalPropertyTypes",
-          "compilerOptions.module",
-          "compilerOptions.moduleResolution",
-          "compilerOptions.target"
-        ],
-        "projectKeys": ["compilerOptions.paths", "compilerOptions.baseUrl", "include", "exclude"]
       },
       ".vibe/config.json": {
         "strategy": "json-deep-merge",

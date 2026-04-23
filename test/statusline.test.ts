@@ -8,8 +8,10 @@ import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
 const tempDirs: string[] = [];
+const nodeScriptPath = path.resolve('.claude', 'statusline.mjs');
 const bashScriptPath = path.resolve('.claude', 'statusline.sh');
 const powershellScriptPath = path.resolve('.claude', 'statusline.ps1');
+const settingsPath = path.resolve('.claude', 'settings.json');
 
 function detectWorkingBash(): string | null {
   try {
@@ -81,6 +83,17 @@ async function runBashStatusline(root: string) {
   });
 }
 
+function runNodeStatusline(root: string, input?: string) {
+  const result = spawnSync(process.execPath, [nodeScriptPath], {
+    cwd: root,
+    env: process.env,
+    input,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result;
+}
+
 function runBashStatuslineBytes(root: string, input?: string, envOverride: NodeJS.ProcessEnv = {}): Buffer {
   const result = spawnSync(bashCommand ?? 'bash', [bashScriptPath], {
     cwd: root,
@@ -99,6 +112,48 @@ async function runPowerShellStatusline(root: string) {
     env: process.env,
   });
 }
+
+describe('statusline wiring', () => {
+  it('uses a cross-platform node command in Claude settings', async () => {
+    const settings = JSON.parse(await import('node:fs/promises').then(({ readFile }) => readFile(settingsPath, 'utf8'))) as {
+      statusLine?: { command?: string };
+      hooks?: { SessionStart?: Array<{ hooks?: Array<{ command?: string }> }> };
+    };
+
+    assert.equal(settings.statusLine?.command, 'node .claude/statusline.mjs');
+    assert.doesNotMatch(settings.statusLine?.command ?? '', /(^|\s)\w+=\S+\s/);
+    assert.doesNotMatch(settings.statusLine?.command ?? '', /\/dev\/null|\|\| true/);
+    assert.equal(settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command, 'node scripts/vibe-agent-session-start.mjs');
+    assert.doesNotMatch(settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command ?? '', /\/dev\/null|\|\| true/);
+  });
+});
+
+describe('statusline.mjs', () => {
+  it('renders without requiring bash or PowerShell syntax', async () => {
+    const root = await makeTempDir('statusline-node-');
+    await writeStatus(root);
+
+    const { stdout, stderr } = runNodeStatusline(root);
+
+    assert.equal(stderr, '');
+    assert.equal(stdout, '🎯 sprint-M9-statusline-permissions (2/3) | ⚠️ 2');
+  });
+
+  it('reads Claude usage from redirected stdin by default', async () => {
+    const root = await makeTempDir('statusline-node-stdin-');
+    await writeStatus(root);
+    await writeText(
+      root,
+      'transcript.jsonl',
+      JSON.stringify({ message: { usage: { input_tokens: 1500, output_tokens: 500 } } }),
+    );
+
+    const transcriptPath = path.join(root, 'transcript.jsonl');
+    const { stdout } = runNodeStatusline(root, `${JSON.stringify({ transcript_path: transcriptPath })}\n`);
+
+    assert.equal(stdout, '🎯 sprint-M9-statusline-permissions (2/3) | 💭 Claude 2K | ⚠️ 2');
+  });
+});
 
 describe('statusline.sh', { skip: bashCommand === null }, () => {
   it('renders the normal output when sprint and token state files are present', async () => {

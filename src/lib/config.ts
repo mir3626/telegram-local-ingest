@@ -49,6 +49,7 @@ export interface VibeConfig {
     type: 'git' | 'local';
     url: string;
     ref?: string;
+    self?: boolean;
   };
   sprintRoles: SprintRoles;
   sprint: SprintConfig;

@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 async function tempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'vibe-dashboard-'));
@@ -223,4 +225,37 @@ test('PID lease makes a second instance exit cleanly', async () => {
   } finally {
     child.kill('SIGTERM');
   }
+});
+
+test('browser opener handles async spawn errors as warnings', async () => {
+  const module = await import(pathToFileURL(path.resolve('scripts', 'vibe-dashboard.mjs')).href) as {
+    openBrowser: (
+      url: string,
+      spawnFn: (...args: unknown[]) => EventEmitter & { unref: () => void },
+      platform: NodeJS.Platform,
+      stderr: { write: (value: string) => void },
+    ) => void;
+  };
+  const child = new EventEmitter() as EventEmitter & { unref: () => void };
+  const calls: unknown[][] = [];
+  let unrefCalled = false;
+  let stderr = '';
+  child.unref = () => {
+    unrefCalled = true;
+  };
+
+  module.openBrowser(
+    'http://127.0.0.1:5175',
+    (...args: unknown[]) => {
+      calls.push(args);
+      return child;
+    },
+    'linux',
+    { write: (value: string) => { stderr += value; } },
+  );
+  child.emit('error', new Error('spawn xdg-open EACCES'));
+
+  assert.equal(calls[0]?.[0], 'xdg-open');
+  assert.equal(unrefCalled, true);
+  assert.match(stderr, /Warning: could not open dashboard: spawn xdg-open EACCES/);
 });

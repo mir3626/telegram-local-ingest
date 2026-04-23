@@ -964,19 +964,31 @@ async function buildModel(root) {
   };
 }
 
-function openReport(outPath, spawnFn, platform) {
+function warnOpenFailure(target, error, stderr = process.stderr) {
+  const message = error instanceof Error ? error.message : String(error);
+  stderr.write(`Warning: could not open ${target}: ${message}\n`);
+}
+
+function openReport(outPath, spawnFn, platform, stderr = process.stderr) {
   const argsByPlatform =
     platform === 'win32'
       ? ['cmd', ['/c', 'start', '""', outPath]]
       : platform === 'darwin'
         ? ['open', [outPath]]
         : ['xdg-open', [outPath]];
-  const child = spawnFn(argsByPlatform[0], argsByPlatform[1], {
-    detached: true,
-    stdio: 'ignore',
-  });
-  if (typeof child?.unref === 'function') {
-    child.unref();
+  try {
+    const child = spawnFn(argsByPlatform[0], argsByPlatform[1], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    if (typeof child?.on === 'function') {
+      child.on('error', (error) => warnOpenFailure('project report', error, stderr));
+    }
+    if (typeof child?.unref === 'function') {
+      child.unref();
+    }
+  } catch (error) {
+    warnOpenFailure('project report', error, stderr);
   }
 }
 
@@ -998,13 +1010,7 @@ export async function runProjectReportCli(argv = process.argv.slice(2), options 
   }
 
   if (!flags.noOpen) {
-    try {
-      openReport(outPath, options.spawn ?? defaultSpawn, options.platform ?? process.platform);
-    } catch (error) {
-      const stderr = options.stderr ?? process.stderr;
-      const message = error instanceof Error ? error.message : String(error);
-      stderr.write(`Warning: could not open project report: ${message}\n`);
-    }
+    openReport(outPath, options.spawn ?? defaultSpawn, options.platform ?? process.platform, options.stderr ?? process.stderr);
   }
 
   const stdout = options.stdout ?? process.stdout;

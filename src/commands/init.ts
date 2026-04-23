@@ -1,5 +1,6 @@
 import process from 'node:process';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { copyFile } from 'node:fs/promises';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
@@ -9,10 +10,47 @@ import { logger } from '../lib/logger.js';
 import { paths } from '../lib/paths.js';
 import type { SprintRoleDefinition, VibeConfig } from '../lib/config.js';
 
+export const AGENT_INIT_FLAG = '--from-agent-skill';
+const AGENT_INIT_ENV = 'VIBE_INIT_AGENT';
+
 // ─── helpers ───────────────────────────────────────────────────────
 
 function hr(): void {
   console.log('─'.repeat(60));
+}
+
+export function isAgentSkillInvocation(
+  argv = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const envValue = env[AGENT_INIT_ENV]?.toLowerCase();
+  return argv.includes(AGENT_INIT_FLAG) || envValue === '1' || envValue === 'true';
+}
+
+export function renderDirectInitGuardMessage(): string {
+  return [
+    'vibe:init is an agent-skill bootstrap step, not a direct shell entrypoint.',
+    '',
+    'Start it from an agent session instead:',
+    '  Claude Code: /vibe-init',
+    '  Codex: ask Codex to run the vibe-init workflow using .codex/skills/vibe-init/SKILL.md',
+    '',
+    'Agent skills may run the mechanical bootstrap command as:',
+    `  npm run vibe:init -- ${AGENT_INIT_FLAG}`,
+    '',
+    'Direct shell execution stops here so the agent can complete product context, roadmap, handoff, and session-log setup.',
+    '',
+  ].join('\n');
+}
+
+function guardAgentSkillInvocation(): boolean {
+  if (isAgentSkillInvocation()) {
+    return true;
+  }
+
+  process.stderr.write(renderDirectInitGuardMessage());
+  process.exitCode = 1;
+  return false;
 }
 
 async function promptValue(
@@ -71,6 +109,19 @@ async function ensureEnvFile(): Promise<void> {
   }
   await copyFile(paths.envExample, paths.envFile);
   logger.info('created .env from .env.example — fill in any API keys you need');
+}
+
+async function ensureUpstreamConfig(): Promise<void> {
+  const scriptPath = path.join(paths.root, 'scripts', 'vibe-version-check.mjs');
+  if (!(await fileExists(scriptPath))) {
+    return;
+  }
+
+  spawnSync(process.execPath, [scriptPath, '--ensure-upstream-only'], {
+    cwd: paths.root,
+    env: { ...process.env, VIBE_ROOT: paths.root },
+    stdio: 'ignore',
+  });
 }
 
 // ─── project customization ────────────────────────────────────────
@@ -201,6 +252,11 @@ ${extra.length > 0 ? '\n## 추가 규칙\n' + extra.map(e => `- ${e}`).join('\n'
 // ─── main ──────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  if (!guardAgentSkillInvocation()) {
+    return;
+  }
+
+  await ensureUpstreamConfig();
   await ensureEnvFile();
 
   const base = await readJson<VibeConfig>(paths.localConfigExample);

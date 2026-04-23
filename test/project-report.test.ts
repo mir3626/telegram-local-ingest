@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,7 +13,7 @@ interface ProjectReportModule {
     argv: string[],
     options: {
       root: string;
-      spawn?: (...args: unknown[]) => { unref?: () => void };
+      spawn?: (...args: unknown[]) => { on?: (event: string, listener: (error: Error) => void) => void; unref?: () => void };
       stdout?: { write: (value: string) => void };
       stderr?: { write: (value: string) => void };
       platform?: NodeJS.Platform;
@@ -214,6 +215,32 @@ describe('project report', () => {
     });
 
     assert.equal(spawnCount, 0);
+  });
+
+  it('browser open errors are warnings and do not fail report generation', async () => {
+    const root = await makeTempDir('project-report-open-error-');
+    const { runProjectReportCli } = await loadReportModule();
+    const child = new EventEmitter() as EventEmitter & { unref: () => void };
+    let stderr = '';
+    let stdout = '';
+    let unrefCalled = false;
+    await scaffoldReportProject(root);
+    child.unref = () => {
+      unrefCalled = true;
+    };
+
+    await runProjectReportCli([], {
+      root,
+      platform: 'linux',
+      spawn: () => child,
+      stdout: { write: (value) => { stdout += value; } },
+      stderr: { write: (value) => { stderr += value; } },
+    });
+    child.emit('error', new Error('spawn xdg-open EACCES'));
+
+    assert.equal(unrefCalled, true);
+    assert.match(stdout, /project-report\.html/);
+    assert.match(stderr, /Warning: could not open project report: spawn xdg-open EACCES/);
   });
 
   it('writes inline report HTML with only optional Google Font links', async () => {

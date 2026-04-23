@@ -90,7 +90,7 @@ Step 1-0 에서 사용자가 `agent` 를 선택하면 다음을 순차 수행:
 
 ### Step 1-1: 환경 점검 실행
 
-`npm run vibe:init`을 실행하여 기본 파일(`.env`, `.vibe/config.local.json`)을 생성한 뒤,
+`npm run vibe:init -- --from-agent-skill`을 실행하여 기본 파일(`.env`, `.vibe/config.local.json`)을 생성한 뒤,
 아래 환경 점검을 직접 수행합니다:
 
 1. **필수 도구 확인** — `node` (>=24, Active LTS), `npm`, `git`, `bash` (Windows는 Git Bash)
@@ -623,7 +623,7 @@ Orchestrator asks:
 - 각 Phase/Step을 순서대로 진행하며, 답변을 받은 후 파일을 작성하고 다음으로 넘어갑니다.
 - 사용자가 "모름", "잘 모름", "패스", "기본" 등으로 답하면 기본값을 사용합니다.
 - 빈 답변도 허용합니다. 빈 값은 기본값으로 채웁니다.
-- `npm run vibe:init` 실행이 실패하면 원인을 파악하여 해결 후 재시도합니다.
+- `npm run vibe:init -- --from-agent-skill` 실행이 실패하면 원인을 파악하여 해결 후 재시도합니다.
 - provider 인증 시, 사용자가 직접 터미널 명령을 실행해야 하는 경우 `! 명령어` 형식을 안내합니다.
 - 커스텀 provider의 CLI 인자 형식을 모르는 경우, 기본 템플릿(`["--prompt", "{prompt}"]`)을 사용하고 나중에 `.vibe/config.local.json`에서 수정 가능하다고 안내합니다.
 - AGENTS.md는 파일명은 유지하되, 내용만 선택된 Generator provider에 맞게 수정합니다.

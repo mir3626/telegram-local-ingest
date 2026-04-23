@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline/promises';
@@ -23,14 +23,202 @@ import {
 } from '../lib/sync.js';
 
 const SEMVER_REF_PATTERN = /^\d+\.\d+\.\d+$/;
+const SEMVER_TAG_PATTERN = /^v?\d+\.\d+\.\d+$/;
+const DEFAULT_UPSTREAM_URL = 'https://github.com/mir3626/vibe-doctor.git';
 
-export function resolveUpstreamRef(config: VibeConfig, refOverride?: string): string {
+const DEFAULT_SYNC_CONFIG: VibeConfig = {
+  orchestrator: 'codex',
+  harnessVersionInstalled: '0.0.0',
+  sprintRoles: { planner: 'codex', generator: 'codex', evaluator: 'codex' },
+  sprint: { unit: 'feature', subAgentPerRole: false, freshContextPerSprint: true },
+  providers: {},
+};
+
+export interface SyncCache {
+  latestVersion?: string | null;
+}
+
+export type PinnedRefDecision = 'keep' | 'update';
+
+export interface PinnedRefUpdateCandidate {
+  pinnedRef: string;
+  latestRef: string;
+}
+
+function normalizeGitUrl(value: string | undefined): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/^ssh:\/\/git@/i, 'https://')
+    .replace(/^https?:\/\//i, '')
+    .replace(/\.git$/i, '')
+    .replace(/\/+$/g, '')
+    .toLowerCase();
+}
+
+function isTemplateSelfCheckout(upstreamUrl: string | undefined): boolean {
+  return (
+    path.basename(paths.root).toLowerCase() === 'vibe-doctor' &&
+    normalizeGitUrl(upstreamUrl) === normalizeGitUrl(DEFAULT_UPSTREAM_URL)
+  );
+}
+
+function isVibeDoctorRemote(upstreamUrl: string | undefined): boolean {
+  const normalized = normalizeGitUrl(upstreamUrl);
+  return normalized === normalizeGitUrl(DEFAULT_UPSTREAM_URL) || normalized.endsWith('/vibe-doctor');
+}
+
+function getOriginUrl(root = paths.root): string | undefined {
+  try {
+    const output = execSync('git remote get-url origin', {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    }).trim();
+    return output || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveMissingUpstream(
+  config: Pick<VibeConfig, 'upstream'>,
+  originUrl: string | undefined,
+  rootBasename: string,
+): NonNullable<VibeConfig['upstream']> | undefined {
+  if (config.upstream?.url || config.upstream?.self) {
+    return config.upstream;
+  }
+
+  if (originUrl && isVibeDoctorRemote(originUrl)) {
+    if (rootBasename.toLowerCase() === 'vibe-doctor' && normalizeGitUrl(originUrl) === normalizeGitUrl(DEFAULT_UPSTREAM_URL)) {
+      return { type: 'git', url: originUrl, self: true };
+    }
+    return { type: 'git', url: originUrl };
+  }
+
+  if (rootBasename.toLowerCase() === 'vibe-doctor') {
+    return { type: 'git', url: DEFAULT_UPSTREAM_URL, self: true };
+  }
+
+  return { type: 'git', url: DEFAULT_UPSTREAM_URL };
+}
+
+function normalizeVersion(value: string | undefined | null): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = value.trim().replace(/^v/i, '');
+  return SEMVER_REF_PATTERN.test(normalized) ? normalized : undefined;
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = left.split('.').map(Number);
+  const rightParts = right.split('.').map(Number);
+  const length = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const diff = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+
+  return 0;
+}
+
+function isVersionTag(value: string | undefined): boolean {
+  return typeof value === 'string' && SEMVER_TAG_PATTERN.test(value.trim());
+}
+
+function resolveLatestCachedRef(config: VibeConfig, syncCache?: SyncCache): string | undefined {
+  const latest = normalizeVersion(syncCache?.latestVersion);
+  const installed = normalizeVersion(config.harnessVersionInstalled ?? config.harnessVersion);
+
+  if (!latest || !installed || compareVersions(latest, installed) <= 0) {
+    return undefined;
+  }
+
+  return `v${latest}`;
+}
+
+export function resolvePinnedRefUpdateCandidate(
+  config: VibeConfig,
+  syncCache?: SyncCache,
+): PinnedRefUpdateCandidate | undefined {
+  const pinned = normalizeVersion(config.upstream?.ref);
+  const latest = normalizeVersion(syncCache?.latestVersion);
+
+  if (!pinned || !latest || compareVersions(latest, pinned) <= 0) {
+    return undefined;
+  }
+
+  return {
+    pinnedRef: `v${pinned}`,
+    latestRef: `v${latest}`,
+  };
+}
+
+async function refreshSyncCache(): Promise<void> {
+  try {
+    await runCommand('node', ['scripts/vibe-version-check.mjs'], { cwd: paths.root });
+  } catch {
+    // Sync can still proceed with existing config/cache when the update check is unavailable.
+  }
+}
+
+async function readSyncCache(): Promise<SyncCache | undefined> {
+  try {
+    return await readJson<SyncCache>(paths.syncCache);
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadConfigForSync(): Promise<VibeConfig> {
+  if (await fileExists(paths.sharedConfig)) {
+    return loadConfig();
+  }
+
+  return DEFAULT_SYNC_CONFIG;
+}
+
+async function ensureSyncUpstreamConfig(config: VibeConfig): Promise<VibeConfig> {
+  const upstream = resolveMissingUpstream(config, getOriginUrl(paths.root), path.basename(paths.root));
+  if (!upstream || upstream === config.upstream) {
+    return config;
+  }
+
+  const sharedConfig = (await fileExists(paths.sharedConfig))
+    ? await readJson<VibeConfig>(paths.sharedConfig)
+    : config;
+  await writeJson(paths.sharedConfig, { ...sharedConfig, upstream });
+  logger.info(`Initialized .vibe/config.json upstream as ${upstream.url}${upstream.self ? ' (self)' : ''}`);
+  return { ...config, upstream };
+}
+
+export function resolveUpstreamRef(
+  config: VibeConfig,
+  refOverride?: string,
+  syncCache?: SyncCache,
+  pinnedRefDecision: PinnedRefDecision = 'keep',
+): string {
   if (refOverride) {
     return refOverride;
   }
 
   if (config.upstream?.ref) {
+    const candidate = isVersionTag(config.upstream.ref) ? resolvePinnedRefUpdateCandidate(config, syncCache) : undefined;
+    if (candidate && pinnedRefDecision === 'update') {
+      return candidate.latestRef;
+    }
     return config.upstream.ref;
+  }
+
+  const latestCachedRef = resolveLatestCachedRef(config, syncCache);
+  if (latestCachedRef) {
+    return latestCachedRef;
   }
 
   if (config.harnessVersion && SEMVER_REF_PATTERN.test(config.harnessVersion)) {
@@ -38,6 +226,65 @@ export function resolveUpstreamRef(config: VibeConfig, refOverride?: string): st
   }
 
   return 'main';
+}
+
+async function choosePinnedRefDecision(candidate: PinnedRefUpdateCandidate, jsonMode: boolean): Promise<PinnedRefDecision> {
+  const message =
+    `Upstream is pinned to ${candidate.pinnedRef}, but ${candidate.latestRef} is available.\n` +
+    `Run with --ref ${candidate.latestRef} to bypass the pin non-interactively.`;
+
+  if (jsonMode) {
+    return 'keep';
+  }
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    logger.info(`${message} Keeping pinned ref.`);
+    return 'keep';
+  }
+
+  const rl = readline.createInterface({ input, output });
+  try {
+    process.stdout.write(
+      `\n${message}\n\n` +
+        'Choose:\n' +
+        `  [p] Keep pinned ref ${candidate.pinnedRef}\n` +
+        `  [u] Update once to ${candidate.latestRef}\n` +
+        '  [c] Cancel\n\n',
+    );
+
+    for (;;) {
+      const choice = (await rl.question('> ')).trim().toLowerCase();
+      if (choice === '' || choice === 'p' || choice === 'pin' || choice === 'keep') {
+        return 'keep';
+      }
+      if (choice === 'u' || choice === 'update') {
+        return 'update';
+      }
+      if (choice === 'c' || choice === 'cancel') {
+        throw new Error('Cancelled by user');
+      }
+      process.stdout.write('Choose p, u, or c.\n');
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolvePostSyncTypecheckArgs(root = paths.root): Promise<string[]> {
+  if (await fileExists(path.join(root, 'tsconfig.harness.json'))) {
+    return ['tsc', '-p', 'tsconfig.harness.json', '--noEmit'];
+  }
+
+  return ['tsc', '--noEmit'];
 }
 
 async function cloneUpstream(url: string, ref: string): Promise<string> {
@@ -162,7 +409,7 @@ async function approveAndResolve(actions: SyncAction[], force: boolean): Promise
 }
 
 async function verifyPostSync(): Promise<void> {
-  await runCommand('npx', ['tsc', '--noEmit'], { cwd: paths.root });
+  await runCommand('npx', await resolvePostSyncTypecheckArgs(paths.root), { cwd: paths.root });
   await runCommand('node', ['scripts/vibe-preflight.mjs', '--bootstrap'], {
     cwd: paths.root,
   });
@@ -178,7 +425,7 @@ async function main(): Promise<void> {
   const from = getStringFlag(args, 'from');
   const refOverride = getStringFlag(args, 'ref');
 
-  const config = await loadConfig();
+  const config = await ensureSyncUpstreamConfig(await loadConfigForSync());
   let upstreamRoot: string | null = null;
   let cleanupRequired = false;
 
@@ -187,11 +434,18 @@ async function main(): Promise<void> {
       upstreamRoot = path.resolve(from);
     } else if (config.upstream?.type === 'local') {
       upstreamRoot = path.resolve(config.upstream.url);
+    } else if (config.upstream?.self || isTemplateSelfCheckout(config.upstream?.url)) {
+      logger.info('Skipping sync: this checkout is marked as the vibe-doctor template source. Use --from to override.');
+      return;
     } else {
       if (!config.upstream?.url) {
         throw new Error('Missing upstream configuration in .vibe/config.json');
       }
-      const ref = resolveUpstreamRef(config, refOverride);
+      await refreshSyncCache();
+      const syncCache = await readSyncCache();
+      const pinnedCandidate = refOverride ? undefined : resolvePinnedRefUpdateCandidate(config, syncCache);
+      const pinnedDecision = pinnedCandidate ? await choosePinnedRefDecision(pinnedCandidate, jsonMode) : 'keep';
+      const ref = resolveUpstreamRef(config, refOverride, syncCache, pinnedDecision);
       logger.info(`Cloning upstream ${config.upstream.url}#${ref}`);
       upstreamRoot = await cloneUpstream(config.upstream.url, ref);
       cleanupRequired = true;

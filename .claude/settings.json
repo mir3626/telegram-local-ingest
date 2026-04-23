@@ -42,7 +42,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "VIBE_STATUSLINE_READ_STDIN=1 bash .claude/statusline.sh",
+    "command": "node .claude/statusline.mjs",
     "padding": 0
   },
   "hooks": {
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/vibe-agent-session-start.mjs 2>/dev/null || true"
+            "command": "node scripts/vibe-agent-session-start.mjs"
           }
         ]
       }

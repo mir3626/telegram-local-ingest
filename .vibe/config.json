@@ -1,5 +1,5 @@
 {
-  "harnessVersion": "1.5.7",
+  "harnessVersion": "1.5.15",
   "orchestrator": "claude-opus",
   "sprintRoles": {
     "planner": "claude-opus",
@@ -54,5 +54,9 @@
     "everyN": 5
   },
   "mode": "human",
-  "harnessVersionInstalled": "1.5.7"
+  "harnessVersionInstalled": "1.5.15",
+  "upstream": {
+    "type": "git",
+    "url": "https://github.com/mir3626/vibe-doctor.git"
+  }
 }

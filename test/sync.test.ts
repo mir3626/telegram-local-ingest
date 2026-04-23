@@ -14,6 +14,13 @@ import {
   type HybridFileConfig,
   type SyncManifest,
 } from '../src/lib/sync.js';
+import {
+  resolveMissingUpstream,
+  resolvePinnedRefUpdateCandidate,
+  resolvePostSyncTypecheckArgs,
+  resolveUpstreamRef,
+} from '../src/commands/sync.js';
+import type { VibeConfig } from '../src/lib/config.js';
 
 const tempDirs: string[] = [];
 
@@ -36,6 +43,112 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
+
+function minimalConfig(overrides: Partial<VibeConfig> = {}): VibeConfig {
+  return {
+    orchestrator: 'x',
+    harnessVersion: '1.4.3',
+    harnessVersionInstalled: '1.4.3',
+    upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: 'v1.4.3' },
+    sprintRoles: { planner: 'a', generator: 'b', evaluator: 'c' },
+    sprint: { unit: 'feature', subAgentPerRole: true, freshContextPerSprint: true },
+    providers: {},
+    ...overrides,
+  };
+}
+
+describe('resolveUpstreamRef', () => {
+  it('keeps a semver upstream ref pinned by default', () => {
+    assert.equal(resolveUpstreamRef(minimalConfig(), undefined, { latestVersion: 'v1.5.9' }), 'v1.4.3');
+  });
+
+  it('uses cached latestVersion for a pinned ref only after an explicit update decision', () => {
+    assert.equal(resolveUpstreamRef(minimalConfig(), undefined, { latestVersion: 'v1.5.9' }, 'update'), 'v1.5.9');
+  });
+
+  it('uses cached latestVersion for unpinned default sync when the project is behind', () => {
+    const config = minimalConfig({
+      upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git' },
+    });
+
+    assert.equal(resolveUpstreamRef(config, undefined, { latestVersion: 'v1.5.9' }), 'v1.5.9');
+  });
+
+  it('keeps explicit --ref override as the highest priority', () => {
+    assert.equal(resolveUpstreamRef(minimalConfig(), 'v1.4.3', { latestVersion: 'v1.5.9' }), 'v1.4.3');
+  });
+
+  it('preserves non-version upstream refs such as main or feature branches', () => {
+    const config = minimalConfig({
+      upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: 'main' },
+    });
+
+    assert.equal(resolveUpstreamRef(config, undefined, { latestVersion: 'v1.5.9' }), 'main');
+  });
+
+  it('ignores stale cached latestVersion values', () => {
+    assert.equal(resolveUpstreamRef(minimalConfig(), undefined, { latestVersion: 'v1.4.3' }), 'v1.4.3');
+  });
+
+  it('reports an update candidate only when a pinned semver ref is behind latestVersion', () => {
+    assert.deepEqual(resolvePinnedRefUpdateCandidate(minimalConfig(), { latestVersion: 'v1.5.9' }), {
+      pinnedRef: 'v1.4.3',
+      latestRef: 'v1.5.9',
+    });
+    assert.equal(resolvePinnedRefUpdateCandidate(minimalConfig(), { latestVersion: 'v1.4.3' }), undefined);
+    assert.equal(
+      resolvePinnedRefUpdateCandidate(
+        minimalConfig({ upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: 'main' } }),
+        { latestVersion: 'v1.5.9' },
+      ),
+      undefined,
+    );
+  });
+});
+
+describe('resolvePostSyncTypecheckArgs', () => {
+  it('uses the harness tsconfig when present', async () => {
+    const root = await makeTempDir('sync-typecheck-harness-');
+    await writeFile(path.join(root, 'tsconfig.harness.json'), '{}\n', 'utf8');
+
+    assert.deepEqual(await resolvePostSyncTypecheckArgs(root), ['tsc', '-p', 'tsconfig.harness.json', '--noEmit']);
+  });
+
+  it('falls back to the legacy root tsconfig command when harness tsconfig is absent', async () => {
+    const root = await makeTempDir('sync-typecheck-root-');
+
+    assert.deepEqual(await resolvePostSyncTypecheckArgs(root), ['tsc', '--noEmit']);
+  });
+});
+
+describe('resolveMissingUpstream', () => {
+  it('preserves existing upstream config', () => {
+    const upstream = { type: 'git' as const, url: 'https://example.com/custom.git', ref: 'main' };
+
+    assert.deepEqual(resolveMissingUpstream({ upstream }, 'https://github.com/mir3626/vibe-doctor.git', 'app'), upstream);
+  });
+
+  it('uses vibe-doctor origin for template-derived dogfood clones', () => {
+    assert.deepEqual(
+      resolveMissingUpstream({}, 'https://github.com/acme/vibe-doctor.git', 'dogfood10'),
+      { type: 'git', url: 'https://github.com/acme/vibe-doctor.git' },
+    );
+  });
+
+  it('falls back to the default harness upstream for product repositories', () => {
+    assert.deepEqual(
+      resolveMissingUpstream({}, 'https://github.com/mir3626/telegram-local-ingest.git', 'telegram-local-ingest'),
+      { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git' },
+    );
+  });
+
+  it('marks the template source checkout as self instead of self-syncing', () => {
+    assert.deepEqual(
+      resolveMissingUpstream({}, 'https://github.com/mir3626/vibe-doctor.git', 'vibe-doctor'),
+      { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', self: true },
+    );
+  });
+});
 
 describe('sectionMerge', () => {
   const config: HybridFileConfig = {
@@ -550,6 +663,22 @@ describe('sync manifest', () => {
     assert.equal(manifest.files.harness.includes('docs/release/v1.5.5.md'), true);
     assert.equal(manifest.files.harness.includes('docs/release/v1.5.6.md'), true);
     assert.equal(manifest.files.harness.includes('docs/release/v1.5.7.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.8.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.9.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.10.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.11.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.12.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.13.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.14.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.15.md'), true);
+    assert.equal(manifest.files.harness.includes('.codex/skills/**'), true);
+    assert.equal(manifest.files.harness.includes('test/init-guard.test.ts'), true);
+    assert.equal(manifest.files.harness.includes('test/codex-skills.test.ts'), true);
+    assert.equal(manifest.files.harness.includes('test/upstream-bootstrap.test.ts'), true);
+    assert.equal(manifest.files.harness.includes('test/vibe-sync-bootstrap.test.ts'), true);
+    assert.equal(manifest.files.harness.includes('.claude/statusline.mjs'), true);
+    assert.equal(manifest.files.harness.includes('tsconfig.harness.json'), true);
+    assert.equal(Boolean(manifest.files.hybrid['tsconfig.json']), false);
     assert.equal(manifest.files.harness.includes('.gitignore'), false);
     assert.equal(manifest.files.harness.includes('.env.example'), false);
     assert.equal(manifest.files.harness.includes('.github/workflows/ci.yml'), false);

@@ -146,18 +146,32 @@ async function stopDashboard(root) {
   process.stdout.write(`dashboard stopped pid=${pid}\n`);
 }
 
-function openBrowser(url, spawnFn = spawn, platform = process.platform) {
+function warnOpenFailure(target, error, stderr = process.stderr) {
+  const message = error instanceof Error ? error.message : String(error);
+  stderr.write(`Warning: could not open ${target}: ${message}\n`);
+}
+
+export function openBrowser(url, spawnFn = spawn, platform = process.platform, stderr = process.stderr) {
   const argsByPlatform =
     platform === 'win32'
       ? ['cmd', ['/c', 'start', '""', url]]
       : platform === 'darwin'
         ? ['open', [url]]
         : ['xdg-open', [url]];
-  const child = spawnFn(argsByPlatform[0], argsByPlatform[1], {
-    detached: true,
-    stdio: 'ignore',
-  });
-  child.unref();
+  try {
+    const child = spawnFn(argsByPlatform[0], argsByPlatform[1], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    if (typeof child?.on === 'function') {
+      child.on('error', (error) => warnOpenFailure('dashboard', error, stderr));
+    }
+    if (typeof child?.unref === 'function') {
+      child.unref();
+    }
+  } catch (error) {
+    warnOpenFailure('dashboard', error, stderr);
+  }
 }
 
 async function resolveConfig(root) {
@@ -677,11 +691,7 @@ export async function runDashboard(argv = process.argv.slice(2), options = {}) {
   const url = `http://127.0.0.1:${actualPort}`;
   process.stdout.write(`${url}\n`);
   if (!flags.noOpen) {
-    try {
-      openBrowser(url);
-    } catch (error) {
-      process.stderr.write(`Warning: could not open dashboard: ${error.message}\n`);
-    }
+    openBrowser(url);
   }
 
   const shutdown = () => {

@@ -235,9 +235,11 @@ describe('meta smoke', () => {
       'scripts/vibe-browser-smoke.mjs',
       '.claude/skills/vibe-review/SKILL.md',
       'docs/context/harness-gaps.md',
+      '.claude/statusline.mjs',
       '.claude/statusline.sh',
       'scripts/vibe-status-tick.mjs',
       'scripts/vibe-sprint-mode.mjs',
+      'tsconfig.harness.json',
     ];
 
     for (const entry of requiredEntries) {
