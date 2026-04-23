@@ -224,7 +224,7 @@ Telegram mobile/desktop
   - Agent input is a prepared data package, not arbitrary workspace access.
   - Agent writes only output artifacts; `raw/**` remains immutable.
   - Claude Code can be added later behind the same interface.
-- **status**: pending.
+- **status**: in progress. First slice added `packages/agent-adapter`, local command placeholder/stdin prompt execution, prompt hard-boundaries, output/work directory separation, raw snapshot protection, and disabled-by-default config via `AGENT_POSTPROCESS_PROVIDER`.
 
 ## Sprint 12 — Utility Cleanup And Bot Separation Prep
 

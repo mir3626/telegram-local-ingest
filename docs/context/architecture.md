@@ -40,7 +40,7 @@ Telegram clients
    - `packages/output-store`: Runtime-only downloadable output registration, expiry, and cleanup.
    - `packages/preprocessors`: Deterministic text/transcript collection boundary before agent execution.
    - `packages/language-detector`: Script-based primary-language and translation-needed check.
-   - Planned `packages/agent-adapter`: Codex-first local agent execution boundary, with Claude Code as a future provider.
+   - `packages/agent-adapter`: Local command adapter for Codex-first translation/formatting execution, with Claude Code as a future provider.
 
 ## Runtime Directories
 
@@ -80,6 +80,8 @@ The post-processing utility layer extends this loop after source artifacts exist
 6. Periodically delete expired output files and mark them deleted in SQLite.
 
 Sprint 10 currently records `preprocess.completed` and `language.detected` job events during the `INGESTING` phase. The worker reads imported text-like originals and bundled `*.transcript.md` files, strips transcript Markdown boilerplate before language scoring, and stores only artifact metadata plus language signals in SQLite rather than duplicating source text in the database.
+
+Sprint 11 starts with `packages/agent-adapter`. The adapter builds a job-scoped prompt, writes it into a separate `.agent-work` directory, runs a configured local command with `{promptFile}`, `{outputDir}`, `{bundlePath}`, and `{jobId}` placeholders or stdin prompt delivery, snapshots `raw/**` before/after execution, and rejects any raw mutation. Worker integration and output registration are the next slice.
 
 ## Obsidian Vault Layout
 

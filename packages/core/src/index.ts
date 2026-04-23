@@ -87,6 +87,14 @@ export interface TranslationConfig {
   targetLanguage: string;
 }
 
+export type AgentPostprocessProvider = "none" | "codex" | "custom";
+
+export interface AgentPostprocessConfig {
+  provider: AgentPostprocessProvider;
+  command?: string;
+  timeoutMs: number;
+}
+
 export interface AppConfig {
   telegram: TelegramConfig;
   runtime: RuntimeConfig;
@@ -96,6 +104,7 @@ export interface AppConfig {
   sensevoice: SenseVoiceConfig;
   wiki: WikiAdapterConfig;
   translation: TranslationConfig;
+  agent: AgentPostprocessConfig;
 }
 
 export class ConfigError extends Error {
@@ -174,6 +183,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   );
   const senseVoiceTimeoutMs = parseInteger(env.SENSEVOICE_TIMEOUT_MS, 60 * 60 * 1000, "SENSEVOICE_TIMEOUT_MS", issues);
   const senseVoiceTorchNumThreads = parseOptionalInteger(env.SENSEVOICE_TORCH_NUM_THREADS, "SENSEVOICE_TORCH_NUM_THREADS", issues);
+  const agentPostprocessTimeoutMs = parseInteger(
+    env.AGENT_POSTPROCESS_TIMEOUT_MS,
+    30 * 60 * 1000,
+    "AGENT_POSTPROCESS_TIMEOUT_MS",
+    issues,
+  );
 
   const config: AppConfig = {
     telegram: {
@@ -220,6 +235,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       defaultRelation: readNonEmpty(env.TRANSLATION_DEFAULT_RELATION) ?? "business",
       targetLanguage: readNonEmpty(env.TRANSLATION_TARGET_LANGUAGE) ?? "ko",
     },
+    agent: {
+      provider: parseAgentPostprocessProvider(env.AGENT_POSTPROCESS_PROVIDER, issues),
+      timeoutMs: agentPostprocessTimeoutMs,
+    },
   };
 
   assignOptional(config.telegram, "apiId", optional("TELEGRAM_API_ID"));
@@ -232,6 +251,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     config.sensevoice.torchNumThreads = senseVoiceTorchNumThreads;
   }
   assignOptional(config.wiki, "ingestCommand", optional("WIKI_INGEST_COMMAND"));
+  assignOptional(config.agent, "command", optional("AGENT_POSTPROCESS_COMMAND"));
 
   if (pollTimeoutSeconds < 1 || pollTimeoutSeconds > 100) {
     issues.push("TELEGRAM_POLL_TIMEOUT_SECONDS must be between 1 and 100");
@@ -262,6 +282,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (senseVoiceTorchNumThreads !== undefined && senseVoiceTorchNumThreads < 1) {
     issues.push("SENSEVOICE_TORCH_NUM_THREADS must be at least 1");
+  }
+  if (agentPostprocessTimeoutMs < 1) {
+    issues.push("AGENT_POSTPROCESS_TIMEOUT_MS must be at least 1");
+  }
+  if (config.agent.provider !== "none" && !config.agent.command) {
+    issues.push("AGENT_POSTPROCESS_COMMAND is required when AGENT_POSTPROCESS_PROVIDER is enabled");
   }
 
   if (issues.length > 0) {
@@ -349,6 +375,15 @@ function parseSttProvider(value: string | undefined, issues: string[]): SttProvi
   }
   issues.push("STT_PROVIDER must be one of: rtzr, sensevoice, none");
   return "rtzr";
+}
+
+function parseAgentPostprocessProvider(value: string | undefined, issues: string[]): AgentPostprocessProvider {
+  const raw = readNonEmpty(value) ?? "none";
+  if (raw === "none" || raw === "codex" || raw === "custom") {
+    return raw;
+  }
+  issues.push("AGENT_POSTPROCESS_PROVIDER must be one of: none, codex, custom");
+  return "none";
 }
 
 function normalizeBaseUrl(value: string, key: string, issues: string[]): string {

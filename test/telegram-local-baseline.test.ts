@@ -43,6 +43,9 @@ test("loadConfig applies local Bot API defaults and parses allowlist", () => {
   assert.equal(config.sensevoice.device, "cpu");
   assert.equal(config.sensevoice.language, "auto");
   assert.equal(config.sensevoice.timeoutMs, 60 * 60 * 1000);
+  assert.equal(config.translation.targetLanguage, "ko");
+  assert.equal(config.agent.provider, "none");
+  assert.equal(config.agent.timeoutMs, 30 * 60 * 1000);
 });
 
 test("loadConfig supports SenseVoice local CPU STT", () => {
@@ -59,6 +62,35 @@ test("loadConfig supports SenseVoice local CPU STT", () => {
   assert.equal(config.sensevoice.model, "iic/SenseVoiceSmall");
   assert.equal(config.sensevoice.vadModel, "fsmn-vad");
   assert.equal(config.sensevoice.torchNumThreads, 4);
+});
+
+test("loadConfig supports local agent post-processing settings", () => {
+  const config = loadConfig({
+    TELEGRAM_BOT_TOKEN: "123:abc",
+    OBSIDIAN_VAULT_PATH: "C:/vault",
+    AGENT_POSTPROCESS_PROVIDER: "codex",
+    AGENT_POSTPROCESS_COMMAND: "codex exec --prompt {promptFile}",
+    AGENT_POSTPROCESS_TIMEOUT_MS: "120000",
+    TRANSLATION_TARGET_LANGUAGE: "en",
+  });
+
+  assert.equal(config.agent.provider, "codex");
+  assert.equal(config.agent.command, "codex exec --prompt {promptFile}");
+  assert.equal(config.agent.timeoutMs, 120000);
+  assert.equal(config.translation.targetLanguage, "en");
+});
+
+test("loadConfig requires an agent command when post-processing is enabled", () => {
+  assert.throws(
+    () => loadConfig({
+      TELEGRAM_BOT_TOKEN: "123:abc",
+      OBSIDIAN_VAULT_PATH: "C:/vault",
+      AGENT_POSTPROCESS_PROVIDER: "codex",
+    }),
+    (error) =>
+      error instanceof ConfigError &&
+      error.issues.includes("AGENT_POSTPROCESS_COMMAND is required when AGENT_POSTPROCESS_PROVIDER is enabled"),
+  );
 });
 
 test("loadNearestEnvFile searches parent directories without overwriting env", () => {

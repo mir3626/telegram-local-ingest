@@ -432,6 +432,10 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
       defaultRelation: "business",
       targetLanguage: "ko",
     },
+    agent: {
+      provider: "none",
+      timeoutMs: 30 * 60 * 1000,
+    },
   };
 }
 
