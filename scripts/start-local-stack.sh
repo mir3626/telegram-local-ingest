@@ -34,6 +34,30 @@ write_pid() {
   printf '%s\n' "$pid" > "$pid_file"
 }
 
+start_detached() {
+  local log_file="$1"
+  shift
+  if command -v setsid >/dev/null 2>&1; then
+    nohup setsid "$@" >> "$log_file" 2>&1 &
+  else
+    nohup "$@" >> "$log_file" 2>&1 &
+  fi
+  printf '%s\n' "$!"
+}
+
+wait_until_alive() {
+  local name="$1"
+  local pid="$2"
+  for _ in {1..20}; do
+    if is_alive "$pid"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "$name failed to stay running: pid=$pid"
+  return 1
+}
+
 pid_from_file() {
   local pid_file="$1"
   [[ -f "$pid_file" ]] && sed -n '1p' "$pid_file" || true
@@ -67,16 +91,17 @@ start_bot_api() {
 
   mkdir -p "$BOT_API_DIR" "$BOT_API_TEMP"
   echo "Starting Telegram Local Bot API Server..."
-  nohup "$BOT_API_BIN" \
+  local started_pid
+  started_pid="$(start_detached "$BOT_API_LOG" "$BOT_API_BIN" \
     --api-id="$TELEGRAM_API_ID" \
     --api-hash="$TELEGRAM_API_HASH" \
     --local \
     --dir="$BOT_API_DIR" \
     --temp-dir="$BOT_API_TEMP" \
     --http-ip-address="$BOT_API_HOST" \
-    --http-port="$BOT_API_PORT" \
-    >> "$BOT_API_LOG" 2>&1 &
-  write_pid "$BOT_API_PID" "$!"
+    --http-port="$BOT_API_PORT")"
+  wait_until_alive "Telegram Local Bot API Server" "$started_pid"
+  write_pid "$BOT_API_PID" "$started_pid"
   echo "Telegram Local Bot API Server started: pid=$(cat "$BOT_API_PID"), log=$BOT_API_LOG"
 }
 
@@ -97,9 +122,10 @@ start_worker() {
   npm run smoke:ready
 
   echo "Starting telegram-local-ingest worker..."
-  nohup bash -lc "cd '$ROOT_DIR' && if [ -f \"\$HOME/.nvm/nvm.sh\" ]; then . \"\$HOME/.nvm/nvm.sh\"; fi; npm run worker:dev" \
-    >> "$WORKER_LOG" 2>&1 &
-  write_pid "$WORKER_PID" "$!"
+  local started_pid
+  started_pid="$(start_detached "$WORKER_LOG" bash -lc "cd '$ROOT_DIR' && if [ -f \"\$HOME/.nvm/nvm.sh\" ]; then . \"\$HOME/.nvm/nvm.sh\"; fi; npm run worker:dev")"
+  wait_until_alive "telegram-local-ingest worker" "$started_pid"
+  write_pid "$WORKER_PID" "$started_pid"
   echo "telegram-local-ingest worker started: pid=$(cat "$WORKER_PID"), log=$WORKER_LOG"
 }
 

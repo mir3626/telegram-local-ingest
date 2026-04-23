@@ -8,7 +8,7 @@ Use the project wrapper so the worker can run from a job-scoped `.agent-work` di
 
 ```env
 AGENT_POSTPROCESS_PROVIDER=codex
-AGENT_POSTPROCESS_COMMAND={projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}
+AGENT_POSTPROCESS_COMMAND='{projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}'
 AGENT_POSTPROCESS_TIMEOUT_MS=1800000
 ```
 

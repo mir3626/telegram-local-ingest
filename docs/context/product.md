@@ -27,7 +27,7 @@ The next product layer adds a personal utility flow on top of the ingest pipelin
 
 1. User uploads a file to the allowlisted Telegram bot.
 2. Worker imports the file, runs type-specific preprocessing, and writes immutable source evidence.
-3. Worker runs a deterministic language/translation-needed check over extracted text or transcripts.
+3. Worker runs a deterministic language/translation-needed check over extracted text, DOCX text, or transcripts.
 4. If translation or formatting is needed, worker calls a local agent adapter. Codex is the first provider; Claude Code can be added through the same adapter later.
 5. Agent output is written to an output-only workspace and, when appropriate, to the wiki boundary. `raw/**` remains immutable.
 6. Worker sends a Telegram completion message with a download button. Downloadable outputs expire after 24 hours and are deleted from runtime storage.
@@ -36,7 +36,7 @@ The utility layer is intentionally designed for later extraction into a separate
 `TRANSLATION_TARGET_LANGUAGE` defaults to `ko`; `TRANSLATION_DEFAULT_RELATION` defaults to `business` for later prompt tone and terminology handling.
 Local agent post-processing is disabled by default through `AGENT_POSTPROCESS_PROVIDER=none`; enabling Codex or a custom command requires an explicit `AGENT_POSTPROCESS_COMMAND`. When enabled, the worker runs the agent only for jobs whose deterministic language check says translation is needed, then stores downloadable generated files under the 24-hour runtime output cache and sends Telegram download buttons. The Codex recipe uses `{projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}`.
 
-Regenerate and discard output actions have hidden callback interfaces for future utility-bot UX. Discard is functional for runtime cache cleanup; regenerate currently records an intent event only.
+Regenerate and discard output actions have hidden callback interfaces for future utility-bot UX. Discard is functional for runtime cache cleanup; regenerate currently records an intent event only. Exposing these controls as user-facing Telegram buttons is a low-priority follow-up goal after the upload, post-processing, and download path is stable.
 
 ## Success Criteria
 

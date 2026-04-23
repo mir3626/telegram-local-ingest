@@ -1061,6 +1061,7 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
     job,
     files: listJobFiles(context.db, job.id),
     sourceBundle: bundle,
+    artifactRoot: resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, "preprocess"),
   });
   appendJobEvent(context.db, job.id, "preprocess.completed", "Preprocessing text collection completed", {
     artifactCount: preprocessing.artifacts.length,

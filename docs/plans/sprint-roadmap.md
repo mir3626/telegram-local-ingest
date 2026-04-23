@@ -208,7 +208,7 @@ Telegram mobile/desktop
 - **acceptance criteria**:
   - Worker can decide whether translation is needed without asking an LLM.
   - Unsupported file types are preserved and logged without blocking the source bundle.
-- **status**: completed. Added `packages/preprocessors`, `packages/language-detector`, `TRANSLATION_TARGET_LANGUAGE`, and worker `preprocess.completed`/`language.detected` events during `INGESTING`. Current preprocessing reads text-like imported originals and bundled transcript Markdown, preserving unsupported files without blocking the job.
+- **status**: completed. Added `packages/preprocessors`, `packages/language-detector`, `TRANSLATION_TARGET_LANGUAGE`, and worker `preprocess.completed`/`language.detected` events during `INGESTING`. Current preprocessing reads text-like imported originals, extracts DOCX text into runtime-only artifacts, and reads bundled transcript Markdown, preserving unsupported files without blocking the job.
 
 ## Sprint 11 — Codex Agent Post-Processing
 
@@ -235,8 +235,9 @@ Telegram mobile/desktop
   - Add scheduled cleanup cadence to the worker loop.
   - Add operator-facing output status messages.
   - Document the personal-OAuth-only operating boundary and API migration path for future paid service use.
+  - Later, expose regenerate/discard controls in Telegram only after the primary upload, post-processing, and download flow is stable. This is a low-priority follow-up.
 - **acceptance criteria**:
   - Utility concerns are isolated from wiki/raw capture concerns.
   - Expired output cleanup is repeatable after worker restart.
   - Public/multi-user service constraints are documented.
-- **status**: in progress. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent.
+- **status**: in progress. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent. User-facing regenerate/discard controls are deliberately parked as low-priority follow-up work.
