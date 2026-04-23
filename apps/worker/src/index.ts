@@ -1,7 +1,13 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 
+import {
+  runAgentPostprocess,
+  type AgentPostprocessInput,
+  type AgentPostprocessResult,
+} from "@telegram-local-ingest/agent-adapter";
 import { createIngestJobFromTelegramMessage, createQueuedJobFromTelegramMessage } from "@telegram-local-ingest/capture";
 import { type AppConfig, ConfigError, loadConfig, loadNearestEnvFile } from "@telegram-local-ingest/core";
 import {
@@ -11,6 +17,7 @@ import {
   getTelegramOffset,
   listJobEvents,
   listJobFiles,
+  listJobOutputs,
   listJobs,
   migrate,
   mustGetJob,
@@ -23,6 +30,7 @@ import {
   type StoredJob,
   type StoredJobEvent,
   type StoredJobFile,
+  type StoredJobOutput,
 } from "@telegram-local-ingest/db";
 import { cleanupTelegramSourceFiles, importTelegramJobFiles, resolveRuntimePath } from "@telegram-local-ingest/importer";
 import {
@@ -30,7 +38,7 @@ import {
   buildJobFailureMessage,
   sendOperatorCommandResponse,
 } from "@telegram-local-ingest/operator";
-import { cleanupExpiredOutputs, resolveDownloadableOutput } from "@telegram-local-ingest/output-store";
+import { cleanupExpiredOutputs, createRuntimeOutput, resolveDownloadableOutput } from "@telegram-local-ingest/output-store";
 import { collectPreprocessedTextArtifacts } from "@telegram-local-ingest/preprocessors";
 import { detectLanguageAcrossArtifacts, type DetectedLanguage } from "@telegram-local-ingest/language-detector";
 import {
@@ -68,6 +76,7 @@ export interface WorkerContext {
   telegram: TelegramBotApiClient;
   rtzr?: RtzrTranscriber;
   sensevoice?: SenseVoiceTranscriber;
+  agent?: AgentPostprocessor;
 }
 
 export interface RtzrTranscriber {
@@ -84,6 +93,10 @@ export interface SenseVoiceTranscriber {
     options: SenseVoiceTranscribeOptions,
     onProgress?: SenseVoiceProgressHandler,
   ): Promise<SenseVoiceTranscript>;
+}
+
+export interface AgentPostprocessor {
+  postprocess(input: AgentPostprocessInput): Promise<AgentPostprocessResult>;
 }
 
 export interface WorkerOnceResult {
@@ -244,6 +257,9 @@ export async function createWorkerContext(config: AppConfig): Promise<WorkerCont
   const sensevoice = config.stt.provider === "sensevoice"
     ? new LocalSenseVoiceClient()
     : undefined;
+  const agent = config.agent.provider === "none"
+    ? undefined
+    : { postprocess: (input: AgentPostprocessInput) => runAgentPostprocess(input) };
   const health = await checkTelegramLocalBotApi(telegram);
   if (!health.ok) {
     dbHandle.close();
@@ -256,6 +272,7 @@ export async function createWorkerContext(config: AppConfig): Promise<WorkerCont
     telegram,
     ...(rtzr ? { rtzr } : {}),
     ...(sensevoice ? { sensevoice } : {}),
+    ...(agent ? { agent } : {}),
   };
 }
 
@@ -420,6 +437,9 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       logWorker(`preprocessing phase started job=${job.id}`, "info", "PREPROCESS");
       await runPreprocessingAndLanguageCheck(context, job);
       logWorker(`preprocessing phase finished job=${job.id}`, "info", "PREPROCESS");
+      logWorker(`agent postprocess phase started job=${job.id} provider=${context.config.agent.provider}`, "info", "AGENT");
+      await runConfiguredAgentPostprocess(context, job);
+      logWorker(`agent postprocess phase finished job=${job.id} provider=${context.config.agent.provider}`, "info", "AGENT");
       logWorker(`wiki adapter phase started job=${job.id}`, "info", "WIKI");
       await runConfiguredWikiAdapter(context, job);
       logWorker(`wiki adapter phase finished job=${job.id}`, "info", "WIKI");
@@ -430,7 +450,13 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     if (job.status === "NOTIFYING") {
       logWorker(`sending completion notification job=${job.id}`, "info", "NOTIFY");
       if (job.chatId) {
-        await context.telegram.sendMessage(job.chatId, buildJobCompletionMessage(job, listJobFiles(context.db, job.id)));
+        const files = listJobFiles(context.db, job.id);
+        const outputs = listActiveJobOutputs(context.db, job.id);
+        await context.telegram.sendMessage(
+          job.chatId,
+          buildCompletionNotification(job, files, outputs),
+          outputs.length > 0 ? { replyMarkup: buildDownloadKeyboard(outputs) } : {},
+        );
       }
       const completed = transitionJob(context.db, job.id, "COMPLETED", { message: "Completed" });
       const cleanup = await cleanupTelegramSourceFiles(context.db, context.telegram, job.id);
@@ -861,6 +887,98 @@ async function runConfiguredWikiAdapter(context: WorkerContext, job: StoredJob):
   });
 }
 
+async function runConfiguredAgentPostprocess(context: WorkerContext, job: StoredJob): Promise<StoredJobOutput[]> {
+  const events = listJobEvents(context.db, job.id);
+  if (events.some((event) => event.type === "agent.postprocess.completed")) {
+    logWorker(`agent postprocess already completed job=${job.id}`, "info", "AGENT");
+    return listActiveJobOutputs(context.db, job.id);
+  }
+  if (events.some((event) => event.type === "agent.postprocess.skipped")) {
+    logWorker(`agent postprocess already skipped job=${job.id}`, "info", "AGENT");
+    return [];
+  }
+
+  const language = readLanguageDetection(events);
+  if (!language) {
+    appendJobEvent(context.db, job.id, "agent.postprocess.skipped", "Language detection result is not available");
+    logWorker(`agent postprocess skipped job=${job.id} reason=no_language_detection`, "warn", "AGENT");
+    return [];
+  }
+  if (!language.translationNeeded) {
+    appendJobEvent(context.db, job.id, "agent.postprocess.skipped", "Translation is not needed", {
+      primaryLanguage: language.primaryLanguage,
+      targetLanguage: language.targetLanguage,
+      reason: language.reason,
+    });
+    logWorker(`agent postprocess skipped job=${job.id} reason=translation_not_needed`, "info", "AGENT");
+    return [];
+  }
+  if (context.config.agent.provider === "none") {
+    appendJobEvent(context.db, job.id, "agent.postprocess.skipped", "AGENT_POSTPROCESS_PROVIDER is none", {
+      primaryLanguage: language.primaryLanguage,
+      targetLanguage: language.targetLanguage,
+    });
+    logWorker(`agent postprocess skipped job=${job.id} reason=provider_none`, "info", "AGENT");
+    return [];
+  }
+  if (!context.config.agent.command) {
+    throw new Error("AGENT_POSTPROCESS_COMMAND is required when agent postprocess is enabled");
+  }
+
+  const bundle = mustGetSourceBundleForJob(context.db, job.id);
+  const outputDir = resolveRuntimePath(context.config.runtime.runtimeDir, "agent-postprocess", job.id, "outputs");
+  await fs.rm(outputDir, { recursive: true, force: true });
+  const agent = context.agent ?? { postprocess: (input: AgentPostprocessInput) => runAgentPostprocess(input) };
+  const result = await agent.postprocess({
+    command: context.config.agent.command,
+    jobId: job.id,
+    bundlePath: bundle.bundlePath,
+    rawRoot: path.resolve(context.config.vault.obsidianVaultPath, context.config.vault.rawRoot),
+    outputDir,
+    targetLanguage: context.config.translation.targetLanguage,
+    defaultRelation: context.config.translation.defaultRelation,
+    language,
+    artifacts: readPreprocessedArtifacts(events),
+    ...(job.instructions ? { instructions: job.instructions } : {}),
+    timeoutMs: context.config.agent.timeoutMs,
+  });
+
+  const generatedFiles = await listGeneratedFiles(result.outputDir);
+  if (generatedFiles.length === 0) {
+    throw new Error(`Agent postprocess did not create any output files: ${result.outputDir}`);
+  }
+
+  const outputs: StoredJobOutput[] = [];
+  for (const file of generatedFiles) {
+    const mimeType = inferMimeType(file.relativePath);
+    outputs.push(await createRuntimeOutput({
+      db: context.db,
+      jobId: job.id,
+      runtimeDir: context.config.runtime.runtimeDir,
+      sourcePath: file.path,
+      kind: "agent_translation",
+      fileName: file.relativePath,
+      ...(mimeType ? { mimeType } : {}),
+    }));
+  }
+  appendJobEvent(context.db, job.id, "agent.postprocess.completed", "Agent postprocess completed", {
+    provider: context.config.agent.provider,
+    command: result.command,
+    args: result.args,
+    promptPath: result.promptPath,
+    outputDir: result.outputDir,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    outputs: outputs.map((output) => ({
+      outputId: output.id,
+      fileName: output.fileName,
+      expiresAt: output.expiresAt,
+    })),
+  });
+  logWorker(`agent outputs registered job=${job.id} count=${outputs.length}`, "info", "OUTPUT");
+  return outputs;
+}
+
 async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: StoredJob): Promise<void> {
   const events = listJobEvents(context.db, job.id);
   if (events.some((event) => event.type === "language.detected")) {
@@ -934,6 +1052,27 @@ function logWorker(message: string, level: "info" | "warn" = "info", tag = "GENE
     return;
   }
   console.log(line);
+}
+
+function buildCompletionNotification(job: StoredJob, files: StoredJobFile[], outputs: StoredJobOutput[]): string {
+  if (outputs.length === 0) {
+    return buildJobCompletionMessage(job, files);
+  }
+  return [
+    `✅ 업로드한 파일의 자동번역이 완료되었습니다: ${job.id}${job.project ? ` (${job.project})` : ""}`,
+    ...files.map((file) => `- ${file.originalName ?? file.id}`),
+    "",
+    "📎 결과 파일은 24시간 동안 다운로드할 수 있습니다.",
+  ].join("\n");
+}
+
+function buildDownloadKeyboard(outputs: StoredJobOutput[]): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: outputs.map((output, index) => [{
+      text: outputs.length === 1 ? "⬇️ 다운로드 (24시간)" : `⬇️ ${index + 1}. ${truncateButtonLabel(output.fileName)}`,
+      callback_data: `download:${output.id}`,
+    }]),
+  };
 }
 
 function buildQueuedMessage(jobId: string, fileNames: string[]): string {
@@ -1134,6 +1273,105 @@ function artifactStem(value: string): string {
 
 function normalizedTranslationTargetLanguage(value: string): Exclude<DetectedLanguage, "mixed" | "unknown"> {
   return value === "en" || value === "zh" || value === "ja" ? value : "ko";
+}
+
+function readLanguageDetection(events: StoredJobEvent[]): AgentPostprocessInput["language"] | null {
+  const event = [...events].reverse().find((candidate) => candidate.type === "language.detected");
+  if (!event || !isRecord(event.data)) {
+    return null;
+  }
+  const data = event.data;
+  if (typeof data.primaryLanguage !== "string" || typeof data.translationNeeded !== "boolean") {
+    return null;
+  }
+  return {
+    primaryLanguage: data.primaryLanguage,
+    confidence: typeof data.confidence === "number" ? data.confidence : 0,
+    translationNeeded: data.translationNeeded,
+    targetLanguage: typeof data.targetLanguage === "string" ? data.targetLanguage : "ko",
+    ...(typeof data.reason === "string" ? { reason: data.reason } : {}),
+  };
+}
+
+function readPreprocessedArtifacts(events: StoredJobEvent[]): AgentPostprocessInput["artifacts"] {
+  const event = [...events].reverse().find((candidate) => candidate.type === "preprocess.completed");
+  if (!event || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
+    return [];
+  }
+  return event.data.artifacts.flatMap((artifact): AgentPostprocessInput["artifacts"] => {
+    if (!isRecord(artifact) || typeof artifact.id !== "string" || typeof artifact.sourcePath !== "string") {
+      return [];
+    }
+    return [{
+      id: artifact.id,
+      kind: typeof artifact.kind === "string" ? artifact.kind : "unknown",
+      fileName: typeof artifact.fileName === "string" ? artifact.fileName : artifact.id,
+      sourcePath: artifact.sourcePath,
+      charCount: typeof artifact.charCount === "number" ? artifact.charCount : 0,
+      truncated: typeof artifact.truncated === "boolean" ? artifact.truncated : false,
+    }];
+  });
+}
+
+function listActiveJobOutputs(db: DatabaseSync, jobId: string): StoredJobOutput[] {
+  const now = new Date().toISOString();
+  return listJobOutputs(db, jobId).filter((output) => !output.deletedAt && output.expiresAt > now);
+}
+
+async function listGeneratedFiles(root: string): Promise<Array<{ path: string; relativePath: string }>> {
+  const resolvedRoot = path.resolve(root);
+  const files: Array<{ path: string; relativePath: string }> = [];
+  await collectGeneratedFiles(resolvedRoot, resolvedRoot, files);
+  return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+async function collectGeneratedFiles(
+  root: string,
+  current: string,
+  files: Array<{ path: string; relativePath: string }>,
+): Promise<void> {
+  for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+    const fullPath = path.join(current, entry.name);
+    if (entry.isDirectory()) {
+      await collectGeneratedFiles(root, fullPath, files);
+      continue;
+    }
+    if (entry.isFile()) {
+      files.push({
+        path: fullPath,
+        relativePath: path.relative(root, fullPath).replace(/\\/g, "/"),
+      });
+    }
+  }
+}
+
+function inferMimeType(fileName: string): string | undefined {
+  const extension = path.extname(fileName).toLowerCase();
+  switch (extension) {
+    case ".md":
+      return "text/markdown";
+    case ".txt":
+      return "text/plain";
+    case ".csv":
+      return "text/csv";
+    case ".json":
+      return "application/json";
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".pdf":
+      return "application/pdf";
+    case ".docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case ".xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    default:
+      return undefined;
+  }
+}
+
+function truncateButtonLabel(value: string): string {
+  return value.length > 32 ? `${value.slice(0, 29)}...` : value;
 }
 
 function resolveProjectRelativePath(value: string): string {

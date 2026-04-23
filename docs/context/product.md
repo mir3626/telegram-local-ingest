@@ -34,7 +34,7 @@ The next product layer adds a personal utility flow on top of the ingest pipelin
 
 The utility layer is intentionally designed for later extraction into a separate bot: preprocessing, language detection, agent execution, and output retention are separate boundaries rather than worker-internal scripts.
 `TRANSLATION_TARGET_LANGUAGE` defaults to `ko`; `TRANSLATION_DEFAULT_RELATION` defaults to `business` for later prompt tone and terminology handling.
-Local agent post-processing is disabled by default through `AGENT_POSTPROCESS_PROVIDER=none`; enabling Codex or a custom command requires an explicit `AGENT_POSTPROCESS_COMMAND`.
+Local agent post-processing is disabled by default through `AGENT_POSTPROCESS_PROVIDER=none`; enabling Codex or a custom command requires an explicit `AGENT_POSTPROCESS_COMMAND`. When enabled, the worker runs the agent only for jobs whose deterministic language check says translation is needed, then stores downloadable generated files under the 24-hour runtime output cache and sends Telegram download buttons.
 
 ## Success Criteria
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import type { AgentPostprocessInput, AgentPostprocessResult } from "@telegram-local-ingest/agent-adapter";
 import type { AppConfig } from "@telegram-local-ingest/core";
 import {
   createJob,
@@ -11,6 +12,7 @@ import {
   getJob,
   getTelegramOffset,
   listJobEvents,
+  listJobOutputs,
   migrate,
   mustGetSourceBundleForJob,
   openIngestDatabase,
@@ -23,6 +25,7 @@ import { TelegramBotApiClient, type FetchLike } from "@telegram-local-ingest/tel
 import {
   pollTelegramUpdatesOnce,
   runWorkerOnce,
+  type AgentPostprocessor,
   type RtzrTranscriber,
   type SenseVoiceTranscriber,
   type WorkerContext,
@@ -70,6 +73,56 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
     assert.equal((languageEvent.data as { translationNeeded: boolean }).translationNeeded, true);
     assert.ok(events.some((event) => event.type === "wiki.skipped"));
     assert.ok(events.some((event) => event.type === "telegram_source.deleted"));
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce runs agent postprocess for translation-needed text and sends a download button", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "documents/lead.txt", "This vendor agreement needs translation and business formatting.");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const agentInputs: AgentPostprocessInput[] = [];
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages),
+      ),
+      agent: mockAgentPostprocessor(agentInputs),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsProcessed, 1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    assert.equal(agentInputs.length, 1);
+    assert.equal(agentInputs[0]?.language.translationNeeded, true);
+    assert.equal(agentInputs[0]?.targetLanguage, "ko");
+    assert.equal(agentInputs[0]?.defaultRelation, "business");
+    assert.ok(agentInputs[0]?.artifacts.some((artifact) => artifact.fileName === "lead.txt"));
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.kind, "agent_translation");
+    assert.equal(outputs[0]?.fileName, "translated.md");
+    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /번역 결과/);
+    const completion = sentMessages.at(-1);
+    assert.match(completion?.text ?? "", /자동번역이 완료되었습니다/);
+    assert.match(completion?.text ?? "", /24시간/);
+    assert.match(JSON.stringify(completion?.reply_markup), /download:/);
+    const events = listJobEvents(dbHandle.db, "tg_300_21");
+    assert.ok(events.some((event) => event.type === "agent.postprocess.completed"));
+    assert.ok(events.some((event) => event.type === "output.created"));
   } finally {
     dbHandle.close();
   }
@@ -713,6 +766,24 @@ function mockDownloadCallbackFetch(
       });
     }
     return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
+function mockAgentPostprocessor(calls: AgentPostprocessInput[]): AgentPostprocessor {
+  return {
+    async postprocess(input): Promise<AgentPostprocessResult> {
+      calls.push(input);
+      fs.mkdirSync(input.outputDir, { recursive: true });
+      fs.writeFileSync(path.join(input.outputDir, "translated.md"), "번역 결과\n", "utf8");
+      return {
+        command: "custom-agent",
+        args: ["--prompt", "prompt.md"],
+        promptPath: path.join(input.outputDir, "..", ".agent-work", "prompt.md"),
+        outputDir: input.outputDir,
+        stdout: "ok",
+        stderr: "",
+      };
+    },
   };
 }
 

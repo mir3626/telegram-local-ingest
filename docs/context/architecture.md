@@ -81,7 +81,7 @@ The post-processing utility layer extends this loop after source artifacts exist
 
 Sprint 10 currently records `preprocess.completed` and `language.detected` job events during the `INGESTING` phase. The worker reads imported text-like originals and bundled `*.transcript.md` files, strips transcript Markdown boilerplate before language scoring, and stores only artifact metadata plus language signals in SQLite rather than duplicating source text in the database.
 
-Sprint 11 starts with `packages/agent-adapter`. The adapter builds a job-scoped prompt, writes it into a separate `.agent-work` directory, runs a configured local command with `{promptFile}`, `{outputDir}`, `{bundlePath}`, and `{jobId}` placeholders or stdin prompt delivery, snapshots `raw/**` before/after execution, and rejects any raw mutation. Worker integration and output registration are the next slice.
+Sprint 11 adds `packages/agent-adapter` and worker integration. The adapter builds a job-scoped prompt, writes it into a separate `.agent-work` directory, runs a configured local command with `{promptFile}`, `{outputDir}`, `{bundlePath}`, and `{jobId}` placeholders or stdin prompt delivery, snapshots `raw/**` before/after execution, and rejects any raw mutation. During `INGESTING`, the worker runs the adapter only when deterministic language detection says translation is needed, registers regular files created in the agent output directory through `packages/output-store`, and includes active download buttons in the Telegram completion notification.
 
 ## Obsidian Vault Layout
 
