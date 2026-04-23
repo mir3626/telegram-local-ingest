@@ -503,6 +503,14 @@ async function cleanupExpiredOutputFiles(context: WorkerContext): Promise<void> 
   }
 }
 
+async function answerCallbackQuerySafely(context: WorkerContext, callbackQueryId: string, text: string): Promise<void> {
+  try {
+    await context.telegram.answerCallbackQuery(callbackQueryId, text);
+  } catch (error) {
+    logWorker(`answerCallbackQuery failed callback=${callbackQueryId} error=${errorMessage(error)}`, "warn", "TELEGRAM");
+  }
+}
+
 async function handleRetryCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
   const parsed = parseRetryCallbackData(callback.data);
   if (!parsed) {
@@ -510,23 +518,23 @@ async function handleRetryCallback(context: WorkerContext, callback: ParsedTeleg
   }
 
   if (!callback.chatId) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 재시도할 작업을 확인할 수 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 재시도할 작업을 확인할 수 없습니다.");
     return true;
   }
 
   const job = getJob(context.db, parsed.jobId);
   if (!job) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
     return true;
   }
 
   if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔒 이 작업을 재시도할 권한이 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "🔒 이 작업을 재시도할 권한이 없습니다.");
     return true;
   }
 
   if (job.status !== "FAILED") {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, `⏳ 현재 상태에서는 재시도할 수 없습니다: ${job.status}`);
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, `⏳ 현재 상태에서는 재시도할 수 없습니다: ${job.status}`);
     return true;
   }
 
@@ -534,7 +542,7 @@ async function handleRetryCallback(context: WorkerContext, callback: ParsedTeleg
   const queued = transitionJob(context.db, retryRequested.id, "QUEUED", {
     message: "Retry queued from Telegram button",
   });
-  await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔁 재시도 대기열에 넣었습니다.");
+  await answerCallbackQuerySafely(context, callback.callbackQueryId, "🔁 재시도 대기열에 넣었습니다.");
   await context.telegram.sendMessage(callback.chatId, `🔁 재시도 대기열에 넣었어요: ${queued.id}`);
   logWorker(`retry queued job=${queued.id} from=telegram_button`, "info", "RETRY");
   return true;
@@ -547,38 +555,38 @@ async function handleDownloadCallback(context: WorkerContext, callback: ParsedTe
   }
 
   if (!callback.chatId) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 다운로드할 채팅을 확인할 수 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 다운로드할 채팅을 확인할 수 없습니다.");
     return true;
   }
 
   const resolved = resolveDownloadableOutput(context.db, parsed.outputId);
   if (resolved.status === "not_found") {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 다운로드 파일을 찾을 수 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 다운로드 파일을 찾을 수 없습니다.");
     return true;
   }
   if (resolved.status === "expired" || resolved.status === "deleted") {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⏳ 다운로드 기간이 만료되었습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⏳ 다운로드 기간이 만료되었습니다.");
     return true;
   }
 
   const output = resolved.output;
   if (!output) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 다운로드 파일을 확인할 수 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 다운로드 파일을 확인할 수 없습니다.");
     return true;
   }
 
   const job = getJob(context.db, output.jobId);
   if (!job) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 원본 작업을 찾을 수 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 원본 작업을 찾을 수 없습니다.");
     return true;
   }
 
   if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔒 이 파일을 다운로드할 권한이 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "🔒 이 파일을 다운로드할 권한이 없습니다.");
     return true;
   }
 
-  await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⬇️ 파일을 전송합니다.");
+  await answerCallbackQuerySafely(context, callback.callbackQueryId, "⬇️ 파일을 전송합니다.");
   await context.telegram.sendDocument(callback.chatId, output.filePath, {
     fileName: output.fileName,
     ...(output.mimeType ? { mimeType: output.mimeType } : {}),
@@ -606,18 +614,18 @@ async function handleOutputDiscardCallback(
   outputId: string,
 ): Promise<boolean> {
   if (!callback.chatId) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 폐기할 채팅을 확인할 수 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 폐기할 채팅을 확인할 수 없습니다.");
     return true;
   }
 
   const access = getOutputCallbackAccess(context, callback, outputId);
   if ("error" in access) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, access.error);
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, access.error);
     return true;
   }
 
   const discarded = await discardRuntimeOutput(context.db, access.output.id);
-  await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🗑️ 결과 파일을 폐기했습니다.");
+  await answerCallbackQuerySafely(context, callback.callbackQueryId, "🗑️ 결과 파일을 폐기했습니다.");
   logWorker(`output discarded output=${discarded.output.id} job=${discarded.output.jobId}`, "info", "OUTPUT");
   return true;
 }
@@ -628,13 +636,13 @@ async function handleOutputRegenerateCallback(
   outputId: string,
 ): Promise<boolean> {
   if (!callback.chatId) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 다시 생성할 채팅을 확인할 수 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 다시 생성할 채팅을 확인할 수 없습니다.");
     return true;
   }
 
   const access = getOutputCallbackAccess(context, callback, outputId);
   if ("error" in access) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, access.error);
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, access.error);
     return true;
   }
 
@@ -642,7 +650,8 @@ async function handleOutputRegenerateCallback(
     outputId: access.output.id,
     status: "interface_only",
   });
-  await context.telegram.answerCallbackQuery(
+  await answerCallbackQuerySafely(
+    context,
     callback.callbackQueryId,
     "♻️ 다시 생성 요청을 기록했습니다. 자동 재생성은 아직 비활성화되어 있습니다.",
   );
@@ -661,29 +670,29 @@ async function handleSttContextCallback(context: WorkerContext, callback: Parsed
 async function handleSttEnvironmentCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
   const parsed = parseSttEnvironmentCallbackData(callback.data);
   if (!parsed || !callback.chatId) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 처리할 수 없는 선택입니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 처리할 수 없는 선택입니다.");
     return false;
   }
 
   const preset = RTZR_PRESETS.find((candidate) => candidate.key === parsed.presetKey);
   if (!preset) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 알 수 없는 녹음 환경입니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 알 수 없는 녹음 환경입니다.");
     return false;
   }
 
   const job = getJob(context.db, parsed.jobId);
   if (!job) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
     return true;
   }
 
   if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔒 이 작업을 변경할 권한이 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "🔒 이 작업을 변경할 권한이 없습니다.");
     return true;
   }
 
   if (job.status !== "RECEIVED") {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⏳ 이미 처리 중인 작업입니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⏳ 이미 처리 중인 작업입니다.");
     return true;
   }
 
@@ -694,7 +703,7 @@ async function handleSttEnvironmentCallback(context: WorkerContext, callback: Pa
     presetDescription: preset.description,
     translationDefaultRelation: context.config.translation.defaultRelation,
   });
-  await context.telegram.answerCallbackQuery(callback.callbackQueryId, `${preset.emoji} ${preset.label} 환경을 저장했습니다.`);
+  await answerCallbackQuerySafely(context, callback.callbackQueryId, `${preset.emoji} ${preset.label} 환경을 저장했습니다.`);
   await context.telegram.sendMessage(
     callback.chatId,
     buildSttLanguagePrompt(job.id, preset),
@@ -710,35 +719,35 @@ async function handleSttLanguageCallback(
   parsed: { presetKey: string; languageKey: string; jobId: string },
 ): Promise<boolean> {
   if (!callback.chatId) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 처리할 수 없는 선택입니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 처리할 수 없는 선택입니다.");
     return false;
   }
 
   const preset = RTZR_PRESETS.find((candidate) => candidate.key === parsed.presetKey);
   if (!preset) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 알 수 없는 녹음 환경입니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 알 수 없는 녹음 환경입니다.");
     return false;
   }
 
   const language = STT_LANGUAGE_PRESETS.find((candidate) => candidate.key === parsed.languageKey);
   if (!language) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 알 수 없는 인식 언어입니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 알 수 없는 인식 언어입니다.");
     return false;
   }
 
   const job = getJob(context.db, parsed.jobId);
   if (!job) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, `⚠️ 작업을 찾을 수 없습니다: ${parsed.jobId}`);
     return true;
   }
 
   if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔒 이 작업을 변경할 권한이 없습니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "🔒 이 작업을 변경할 권한이 없습니다.");
     return true;
   }
 
   if (job.status !== "RECEIVED") {
-    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⏳ 이미 처리 중인 작업입니다.");
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⏳ 이미 처리 중인 작업입니다.");
     return true;
   }
 
@@ -761,7 +770,7 @@ async function handleSttLanguageCallback(
   const queued = transitionJob(context.db, job.id, "QUEUED", {
     message: `STT preset selected: ${preset.label}, ${language.label}`,
   });
-  await context.telegram.answerCallbackQuery(callback.callbackQueryId, `${language.emoji} ${language.label} 설정을 저장했습니다.`);
+  await answerCallbackQuerySafely(context, callback.callbackQueryId, `${language.emoji} ${language.label} 설정을 저장했습니다.`);
   await context.telegram.sendMessage(callback.chatId, buildPresetQueuedMessage(queued.id, preset, language));
   logWorker(
     `stt preset selected job=${queued.id} provider=${context.config.stt.provider} preset=${preset.key} language=${language.key} model=${language.rtzrModelName}`,
@@ -1113,6 +1122,10 @@ function transitionToFailedIfPossible(db: DatabaseSync, jobId: string, error: un
     message: "Worker job failed",
     error: error instanceof Error ? error.message : String(error),
   });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function logWorker(message: string, level: "info" | "warn" = "info", tag = "GENERAL"): void {

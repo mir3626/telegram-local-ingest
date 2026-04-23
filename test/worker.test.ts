@@ -413,6 +413,53 @@ test("pollTelegramUpdatesOnce sends active output documents from a download butt
   }
 });
 
+test("pollTelegramUpdatesOnce still sends output documents when callback answer expires", async () => {
+  const fixture = createFixture();
+  const outputPath = writeFile(fixture.runtimeDir, "outputs/job-download/out-1/translated.md", "translated");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }> = [];
+  const answeredCallbacks: unknown[] = [];
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, {
+      id: "job-download",
+      source: "telegram-local-bot-api",
+      chatId: "300",
+      userId: "400",
+      now: "2026-04-22T12:00:00.000Z",
+    });
+    createJobOutput(dbHandle.db, {
+      id: "out-1",
+      jobId: "job-download",
+      kind: "agent_translation",
+      filePath: outputPath,
+      fileName: "translated.md",
+      mimeType: "text/markdown",
+      createdAt: "2026-04-22T12:00:01.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockDownloadCallbackFetch(sentDocuments, answeredCallbacks, { answerFails: true }),
+      ),
+    };
+
+    const result = await pollTelegramUpdatesOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.deepEqual(sentDocuments, [{
+      chat_id: "300",
+      caption: "📎 translated.md",
+      document: "translated.md",
+    }]);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("pollTelegramUpdatesOnce handles hidden output discard callbacks", async () => {
   const fixture = createFixture();
   const outputPath = writeFile(fixture.runtimeDir, "outputs/job-output/out-discard/translated.md", "translated");
@@ -807,6 +854,7 @@ function mockRetryCallbackFetch(
 function mockDownloadCallbackFetch(
   sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }>,
   answeredCallbacks: unknown[],
+  options: { answerFails?: boolean } = {},
 ): FetchLike {
   return async (input, init) => {
     const method = input.split("/").at(-1);
@@ -832,6 +880,13 @@ function mockDownloadCallbackFetch(
     }
     if (method === "answerCallbackQuery") {
       answeredCallbacks.push(init?.body ? JSON.parse(String(init.body)) : {});
+      if (options.answerFails) {
+        return jsonResponse({
+          ok: false,
+          description: "Bad Request: query is too old and response timeout expired or query ID is invalid",
+          error_code: 400,
+        }, 400);
+      }
       return jsonResponse({ ok: true, result: true });
     }
     if (method === "sendDocument" && body) {

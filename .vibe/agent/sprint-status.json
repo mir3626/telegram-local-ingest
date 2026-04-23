@@ -101,7 +101,7 @@
   ],
   "handoff": {
     "currentSprintId": "sprint-12-utility-cleanup-polish",
-    "lastActionSummary": "Codex agent live smoke passed. Real Telegram DOCX upload reached capture/import/raw/cleanup and exposed missing DOCX text extraction; DOCX preprocessing is now implemented, and regenerate/discard Telegram controls are documented as low-priority follow-up.",
+    "lastActionSummary": "Real Telegram DOCX uploads reached DOCX preprocessing, Codex post-processing, output registration, completion notification, and source cleanup. Download callback acknowledgements are now non-fatal so expired callback queries do not crash the worker.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -114,7 +114,7 @@
       "Pre-agent language checks must be deterministic and not LLM-dependent"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-23T09:16:46.000Z"
+    "updatedAt": "2026-04-23T09:37:05.000Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -129,8 +129,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-23T09:16:46.000Z",
-  "verifiedAt": "2026-04-23T09:16:46.000Z",
+  "stateUpdatedAt": "2026-04-23T09:37:05.000Z",
+  "verifiedAt": "2026-04-23T09:37:05.000Z",
   "verificationCommands": [
     {
       "id": "typecheck",
