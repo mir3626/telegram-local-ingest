@@ -46,6 +46,10 @@ test("loadConfig applies local Bot API defaults and parses allowlist", () => {
   assert.equal(config.translation.targetLanguage, "ko");
   assert.equal(config.agent.provider, "none");
   assert.equal(config.agent.timeoutMs, 30 * 60 * 1000);
+  assert.equal(config.worker.jobConcurrency, 2);
+  assert.equal(config.worker.sttConcurrency, 1);
+  assert.equal(config.worker.agentConcurrency, 1);
+  assert.equal(config.worker.jobClaimTtlMs, 2 * 60 * 60 * 1000);
 });
 
 test("loadConfig supports SenseVoice local CPU STT", () => {
@@ -72,12 +76,20 @@ test("loadConfig supports local agent post-processing settings", () => {
     AGENT_POSTPROCESS_COMMAND: "codex exec --prompt {promptFile}",
     AGENT_POSTPROCESS_TIMEOUT_MS: "120000",
     TRANSLATION_TARGET_LANGUAGE: "en",
+    WORKER_JOB_CONCURRENCY: "4",
+    WORKER_STT_CONCURRENCY: "2",
+    WORKER_AGENT_CONCURRENCY: "1",
+    WORKER_JOB_CLAIM_TTL_MS: "600000",
   });
 
   assert.equal(config.agent.provider, "codex");
   assert.equal(config.agent.command, "codex exec --prompt {promptFile}");
   assert.equal(config.agent.timeoutMs, 120000);
   assert.equal(config.translation.targetLanguage, "en");
+  assert.equal(config.worker.jobConcurrency, 4);
+  assert.equal(config.worker.sttConcurrency, 2);
+  assert.equal(config.worker.agentConcurrency, 1);
+  assert.equal(config.worker.jobClaimTtlMs, 600000);
 });
 
 test("loadConfig requires an agent command when post-processing is enabled", () => {

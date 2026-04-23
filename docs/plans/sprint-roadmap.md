@@ -15,6 +15,7 @@ Telegram mobile/desktop
   -> Telegram Local Bot API Server
   -> local TypeScript worker
   -> SQLite queue
+  -> SQLite job claims + bounded worker pool
   -> file import + normalization
   -> RTZR STT for audio
   -> Obsidian raw bundle

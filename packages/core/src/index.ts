@@ -95,6 +95,13 @@ export interface AgentPostprocessConfig {
   timeoutMs: number;
 }
 
+export interface WorkerConfig {
+  jobConcurrency: number;
+  sttConcurrency: number;
+  agentConcurrency: number;
+  jobClaimTtlMs: number;
+}
+
 export interface AppConfig {
   telegram: TelegramConfig;
   runtime: RuntimeConfig;
@@ -105,6 +112,7 @@ export interface AppConfig {
   wiki: WikiAdapterConfig;
   translation: TranslationConfig;
   agent: AgentPostprocessConfig;
+  worker: WorkerConfig;
 }
 
 export class ConfigError extends Error {
@@ -189,6 +197,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     "AGENT_POSTPROCESS_TIMEOUT_MS",
     issues,
   );
+  const workerJobConcurrency = parseInteger(env.WORKER_JOB_CONCURRENCY, 2, "WORKER_JOB_CONCURRENCY", issues);
+  const workerSttConcurrency = parseInteger(env.WORKER_STT_CONCURRENCY, 1, "WORKER_STT_CONCURRENCY", issues);
+  const workerAgentConcurrency = parseInteger(env.WORKER_AGENT_CONCURRENCY, 1, "WORKER_AGENT_CONCURRENCY", issues);
+  const workerJobClaimTtlMs = parseInteger(
+    env.WORKER_JOB_CLAIM_TTL_MS,
+    2 * 60 * 60 * 1000,
+    "WORKER_JOB_CLAIM_TTL_MS",
+    issues,
+  );
 
   const config: AppConfig = {
     telegram: {
@@ -239,6 +256,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       provider: parseAgentPostprocessProvider(env.AGENT_POSTPROCESS_PROVIDER, issues),
       timeoutMs: agentPostprocessTimeoutMs,
     },
+    worker: {
+      jobConcurrency: workerJobConcurrency,
+      sttConcurrency: workerSttConcurrency,
+      agentConcurrency: workerAgentConcurrency,
+      jobClaimTtlMs: workerJobClaimTtlMs,
+    },
   };
 
   assignOptional(config.telegram, "apiId", optional("TELEGRAM_API_ID"));
@@ -285,6 +308,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (agentPostprocessTimeoutMs < 1) {
     issues.push("AGENT_POSTPROCESS_TIMEOUT_MS must be at least 1");
+  }
+  if (workerJobConcurrency < 1) {
+    issues.push("WORKER_JOB_CONCURRENCY must be at least 1");
+  }
+  if (workerSttConcurrency < 1) {
+    issues.push("WORKER_STT_CONCURRENCY must be at least 1");
+  }
+  if (workerAgentConcurrency < 1) {
+    issues.push("WORKER_AGENT_CONCURRENCY must be at least 1");
+  }
+  if (workerJobClaimTtlMs < 1) {
+    issues.push("WORKER_JOB_CLAIM_TTL_MS must be at least 1");
   }
   if (config.agent.provider !== "none" && !config.agent.command) {
     issues.push("AGENT_POSTPROCESS_COMMAND is required when AGENT_POSTPROCESS_PROVIDER is enabled");

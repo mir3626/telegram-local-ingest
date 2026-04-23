@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import zlib from "node:zlib";
 
 import type { AgentPostprocessInput, AgentPostprocessResult } from "@telegram-local-ingest/agent-adapter";
 import type { AppConfig } from "@telegram-local-ingest/core";
 import {
+  addJobFile,
   createJob,
   createJobOutput,
   getJob,
@@ -26,6 +28,7 @@ import { TelegramBotApiClient, type FetchLike } from "@telegram-local-ingest/tel
 
 import {
   pollTelegramUpdatesOnce,
+  processRunnableJobs,
   runWorkerOnce,
   type AgentPostprocessor,
   type RtzrTranscriber,
@@ -642,6 +645,71 @@ test("runWorkerOnce handles operator status without creating a job", async () =>
   }
 });
 
+test("processRunnableJobs claims multiple jobs while limiting STT concurrency", async () => {
+  const fixture = createFixture();
+  const firstAudio = writeFile(fixture.runtimeDir, "staging/job-a/file-a/call-a.m4a", "fake audio a");
+  const secondAudio = writeFile(fixture.runtimeDir, "staging/job-b/file-b/call-b.m4a", "fake audio b");
+  const dbHandle = openIngestDatabase(":memory:");
+  const calls: Array<{ filePath: string; options: SenseVoiceTranscribeOptions }> = [];
+  const releaseFirst = deferred<void>();
+  const releaseSecond = deferred<void>();
+  try {
+    migrate(dbHandle.db);
+    createNormalizingAudioJob(dbHandle.db, "job-a", "file-a", "call-a.m4a", firstAudio);
+    createNormalizingAudioJob(dbHandle.db, "job-b", "file-b", "call-b.m4a", secondAudio);
+    const config = configFixture(fixture);
+    config.stt.provider = "sensevoice";
+    config.worker.jobConcurrency = 2;
+    config.worker.sttConcurrency = 1;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch([]),
+      ),
+      sensevoice: {
+        async transcribeFile(filePath, options): Promise<SenseVoiceTranscript> {
+          calls.push({ filePath, options });
+          if (calls.length === 1) {
+            await releaseFirst.promise;
+          } else {
+            await releaseSecond.promise;
+          }
+          return {
+            id: `sensevoice-${calls.length}`,
+            text: `전사 ${calls.length}`,
+            segments: [{ text: `전사 ${calls.length}`, language: "ko" }],
+            raw: {
+              id: `sensevoice-${calls.length}`,
+              provider: "sensevoice",
+              text: `전사 ${calls.length}`,
+              segments: [{ text: `전사 ${calls.length}`, language: "ko" }],
+            },
+          };
+        },
+      },
+    };
+
+    const processing = processRunnableJobs(context, 2, { waitForCompletion: false });
+    assert.equal(await processing, 2);
+    await waitFor(() => calls.length === 1);
+    assert.equal(calls.length, 1);
+    assert.equal(getJob(dbHandle.db, "job-a")?.status, "NORMALIZING");
+    assert.equal(getJob(dbHandle.db, "job-b")?.status, "NORMALIZING");
+
+    releaseFirst.resolve();
+    await waitFor(() => calls.length === 2);
+    assert.equal(calls.length, 2);
+    releaseSecond.resolve();
+    await waitFor(() => getJob(dbHandle.db, "job-a")?.status === "COMPLETED" && getJob(dbHandle.db, "job-b")?.status === "COMPLETED");
+  } finally {
+    releaseFirst.resolve();
+    releaseSecond.resolve();
+    dbHandle.close();
+  }
+});
+
 function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot: string }): AppConfig {
   return {
     telegram: {
@@ -694,7 +762,65 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
       provider: "none",
       timeoutMs: 30 * 60 * 1000,
     },
+    worker: {
+      jobConcurrency: 2,
+      sttConcurrency: 1,
+      agentConcurrency: 1,
+      jobClaimTtlMs: 2 * 60 * 60 * 1000,
+    },
   };
+}
+
+function createNormalizingAudioJob(
+  db: DatabaseSync,
+  jobId: string,
+  fileId: string,
+  originalName: string,
+  localPath: string,
+): void {
+  createJob(db, {
+    id: jobId,
+    source: "telegram-local-bot-api",
+    chatId: "300",
+    userId: "400",
+    now: NOW_FOR_TESTS,
+  });
+  transitionJob(db, jobId, "QUEUED", { now: NOW_FOR_TESTS });
+  addJobFile(db, {
+    id: fileId,
+    jobId,
+    sourceFileId: fileId,
+    fileUniqueId: `${fileId}-unique`,
+    originalName,
+    mimeType: "audio/mp4",
+    sizeBytes: 10,
+    localPath,
+    archivePath: localPath,
+    now: NOW_FOR_TESTS,
+  });
+  transitionJob(db, jobId, "IMPORTING", { now: NOW_FOR_TESTS });
+  transitionJob(db, jobId, "NORMALIZING", { now: NOW_FOR_TESTS });
+}
+
+const NOW_FOR_TESTS = "2026-04-22T12:00:00.000Z";
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T | PromiseLike<T>): void } {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(predicate(), true);
 }
 
 function createFixture(): { root: string; botRoot: string; runtimeDir: string; vaultPath: string } {

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -16,6 +17,7 @@ import { createIngestJobFromTelegramMessage, createQueuedJobFromTelegramMessage 
 import { type AppConfig, ConfigError, loadConfig, loadNearestEnvFile } from "@telegram-local-ingest/core";
 import {
   appendJobEvent,
+  claimRunnableJobs,
   createSourceBundle,
   getJob,
   getTelegramOffset,
@@ -29,6 +31,8 @@ import {
   mustGetSourceBundleForJob,
   openIngestDatabase,
   requestRetry,
+  releaseJobClaim,
+  renewJobClaim,
   setTelegramOffset,
   transitionJob,
   type DbHandle,
@@ -91,6 +95,7 @@ export interface WorkerContext {
   rtzr?: RtzrTranscriber;
   sensevoice?: SenseVoiceTranscriber;
   agent?: AgentPostprocessor;
+  runtimeState?: WorkerRuntimeState;
 }
 
 export interface RtzrTranscriber {
@@ -123,6 +128,59 @@ export interface WorkerOnceResult {
 export interface WorkerLoopOptions {
   pollIntervalMs?: number;
   abortSignal?: AbortSignal;
+}
+
+export interface ProcessRunnableJobsOptions {
+  waitForCompletion?: boolean;
+}
+
+interface WorkerRuntimeState {
+  workerId: string;
+  runningJobIds: Set<string>;
+  runningTasks: Set<Promise<void>>;
+  sttSemaphore: Semaphore;
+  agentSemaphore: Semaphore;
+}
+
+class Semaphore {
+  private active = 0;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(private readonly maxConcurrency: number) {
+    if (maxConcurrency < 1) {
+      throw new Error("Semaphore maxConcurrency must be at least 1");
+    }
+  }
+
+  async run<T>(work: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await work();
+    } finally {
+      this.release();
+    }
+  }
+
+  private acquire(): Promise<void> {
+    if (this.active < this.maxConcurrency) {
+      this.active += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.queue.push(() => {
+        this.active += 1;
+        resolve();
+      });
+    });
+  }
+
+  private release(): void {
+    this.active -= 1;
+    const next = this.queue.shift();
+    if (next) {
+      next();
+    }
+  }
 }
 
 interface RtzrPreset {
@@ -284,6 +342,7 @@ export async function createWorkerContext(config: AppConfig): Promise<WorkerCont
     ...dbHandle,
     config,
     telegram,
+    runtimeState: createWorkerRuntimeState(config),
     ...(rtzr ? { rtzr } : {}),
     ...(sensevoice ? { sensevoice } : {}),
     ...(agent ? { agent } : {}),
@@ -293,9 +352,22 @@ export async function createWorkerContext(config: AppConfig): Promise<WorkerCont
 export async function runWorkerLoop(context: WorkerContext, options: WorkerLoopOptions = {}): Promise<void> {
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
   while (!options.abortSignal?.aborted) {
-    await runWorkerOnce(context);
+    const updateResult = await pollTelegramUpdatesOnce(context);
+    const jobsStarted = await processRunnableJobs(context, context.config.worker.jobConcurrency, {
+      waitForCompletion: false,
+    });
+    await cleanupExpiredOutputFiles(context);
+    if (jobsStarted > 0 || updateResult.updatesSeen > 0) {
+      const runtime = ensureWorkerRuntimeState(context);
+      logWorker(
+        `tick updates=${updateResult.updatesSeen} jobsStarted=${jobsStarted} activeJobs=${runtime.runningJobIds.size}`,
+        "info",
+        "LOOP",
+      );
+    }
     await sleep(pollIntervalMs, options.abortSignal);
   }
+  await waitForRunningJobs(context);
 }
 
 export async function runWorkerOnce(context: WorkerContext): Promise<WorkerOnceResult> {
@@ -387,19 +459,39 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
   };
 }
 
-export async function processRunnableJobs(context: WorkerContext, limit = 5): Promise<number> {
-  let processed = 0;
-  for (const job of listJobs(context.db, 100)) {
-    if (processed >= limit) {
-      break;
-    }
-    if (job.status !== "QUEUED" && job.status !== "NORMALIZING") {
-      continue;
-    }
-    await processJob(context, job.id);
-    processed += 1;
+export async function processRunnableJobs(
+  context: WorkerContext,
+  limit = context.config.worker.jobConcurrency,
+  options: ProcessRunnableJobsOptions = {},
+): Promise<number> {
+  const runtime = ensureWorkerRuntimeState(context);
+  const capacity = Math.max(0, limit - runtime.runningJobIds.size);
+  if (capacity === 0) {
+    return 0;
   }
-  return processed;
+
+  const jobs = claimRunnableJobs(context.db, {
+    workerId: runtime.workerId,
+    limit: capacity,
+    leaseMs: context.config.worker.jobClaimTtlMs,
+    excludeJobIds: [...runtime.runningJobIds],
+  });
+  if (jobs.length === 0) {
+    return 0;
+  }
+
+  const tasks = jobs.map((job) => startJobTask(context, job.id));
+  if (options.waitForCompletion ?? true) {
+    await Promise.all(tasks);
+  } else {
+    for (const [index, task] of tasks.entries()) {
+      const job = jobs[index];
+      void task.catch((error) => {
+        logWorker(`background job failed id=${job?.id ?? "unknown"} error=${errorMessage(error)}`, "warn", "JOB");
+      });
+    }
+  }
+  return jobs.length;
 }
 
 export async function processJob(context: WorkerContext, jobId: string): Promise<StoredJob> {
@@ -418,7 +510,11 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
 
     if (job.status === "NORMALIZING") {
       logWorker(`STT phase started job=${job.id} provider=${context.config.stt.provider}`, "info", "STT");
-      await runConfiguredSttTranscription(context, job);
+      await runWithSemaphore(context, "stt", () => runConfiguredSttTranscription(context, job));
+      const stopped = terminalJobIfStopped(context.db, job.id);
+      if (stopped) {
+        return stopped;
+      }
       logWorker(`STT phase finished job=${job.id} provider=${context.config.stt.provider}`, "info", "STT");
       transitionJob(context.db, job.id, "BUNDLE_WRITING", { message: "Writing Obsidian raw bundle" });
       job = mustGetJob(context.db, job.id);
@@ -453,10 +549,18 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       await runPreprocessingAndLanguageCheck(context, job);
       logWorker(`preprocessing phase finished job=${job.id}`, "info", "PREPROCESS");
       logWorker(`agent postprocess phase started job=${job.id} provider=${context.config.agent.provider}`, "info", "AGENT");
-      await runConfiguredAgentPostprocess(context, job);
+      await runWithSemaphore(context, "agent", () => runConfiguredAgentPostprocess(context, job));
+      const stopped = terminalJobIfStopped(context.db, job.id);
+      if (stopped) {
+        return stopped;
+      }
       logWorker(`agent postprocess phase finished job=${job.id} provider=${context.config.agent.provider}`, "info", "AGENT");
       logWorker(`wiki adapter phase started job=${job.id}`, "info", "WIKI");
       await runConfiguredWikiAdapter(context, job);
+      const wikiStopped = terminalJobIfStopped(context.db, job.id);
+      if (wikiStopped) {
+        return wikiStopped;
+      }
       logWorker(`wiki adapter phase finished job=${job.id}`, "info", "WIKI");
       transitionJob(context.db, job.id, "NOTIFYING", { message: "Notifying Telegram" });
       job = mustGetJob(context.db, job.id);
@@ -487,6 +591,9 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     return job;
   } catch (error) {
     const failed = transitionToFailedIfPossible(context.db, jobId, error);
+    if (failed?.status === "CANCELLED" || failed?.status === "COMPLETED") {
+      return failed;
+    }
     if (failed?.chatId) {
       await context.telegram.sendMessage(
         failed.chatId,
@@ -499,6 +606,87 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     }
     throw new Error(String(error));
   }
+}
+
+function createWorkerRuntimeState(config: AppConfig): WorkerRuntimeState {
+  return {
+    workerId: `worker-${process.pid}-${randomUUID()}`,
+    runningJobIds: new Set(),
+    runningTasks: new Set(),
+    sttSemaphore: new Semaphore(config.worker.sttConcurrency),
+    agentSemaphore: new Semaphore(config.worker.agentConcurrency),
+  };
+}
+
+function ensureWorkerRuntimeState(context: WorkerContext): WorkerRuntimeState {
+  if (!context.runtimeState) {
+    context.runtimeState = createWorkerRuntimeState(context.config);
+  }
+  return context.runtimeState;
+}
+
+function startJobTask(context: WorkerContext, jobId: string): Promise<void> {
+  const runtime = ensureWorkerRuntimeState(context);
+  runtime.runningJobIds.add(jobId);
+  const stopHeartbeat = startJobClaimHeartbeat(context, jobId);
+  const task = (async () => {
+    try {
+      await processJob(context, jobId);
+    } finally {
+      stopHeartbeat();
+      releaseJobClaim(context.db, jobId, runtime.workerId);
+      runtime.runningJobIds.delete(jobId);
+    }
+  })();
+  runtime.runningTasks.add(task);
+  task.then(
+    () => runtime.runningTasks.delete(task),
+    () => runtime.runningTasks.delete(task),
+  );
+  return task;
+}
+
+function startJobClaimHeartbeat(context: WorkerContext, jobId: string): () => void {
+  const runtime = ensureWorkerRuntimeState(context);
+  const ttlMs = context.config.worker.jobClaimTtlMs;
+  const intervalMs = Math.max(1000, Math.min(60_000, Math.floor(ttlMs / 3)));
+  const timer = setInterval(() => {
+    try {
+      const renewed = renewJobClaim(context.db, jobId, runtime.workerId, ttlMs);
+      if (!renewed) {
+        logWorker(`job claim heartbeat lost job=${jobId} worker=${runtime.workerId}`, "warn", "CLAIM");
+      }
+    } catch (error) {
+      logWorker(`job claim heartbeat failed job=${jobId} error=${errorMessage(error)}`, "warn", "CLAIM");
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+async function waitForRunningJobs(context: WorkerContext): Promise<void> {
+  const runtime = ensureWorkerRuntimeState(context);
+  if (runtime.runningTasks.size === 0) {
+    return;
+  }
+  await Promise.allSettled([...runtime.runningTasks]);
+}
+
+async function runWithSemaphore<T>(
+  context: WorkerContext,
+  kind: "stt" | "agent",
+  work: () => Promise<T>,
+): Promise<T> {
+  const runtime = ensureWorkerRuntimeState(context);
+  return (kind === "stt" ? runtime.sttSemaphore : runtime.agentSemaphore).run(work);
+}
+
+function terminalJobIfStopped(db: DatabaseSync, jobId: string): StoredJob | null {
+  const current = mustGetJob(db, jobId);
+  if (current.status === "CANCELLED" || current.status === "FAILED" || current.status === "COMPLETED") {
+    return current;
+  }
+  return null;
 }
 
 async function cleanupExpiredOutputFiles(context: WorkerContext): Promise<void> {

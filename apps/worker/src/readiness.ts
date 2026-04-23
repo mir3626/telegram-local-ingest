@@ -66,6 +66,10 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
   } else {
     checks.push(ok("TELEGRAM_ALLOWED_USER_IDS", `${config.telegram.allowedUserIds.length} allowed operator id(s)`));
   }
+  checks.push(ok(
+    "WORKER_CONCURRENCY",
+    `jobs=${config.worker.jobConcurrency}, stt=${config.worker.sttConcurrency}, agent=${config.worker.agentConcurrency}, claimTtlMs=${config.worker.jobClaimTtlMs}`,
+  ));
 
   await checkWritableDirectoryIntent(checks, "INGEST_RUNTIME_DIR", resolveFrom(cwd, config.runtime.runtimeDir), {
     mustExist: false,

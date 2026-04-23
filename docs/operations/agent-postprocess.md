@@ -12,6 +12,17 @@ AGENT_POSTPROCESS_COMMAND='{projectRoot}/scripts/run-codex-postprocess.sh --prom
 AGENT_POSTPROCESS_TIMEOUT_MS=1800000
 ```
 
+The worker can poll Telegram while post-processing runs in the background. Keep personal OAuth CLI agent concurrency conservative:
+
+```env
+WORKER_JOB_CONCURRENCY=2
+WORKER_STT_CONCURRENCY=1
+WORKER_AGENT_CONCURRENCY=1
+WORKER_JOB_CLAIM_TTL_MS=7200000
+```
+
+`WORKER_JOB_CONCURRENCY` controls total simultaneous jobs. `WORKER_AGENT_CONCURRENCY` limits Codex/Claude-style local agent executions and should stay `1` unless the local CLI and account are known to handle parallel sessions cleanly.
+
 Optional Codex wrapper tuning:
 
 ```env

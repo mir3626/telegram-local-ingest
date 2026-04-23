@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { IngestSource, JobStatus } from "@telegram-local-ingest/core";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export interface DbHandle {
   db: DatabaseSync;
@@ -127,6 +127,23 @@ export interface StoredJobOutput {
   deletedAt?: string;
 }
 
+export interface JobClaim {
+  jobId: string;
+  workerId: string;
+  claimedAt: string;
+  heartbeatAt: string;
+  expiresAt: string;
+}
+
+export interface ClaimRunnableJobsInput {
+  workerId: string;
+  limit: number;
+  leaseMs: number;
+  statuses?: JobStatus[];
+  excludeJobIds?: string[];
+  now?: string;
+}
+
 const ACTIVE_STATUSES: JobStatus[] = [
   "RECEIVED",
   "QUEUED",
@@ -151,6 +168,14 @@ const FORWARD_TRANSITIONS: Record<JobStatus, JobStatus[]> = {
   RETRY_REQUESTED: ["QUEUED"],
   CANCELLED: [],
 };
+
+export const RUNNABLE_JOB_STATUSES: JobStatus[] = [
+  "QUEUED",
+  "NORMALIZING",
+  "BUNDLE_WRITING",
+  "INGESTING",
+  "NOTIFYING",
+];
 
 export function openIngestDatabase(filePath: string): DbHandle {
   if (filePath !== ":memory:") {
@@ -188,6 +213,10 @@ export function migrate(db: DatabaseSync): void {
     if (current < 2) {
       applyV2(db);
       recordMigration(db, 2);
+    }
+    if (current < 3) {
+      applyV3(db);
+      recordMigration(db, 3);
     }
     db.exec("COMMIT;");
   } catch (error) {
@@ -247,6 +276,94 @@ export function listJobs(db: DatabaseSync, limit = 100): StoredJob[] {
     .prepare("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?")
     .all(limit)
     .map((row) => mapJob(row as unknown as JobRow));
+}
+
+export function claimRunnableJobs(db: DatabaseSync, input: ClaimRunnableJobsInput): StoredJob[] {
+  if (input.limit < 1) {
+    return [];
+  }
+  if (input.leaseMs < 1) {
+    throw new Error("Job claim leaseMs must be at least 1");
+  }
+
+  const timestamp = input.now ?? nowIso();
+  const expiresAt = addMsIso(timestamp, input.leaseMs);
+  const statuses = input.statuses ?? RUNNABLE_JOB_STATUSES;
+  if (statuses.length === 0) {
+    return [];
+  }
+
+  const statusPlaceholders = statuses.map(() => "?").join(", ");
+  const excludeJobIds = input.excludeJobIds ?? [];
+  const excludeClause = excludeJobIds.length > 0
+    ? `AND jobs.id NOT IN (${excludeJobIds.map(() => "?").join(", ")})`
+    : "";
+  const rows = db.prepare(`
+    SELECT jobs.*
+    FROM jobs
+    LEFT JOIN job_claims ON job_claims.job_id = jobs.id
+    WHERE jobs.status IN (${statusPlaceholders})
+      ${excludeClause}
+      AND (
+        job_claims.job_id IS NULL
+        OR job_claims.expires_at <= ?
+        OR job_claims.worker_id = ?
+      )
+    ORDER BY jobs.created_at ASC
+    LIMIT ?
+  `).all(...statuses, ...excludeJobIds, timestamp, input.workerId, input.limit) as unknown as JobRow[];
+
+  const claimed: StoredJob[] = [];
+  for (const row of rows) {
+    const result = db.prepare(`
+      INSERT INTO job_claims (job_id, worker_id, claimed_at, heartbeat_at, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(job_id) DO UPDATE SET
+        worker_id = excluded.worker_id,
+        claimed_at = excluded.claimed_at,
+        heartbeat_at = excluded.heartbeat_at,
+        expires_at = excluded.expires_at
+      WHERE job_claims.expires_at <= ? OR job_claims.worker_id = ?
+    `).run(row.id, input.workerId, timestamp, timestamp, expiresAt, timestamp, input.workerId);
+    if (result.changes === 0) {
+      continue;
+    }
+    appendJobEvent(db, row.id, "job.claimed", "Job claimed for processing", {
+      workerId: input.workerId,
+      expiresAt,
+    }, timestamp);
+    claimed.push(mustGetJob(db, row.id));
+  }
+
+  return claimed;
+}
+
+export function getJobClaim(db: DatabaseSync, jobId: string): JobClaim | null {
+  const row = db.prepare("SELECT * FROM job_claims WHERE job_id = ?").get(jobId) as JobClaimRow | undefined;
+  return row ? mapJobClaim(row) : null;
+}
+
+export function renewJobClaim(
+  db: DatabaseSync,
+  jobId: string,
+  workerId: string,
+  leaseMs: number,
+  now = nowIso(),
+): boolean {
+  if (leaseMs < 1) {
+    throw new Error("Job claim leaseMs must be at least 1");
+  }
+  const result = db.prepare(`
+    UPDATE job_claims
+    SET heartbeat_at = ?, expires_at = ?
+    WHERE job_id = ? AND worker_id = ?
+  `).run(now, addMsIso(now, leaseMs), jobId, workerId);
+  return result.changes > 0;
+}
+
+export function releaseJobClaim(db: DatabaseSync, jobId: string, workerId: string): boolean {
+  const result = db.prepare("DELETE FROM job_claims WHERE job_id = ? AND worker_id = ?").run(jobId, workerId);
+  return result.changes > 0;
 }
 
 export function transitionJob(
@@ -635,12 +752,31 @@ function applyV2(db: DatabaseSync): void {
   `);
 }
 
+function applyV3(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE job_claims (
+      job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+      worker_id TEXT NOT NULL,
+      claimed_at TEXT NOT NULL,
+      heartbeat_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+
+    CREATE INDEX idx_job_claims_expires_at ON job_claims(expires_at);
+    CREATE INDEX idx_job_claims_worker_id ON job_claims(worker_id);
+  `);
+}
+
 function recordMigration(db: DatabaseSync, version: number): void {
   db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(version, nowIso());
 }
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function addMsIso(baseIso: string, ms: number): string {
+  return new Date(Date.parse(baseIso) + ms).toISOString();
 }
 
 function parseJsonArray(value: string): string[] {
@@ -681,6 +817,16 @@ function mapJob(row: JobRow): StoredJob {
   assignDefined(job, "error", definedString(row.error));
   assignDefined(job, "completedAt", definedString(row.completed_at));
   return job;
+}
+
+function mapJobClaim(row: JobClaimRow): JobClaim {
+  return {
+    jobId: row.job_id,
+    workerId: row.worker_id,
+    claimedAt: row.claimed_at,
+    heartbeatAt: row.heartbeat_at,
+    expiresAt: row.expires_at,
+  };
 }
 
 function mapJobFile(row: JobFileRow): StoredJobFile {
@@ -809,4 +955,12 @@ interface JobOutputRow {
   created_at: string;
   expires_at: string;
   deleted_at: string | null;
+}
+
+interface JobClaimRow {
+  job_id: string;
+  worker_id: string;
+  claimed_at: string;
+  heartbeat_at: string;
+  expires_at: string;
 }

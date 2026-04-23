@@ -7,11 +7,13 @@ import test from "node:test";
 import {
   addJobFile,
   canRetry,
+  claimRunnableJobs,
   createJob,
   createJobOutput,
   createSourceBundle,
   getCurrentSchemaVersion,
   getJob,
+  getJobClaim,
   getJobOutput,
   getTelegramOffset,
   isValidTransition,
@@ -22,6 +24,8 @@ import {
   markJobOutputDeleted,
   migrate,
   openIngestDatabase,
+  releaseJobClaim,
+  renewJobClaim,
   requestRetry,
   SCHEMA_VERSION,
   setTelegramOffset,
@@ -47,6 +51,7 @@ test("migrate creates the dashboard-ready operational schema", () => {
     assert.ok(tableNames.includes("telegram_offsets"));
     assert.ok(tableNames.includes("source_bundles"));
     assert.ok(tableNames.includes("job_outputs"));
+    assert.ok(tableNames.includes("job_claims"));
   } finally {
     handle.close();
   }
@@ -211,6 +216,49 @@ test("job outputs track downloadable files with expiry and deletion state", () =
     assert.equal(listExpiredJobOutputs(handle.db, "2026-04-24T00:00:00.000Z").length, 0);
     assert.ok(listJobEvents(handle.db, "job-outputs").some((event) => event.type === "output.created"));
     assert.ok(listJobEvents(handle.db, "job-outputs").some((event) => event.type === "output.deleted"));
+  } finally {
+    handle.close();
+  }
+});
+
+test("job claims reserve runnable work and expire safely", () => {
+  const handle = openIngestDatabase(":memory:");
+  try {
+    migrate(handle.db);
+    createJob(handle.db, { id: "job-claim-1", source: "telegram-local-bot-api", now: "2026-04-22T08:30:00.000Z" });
+    createJob(handle.db, { id: "job-claim-2", source: "telegram-local-bot-api", now: "2026-04-22T08:30:01.000Z" });
+    transitionJob(handle.db, "job-claim-1", "QUEUED", { now: NOW });
+    transitionJob(handle.db, "job-claim-2", "QUEUED", { now: NOW });
+
+    const first = claimRunnableJobs(handle.db, {
+      workerId: "worker-a",
+      limit: 1,
+      leaseMs: 1000,
+      now: "2026-04-22T08:31:00.000Z",
+    });
+    assert.deepEqual(first.map((job) => job.id), ["job-claim-1"]);
+    assert.equal(getJobClaim(handle.db, "job-claim-1")?.workerId, "worker-a");
+
+    const second = claimRunnableJobs(handle.db, {
+      workerId: "worker-b",
+      limit: 5,
+      leaseMs: 1000,
+      now: "2026-04-22T08:31:00.500Z",
+    });
+    assert.deepEqual(second.map((job) => job.id), ["job-claim-2"]);
+
+    assert.equal(renewJobClaim(handle.db, "job-claim-1", "worker-a", 1000, "2026-04-22T08:31:00.750Z"), true);
+    assert.equal(releaseJobClaim(handle.db, "job-claim-2", "worker-b"), true);
+    assert.equal(getJobClaim(handle.db, "job-claim-2"), null);
+
+    const expired = claimRunnableJobs(handle.db, {
+      workerId: "worker-b",
+      limit: 5,
+      leaseMs: 1000,
+      now: "2026-04-22T08:31:02.000Z",
+    });
+    assert.deepEqual(expired.map((job) => job.id), ["job-claim-1", "job-claim-2"]);
+    assert.equal(getJobClaim(handle.db, "job-claim-1")?.workerId, "worker-b");
   } finally {
     handle.close();
   }

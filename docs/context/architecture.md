@@ -63,12 +63,15 @@ runtime/
 
 ## Worker Dispatch
 
-`apps/worker` runs the integrated local loop:
+`apps/worker` runs a responsive local loop:
 
 1. Poll Telegram updates and advance durable offsets.
 2. Route `/status`, `/retry`, and `/cancel` through `packages/operator`.
 3. Route file uploads, with or without `/ingest`, through `packages/capture`.
-4. Process queued jobs through file import, raw bundle writing, optional wiki adapter execution, Telegram notification, and terminal state transition.
+4. Claim runnable jobs through SQLite `job_claims`.
+5. Process claimed jobs in a bounded background pool through file import, raw bundle writing, optional wiki adapter execution, Telegram notification, and terminal state transition.
+
+Polling and callback handling are separated from long job execution. This keeps uploads, status, retry, STT preset selection, and download buttons responsive while Codex/RTZR/SenseVoice work is still running. `WORKER_JOB_CONCURRENCY` controls total simultaneous jobs, while `WORKER_STT_CONCURRENCY` and `WORKER_AGENT_CONCURRENCY` bound the expensive STT and local OAuth agent sections. The default keeps agent concurrency at `1` because personal Codex/Claude CLI sessions are more fragile under parallel load.
 
 The post-processing utility layer extends this loop after source artifacts exist:
 
