@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-10-preprocessing-language-check
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads
-> **Pending**: sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish
+> **Current**: sprint-11-codex-agent-postprocess
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check
+> **Pending**: sprint-12-utility-cleanup-polish
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -208,7 +208,7 @@ Telegram mobile/desktop
 - **acceptance criteria**:
   - Worker can decide whether translation is needed without asking an LLM.
   - Unsupported file types are preserved and logged without blocking the source bundle.
-- **status**: pending.
+- **status**: completed. Added `packages/preprocessors`, `packages/language-detector`, `TRANSLATION_TARGET_LANGUAGE`, and worker `preprocess.completed`/`language.detected` events during `INGESTING`. Current preprocessing reads text-like imported originals and bundled transcript Markdown, preserving unsupported files without blocking the job.
 
 ## Sprint 11 — Codex Agent Post-Processing
 

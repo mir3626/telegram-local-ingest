@@ -33,6 +33,7 @@ The next product layer adds a personal utility flow on top of the ingest pipelin
 6. Worker sends a Telegram completion message with a download button. Downloadable outputs expire after 24 hours and are deleted from runtime storage.
 
 The utility layer is intentionally designed for later extraction into a separate bot: preprocessing, language detection, agent execution, and output retention are separate boundaries rather than worker-internal scripts.
+`TRANSLATION_TARGET_LANGUAGE` defaults to `ko`; `TRANSLATION_DEFAULT_RELATION` defaults to `business` for later prompt tone and terminology handling.
 
 ## Success Criteria
 

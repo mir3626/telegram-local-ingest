@@ -1,0 +1,12 @@
+{
+  "name": "@telegram-local-ingest/preprocessors",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@telegram-local-ingest/db": "0.1.0"
+  }
+}

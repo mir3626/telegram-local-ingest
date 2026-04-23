@@ -38,8 +38,8 @@ Telegram clients
    - `packages/vault`: Obsidian raw bundle layout, manifest writer, source markdown writer, write lock helpers.
    - `packages/wiki-adapter`: Protected CLI adapter boundary for LLM/wiki updates.
    - `packages/output-store`: Runtime-only downloadable output registration, expiry, and cleanup.
-   - Planned `packages/preprocessors`: File-type-specific extraction boundary for images, documents, spreadsheets, and audio.
-   - Planned `packages/language-detector`: Deterministic translation-needed check.
+   - `packages/preprocessors`: Deterministic text/transcript collection boundary before agent execution.
+   - `packages/language-detector`: Script-based primary-language and translation-needed check.
    - Planned `packages/agent-adapter`: Codex-first local agent execution boundary, with Claude Code as a future provider.
 
 ## Runtime Directories
@@ -78,6 +78,8 @@ The post-processing utility layer extends this loop after source artifacts exist
 4. Register downloadable files in `job_outputs` and `runtime/outputs`.
 5. Notify Telegram with a download button whose callback resolves the output only if it is still active.
 6. Periodically delete expired output files and mark them deleted in SQLite.
+
+Sprint 10 currently records `preprocess.completed` and `language.detected` job events during the `INGESTING` phase. The worker reads imported text-like originals and bundled `*.transcript.md` files, strips transcript Markdown boilerplate before language scoring, and stores only artifact metadata plus language signals in SQLite rather than duplicating source text in the database.
 
 ## Obsidian Vault Layout
 

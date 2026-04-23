@@ -84,6 +84,7 @@ export interface WikiAdapterConfig {
 
 export interface TranslationConfig {
   defaultRelation: string;
+  targetLanguage: string;
 }
 
 export interface AppConfig {
@@ -217,6 +218,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     wiki: {},
     translation: {
       defaultRelation: readNonEmpty(env.TRANSLATION_DEFAULT_RELATION) ?? "business",
+      targetLanguage: readNonEmpty(env.TRANSLATION_TARGET_LANGUAGE) ?? "ko",
     },
   };
 

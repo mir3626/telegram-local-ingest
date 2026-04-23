@@ -30,7 +30,7 @@ import {
 
 test("runWorkerOnce captures, imports, bundles, completes, and notifies", async () => {
   const fixture = createFixture();
-  writeFile(fixture.botRoot, "documents/lead.txt", "lead content");
+  writeFile(fixture.botRoot, "documents/lead.txt", "This customer contract requires translation.");
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string }> = [];
   try {
@@ -62,8 +62,14 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
       "📥 접수했어요: tg_300_21\n- lead.txt",
       "✅ 처리 완료: tg_300_21 (sales)\n- lead.txt",
     ]);
-    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "wiki.skipped"));
-    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "telegram_source.deleted"));
+    const events = listJobEvents(dbHandle.db, "tg_300_21");
+    const languageEvent = events.find((event) => event.type === "language.detected");
+    assert.ok(events.some((event) => event.type === "preprocess.completed"));
+    assert.ok(languageEvent);
+    assert.equal((languageEvent.data as { primaryLanguage: string }).primaryLanguage, "en");
+    assert.equal((languageEvent.data as { translationNeeded: boolean }).translationNeeded, true);
+    assert.ok(events.some((event) => event.type === "wiki.skipped"));
+    assert.ok(events.some((event) => event.type === "telegram_source.deleted"));
   } finally {
     dbHandle.close();
   }
@@ -183,6 +189,9 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     assert.match(manifest, /call\.transcript\.md/);
     assert.match(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "rtzr.transcribed"));
+    const languageEvent = listJobEvents(dbHandle.db, "tg_300_21").find((event) => event.type === "language.detected");
+    assert.equal((languageEvent?.data as { primaryLanguage: string }).primaryLanguage, "ko");
+    assert.equal((languageEvent?.data as { translationNeeded: boolean }).translationNeeded, false);
   } finally {
     dbHandle.close();
   }
@@ -421,6 +430,7 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
     wiki: {},
     translation: {
       defaultRelation: "business",
+      targetLanguage: "ko",
     },
   };
 }

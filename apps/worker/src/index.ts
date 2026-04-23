@@ -31,6 +31,8 @@ import {
   sendOperatorCommandResponse,
 } from "@telegram-local-ingest/operator";
 import { cleanupExpiredOutputs, resolveDownloadableOutput } from "@telegram-local-ingest/output-store";
+import { collectPreprocessedTextArtifacts } from "@telegram-local-ingest/preprocessors";
+import { detectLanguageAcrossArtifacts, type DetectedLanguage } from "@telegram-local-ingest/language-detector";
 import {
   ensureRtzrSupportedAudio,
   RtzrOpenApiClient,
@@ -415,6 +417,9 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     }
 
     if (job.status === "INGESTING") {
+      logWorker(`preprocessing phase started job=${job.id}`, "info", "PREPROCESS");
+      await runPreprocessingAndLanguageCheck(context, job);
+      logWorker(`preprocessing phase finished job=${job.id}`, "info", "PREPROCESS");
       logWorker(`wiki adapter phase started job=${job.id}`, "info", "WIKI");
       await runConfiguredWikiAdapter(context, job);
       logWorker(`wiki adapter phase finished job=${job.id}`, "info", "WIKI");
@@ -856,6 +861,60 @@ async function runConfiguredWikiAdapter(context: WorkerContext, job: StoredJob):
   });
 }
 
+async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: StoredJob): Promise<void> {
+  const events = listJobEvents(context.db, job.id);
+  if (events.some((event) => event.type === "language.detected")) {
+    logWorker(`language check already recorded job=${job.id}`, "info", "LANGUAGE");
+    return;
+  }
+
+  const bundle = mustGetSourceBundleForJob(context.db, job.id);
+  const preprocessing = await collectPreprocessedTextArtifacts({
+    job,
+    files: listJobFiles(context.db, job.id),
+    sourceBundle: bundle,
+  });
+  appendJobEvent(context.db, job.id, "preprocess.completed", "Preprocessing text collection completed", {
+    artifactCount: preprocessing.artifacts.length,
+    skippedCount: preprocessing.skippedFiles.length,
+    artifacts: preprocessing.artifacts.map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      fileId: artifact.fileId,
+      fileName: artifact.fileName,
+      sourcePath: artifact.sourcePath,
+      charCount: artifact.charCount,
+      truncated: artifact.truncated,
+    })),
+    skippedFiles: preprocessing.skippedFiles,
+  });
+  logWorker(
+    `text artifacts collected job=${job.id} count=${preprocessing.artifacts.length} skipped=${preprocessing.skippedFiles.length}`,
+    "info",
+    "PREPROCESS",
+  );
+
+  const detection = detectLanguageAcrossArtifacts(
+    preprocessing.artifacts.map((artifact) => ({ id: artifact.id, text: artifact.text })),
+    { targetLanguage: normalizedTranslationTargetLanguage(context.config.translation.targetLanguage) },
+  );
+  appendJobEvent(context.db, job.id, "language.detected", "Language and translation need checked", {
+    primaryLanguage: detection.primaryLanguage,
+    confidence: detection.confidence,
+    translationNeeded: detection.translationNeeded,
+    targetLanguage: detection.targetLanguage,
+    artifactCount: detection.artifactCount,
+    textCharCount: detection.textCharCount,
+    signals: detection.signals,
+    reason: detection.reason,
+  });
+  logWorker(
+    `detected job=${job.id} language=${detection.primaryLanguage} confidence=${detection.confidence} translationNeeded=${detection.translationNeeded}`,
+    "info",
+    "LANGUAGE",
+  );
+}
+
 function transitionToFailedIfPossible(db: DatabaseSync, jobId: string, error: unknown): StoredJob | null {
   const job = mustGetJob(db, jobId);
   if (job.status === "FAILED" || job.status === "COMPLETED" || job.status === "CANCELLED") {
@@ -1071,6 +1130,10 @@ function artifactStem(value: string): string {
   const baseName = path.basename(value, path.extname(value));
   const sanitized = baseName.replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_").trim();
   return sanitized.length > 0 ? sanitized.slice(0, 120) : "audio";
+}
+
+function normalizedTranslationTargetLanguage(value: string): Exclude<DetectedLanguage, "mixed" | "unknown"> {
+  return value === "en" || value === "zh" || value === "ja" ? value : "ko";
 }
 
 function resolveProjectRelativePath(value: string): string {
