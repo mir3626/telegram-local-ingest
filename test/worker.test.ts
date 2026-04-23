@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import zlib from "node:zlib";
 
 import type { AgentPostprocessInput, AgentPostprocessResult } from "@telegram-local-ingest/agent-adapter";
 import type { AppConfig } from "@telegram-local-ingest/core";
@@ -129,6 +130,82 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
     assert.ok(events.some((event) => event.type === "agent.postprocess.completed"));
     assert.ok(events.some((event) => event.type === "output.created"));
   } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce renders DOCX uploads through source template tools when available", async () => {
+  const fixture = createFixture();
+  writeMinimalDocx(
+    fixture.botRoot,
+    "documents/vendor-template.docx",
+    "This vendor agreement needs translation and business formatting.",
+  );
+  const toolRoot = path.join(fixture.root, "tools");
+  const fakePandoc = writeExecutable(toolRoot, "pandoc", [
+    "#!/bin/sh",
+    "out=\"\"",
+    "ref=\"\"",
+    "prev=\"\"",
+    "for arg in \"$@\"; do",
+    "  if [ \"$prev\" = \"--output\" ]; then out=\"$arg\"; fi",
+    "  if [ \"$prev\" = \"--reference-doc\" ]; then ref=\"$arg\"; fi",
+    "  prev=\"$arg\"",
+    "done",
+    "printf 'template=%s\\n' \"$ref\" > \"$out\"",
+  ].join("\n"));
+  const fakeOffice = writeExecutable(toolRoot, "soffice", [
+    "#!/bin/sh",
+    "outdir=\"\"",
+    "input=\"\"",
+    "prev=\"\"",
+    "for arg in \"$@\"; do",
+    "  if [ \"$prev\" = \"--outdir\" ]; then outdir=\"$arg\"; fi",
+    "  input=\"$arg\"",
+    "  prev=\"$arg\"",
+    "done",
+    "base=$(basename \"$input\" .docx)",
+    "printf '%%PDF template\\n' > \"$outdir/$base.pdf\"",
+  ].join("\n"));
+  const oldPandoc = process.env.PANDOC_BIN;
+  const oldOffice = process.env.LIBREOFFICE_BIN;
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const agentInputs: AgentPostprocessInput[] = [];
+  try {
+    process.env.PANDOC_BIN = fakePandoc;
+    process.env.LIBREOFFICE_BIN = fakeOffice;
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest project:sales tag:lead", "documents/vendor-template.docx"),
+      ),
+      agent: mockAgentPostprocessor(agentInputs),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsProcessed, 1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.fileName, "original-and-translated.pdf");
+    assert.equal(outputs[0]?.mimeType, "application/pdf");
+    assert.equal(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), "%PDF template\n");
+    const renderedDocx = path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "original-and-translated.docx");
+    assert.match(fs.readFileSync(renderedDocx, "utf8"), /vendor-template\.docx/);
+  } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
+    restoreEnv("LIBREOFFICE_BIN", oldOffice);
     dbHandle.close();
   }
 });
@@ -647,6 +724,86 @@ function writeFile(root: string, relativePath: string, content: string): string 
   return filePath;
 }
 
+function writeExecutable(root: string, fileName: string, content: string): string {
+  const filePath = path.join(root, fileName);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${content}\n`, "utf8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function writeMinimalDocx(root: string, relativePath: string, textContent: string): string {
+  const escaped = textContent
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const documentXml = [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+    "<w:body><w:p><w:r><w:t>",
+    escaped,
+    "</w:t></w:r></w:p></w:body></w:document>",
+  ].join("");
+  const filePath = path.join(root, relativePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, buildZip({ "word/document.xml": documentXml }));
+  return filePath;
+}
+
+function buildZip(entries: Record<string, string>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let localOffset = 0;
+
+  for (const [name, content] of Object.entries(entries)) {
+    const nameBuffer = Buffer.from(name, "utf8");
+    const contentBuffer = Buffer.from(content, "utf8");
+    const compressed = zlib.deflateRawSync(contentBuffer);
+
+    const localHeader = Buffer.alloc(30 + nameBuffer.length);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(compressed.length, 18);
+    localHeader.writeUInt32LE(contentBuffer.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    nameBuffer.copy(localHeader, 30);
+    localParts.push(localHeader, compressed);
+
+    const centralHeader = Buffer.alloc(46 + nameBuffer.length);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(compressed.length, 20);
+    centralHeader.writeUInt32LE(contentBuffer.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt32LE(localOffset, 42);
+    nameBuffer.copy(centralHeader, 46);
+    centralParts.push(centralHeader);
+
+    localOffset += localHeader.length + compressed.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const endOfCentralDirectory = Buffer.alloc(22);
+  endOfCentralDirectory.writeUInt32LE(0x06054b50, 0);
+  endOfCentralDirectory.writeUInt16LE(centralParts.length, 8);
+  endOfCentralDirectory.writeUInt16LE(centralParts.length, 10);
+  endOfCentralDirectory.writeUInt32LE(centralDirectory.length, 12);
+  endOfCentralDirectory.writeUInt32LE(localOffset, 16);
+
+  return Buffer.concat([...localParts, centralDirectory, endOfCentralDirectory]);
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
 function mockTelegramFetch(
   sentMessages: Array<{ chat_id: string; text: string }>,
   text: string | undefined = "/ingest project:sales tag:lead",
@@ -673,7 +830,7 @@ function mockTelegramFetch(
                       file_id: "doc-file",
                       file_unique_id: "doc-unique",
                       file_name: path.basename(filePath),
-                      mime_type: "text/plain",
+                      mime_type: mimeTypeForFixture(filePath),
                       file_size: 12,
                     },
                   }
@@ -708,6 +865,12 @@ function mockTelegramFetch(
     }
     return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
   };
+}
+
+function mimeTypeForFixture(filePath: string): string {
+  return path.extname(filePath).toLowerCase() === ".docx"
+    ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    : "text/plain";
 }
 
 function mockAudioPresetFetch(

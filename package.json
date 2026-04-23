@@ -19,6 +19,7 @@
     "smoke:ready": "npx tsx apps/worker/src/readiness.ts",
     "smoke:agent:ready": "bash scripts/smoke-agent-postprocess.sh --ready",
     "smoke:agent:live": "bash scripts/smoke-agent-postprocess.sh --live",
+    "setup:docx-rendering": "bash scripts/setup-docx-template-rendering.sh",
     "ops:start": "bash scripts/start-local-stack.sh",
     "ops:stop": "bash scripts/stop-local-stack.sh",
     "ops:restart": "bash scripts/restart-local-stack.sh",

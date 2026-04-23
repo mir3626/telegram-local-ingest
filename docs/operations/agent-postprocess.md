@@ -42,7 +42,22 @@ This creates a temporary fixture under `runtime/agent-smoke/`, invokes Codex thr
 
 The worker converts the agent's translated Markdown/text result plus the preprocessed original text into one mobile-friendly `original-and-translated.pdf`. The Telegram completion message lists the real expiry timestamp in KST, and the download button includes the same deadline in compact form. Runtime download files are valid for 24 hours.
 
+For DOCX uploads, the worker first tries to apply the source document as a DOCX reference template: it writes `original-and-translated.docx` with `pandoc --reference-doc <source.docx>`, then converts that document to PDF with LibreOffice. This preserves more document styling than direct PDF drawing. If `pandoc` or LibreOffice is unavailable, the worker logs the missing tool and falls back to the built-in PDF renderer.
+
 For Korean/CJK PDF text, WSL normally auto-detects the Windows Malgun Gothic font at `/mnt/c/Windows/Fonts/malgun.ttf`. Set `PDF_FONT_PATH` when running on a host with a different font location.
+
+Optional tool overrides:
+
+```env
+PANDOC_BIN=/usr/bin/pandoc
+LIBREOFFICE_BIN=/usr/bin/soffice
+```
+
+WSL one-time install, if these commands are missing:
+
+```bash
+npm run setup:docx-rendering
+```
 
 ## Boundaries
 

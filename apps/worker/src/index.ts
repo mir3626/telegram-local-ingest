@@ -1,8 +1,11 @@
-import { createWriteStream } from "node:fs";
+import { execFile } from "node:child_process";
+import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
+import { promisify } from "node:util";
 import PDFDocument from "pdfkit";
 
 import {
@@ -77,6 +80,10 @@ import {
 } from "@telegram-local-ingest/telegram";
 import { type RawBundleArtifactInput, writeRawBundle } from "@telegram-local-ingest/vault";
 import { runWikiIngestAdapter } from "@telegram-local-ingest/wiki-adapter";
+
+const execFileAsync = promisify(execFile);
+const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
 export interface WorkerContext {
   config: AppConfig;
@@ -1030,9 +1037,11 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
   }
 
   const artifacts = readPreprocessedArtifacts(events);
+  const files = listJobFiles(context.db, job.id);
   const downloadableFiles = [
     await createOriginalAndTranslationPdf({
       job,
+      files,
       artifacts,
       generatedFiles,
       outputDir: result.outputDir,
@@ -1482,6 +1491,7 @@ function getOutputCallbackAccess(
 
 async function createOriginalAndTranslationPdf(input: {
   job: StoredJob;
+  files: StoredJobFile[];
   artifacts: AgentPostprocessInput["artifacts"];
   generatedFiles: GeneratedFile[];
   outputDir: string;
@@ -1496,7 +1506,25 @@ async function createOriginalAndTranslationPdf(input: {
     fs.readFile(translationFile.path, "utf8"),
     findPdfFontPath(),
   ]);
+  const templateDocx = findDocxTemplateFile(input.files);
   const pdfPath = path.join(input.outputDir, "original-and-translated.pdf");
+  if (templateDocx) {
+    const templated = await tryCreateTemplatedDocxPdf({
+      job: input.job,
+      originalSections,
+      translation: {
+        title: path.basename(translationFile.relativePath),
+        text: translationText,
+      },
+      templateDocx,
+      outputDir: input.outputDir,
+      pdfPath,
+    });
+    if (templated) {
+      return templated;
+    }
+  }
+
   await writeOriginalAndTranslationPdf({
     pdfPath,
     job: input.job,
@@ -1511,6 +1539,167 @@ async function createOriginalAndTranslationPdf(input: {
     path: pdfPath,
     relativePath: path.basename(pdfPath),
   };
+}
+
+function findDocxTemplateFile(files: StoredJobFile[]): { path: string; fileName: string } | null {
+  for (const file of files) {
+    const candidatePath = file.archivePath ?? file.localPath;
+    if (!candidatePath) {
+      continue;
+    }
+    const fileName = file.originalName ?? path.basename(candidatePath);
+    const extension = path.extname(fileName).toLowerCase();
+    const mimeType = file.mimeType?.toLowerCase();
+    if (extension === ".docx" || mimeType === DOCX_MIME_TYPE) {
+      return {
+        path: candidatePath,
+        fileName,
+      };
+    }
+  }
+  return null;
+}
+
+async function tryCreateTemplatedDocxPdf(input: {
+  job: StoredJob;
+  originalSections: PdfTextSection[];
+  translation: PdfTextSection;
+  templateDocx: { path: string; fileName: string };
+  outputDir: string;
+  pdfPath: string;
+}): Promise<GeneratedFile | null> {
+  const [pandocBin, officeBin] = await Promise.all([
+    findExecutable(process.env.PANDOC_BIN, "pandoc"),
+    findExecutable(process.env.LIBREOFFICE_BIN ?? process.env.SOFFICE_BIN, "soffice", "libreoffice"),
+  ]);
+  if (!pandocBin || !officeBin) {
+    logWorker(
+      `template render skipped job=${input.job.id} reason=missing_tool pandoc=${pandocBin ? "ok" : "missing"} office=${officeBin ? "ok" : "missing"}`,
+      "warn",
+      "OUTPUT",
+    );
+    return null;
+  }
+
+  const markdownPath = path.join(input.outputDir, "original-and-translated.pandoc.md");
+  const docxPath = path.join(input.outputDir, "original-and-translated.docx");
+  await fs.writeFile(markdownPath, renderOriginalAndTranslationMarkdown(input), "utf8");
+  try {
+    await execFileAsync(pandocBin, [
+      markdownPath,
+      "--from",
+      "markdown+raw_tex",
+      "--to",
+      "docx",
+      "--output",
+      docxPath,
+      "--reference-doc",
+      input.templateDocx.path,
+    ], {
+      timeout: COMMAND_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    await convertDocxToPdf({
+      officeBin,
+      docxPath,
+      pdfPath: input.pdfPath,
+    });
+    logWorker(`template render complete job=${input.job.id} template=${input.templateDocx.fileName}`, "info", "OUTPUT");
+    return {
+      path: input.pdfPath,
+      relativePath: path.basename(input.pdfPath),
+    };
+  } catch (error) {
+    logWorker(`template render failed job=${input.job.id} error=${errorMessage(error)}`, "warn", "OUTPUT");
+    return null;
+  }
+}
+
+function renderOriginalAndTranslationMarkdown(input: {
+  job: StoredJob;
+  originalSections: PdfTextSection[];
+  translation: PdfTextSection;
+  templateDocx: { path: string; fileName: string };
+}): string {
+  const lines = [
+    "% 원본 + 번역본",
+    `% Job: ${input.job.id}`,
+    `% Generated: ${formatKstDateTime(new Date().toISOString())}`,
+    "",
+    "# 원문",
+    "",
+  ];
+  for (const section of input.originalSections) {
+    lines.push(`## ${section.title}`, "", normalizeMarkdownText(section.text), "");
+  }
+  lines.push("\\newpage", "", "# 번역문", "", `## ${input.translation.title}`, "", normalizeMarkdownText(input.translation.text), "");
+  return lines.join("\n");
+}
+
+function normalizeMarkdownText(value: string): string {
+  return value.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+async function convertDocxToPdf(input: { officeBin: string; docxPath: string; pdfPath: string }): Promise<void> {
+  const outputDir = path.dirname(input.pdfPath);
+  await fs.mkdir(outputDir, { recursive: true });
+  const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-local-ingest-lo-"));
+  try {
+    await execFileAsync(input.officeBin, [
+      `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
+      "--headless",
+      "--convert-to",
+      "pdf",
+      "--outdir",
+      outputDir,
+      input.docxPath,
+    ], {
+      timeout: COMMAND_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    await fs.access(input.pdfPath);
+  } finally {
+    await fs.rm(profileDir, { recursive: true, force: true });
+  }
+}
+
+async function findExecutable(preferred: string | undefined, ...fallbacks: string[]): Promise<string | null> {
+  const candidates = [
+    ...(preferred && preferred.trim().length > 0 ? [preferred.trim()] : []),
+    ...fallbacks,
+  ];
+  for (const candidate of candidates) {
+    const resolved = await resolveExecutable(candidate);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
+async function resolveExecutable(candidate: string): Promise<string | null> {
+  if (candidate.includes(path.sep) || (path.sep === "\\" && candidate.includes("/"))) {
+    return await canExecute(candidate) ? candidate : null;
+  }
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!directory) {
+      continue;
+    }
+    const resolved = path.join(directory, candidate);
+    if (await canExecute(resolved)) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
+async function canExecute(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function findTranslationFile(files: GeneratedFile[]): GeneratedFile | null {

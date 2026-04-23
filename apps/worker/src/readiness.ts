@@ -122,7 +122,7 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
     checks.push(warn("WIKI_INGEST_COMMAND", "not set; worker will preserve raw bundles and skip wiki adaptation"));
   }
 
-  await checkAgentPostprocessReadiness(checks, config, cwd);
+  await checkAgentPostprocessReadiness(checks, config, cwd, env);
 
   if (options.checkTelegram ?? true) {
     const client = new TelegramBotApiClient(
@@ -148,6 +148,7 @@ async function checkAgentPostprocessReadiness(
   checks: ReadinessCheck[],
   config: AppConfig,
   cwd: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<void> {
   if (config.agent.provider === "none") {
     checks.push(warn("AGENT_POSTPROCESS_PROVIDER", "none; translation/formatting agent will be skipped"));
@@ -194,6 +195,34 @@ async function checkAgentPostprocessReadiness(
   } else {
     checks.push(warn("Codex postprocess wrapper", "not using scripts/run-codex-postprocess.sh; custom command live behavior was not checked"));
   }
+
+  await checkDocxTemplateRenderTools(checks, cwd, env);
+}
+
+async function checkDocxTemplateRenderTools(checks: ReadinessCheck[], cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const pandocCommand = resolveCommandPath(cwd, env.PANDOC_BIN || "pandoc");
+  const pandoc = await checkCommandVersion(pandocCommand, ["--version"]);
+  if (pandoc.ok) {
+    checks.push(ok("DOCX template renderer: pandoc", firstLine(pandoc.output)));
+  } else {
+    checks.push(warn("DOCX template renderer: pandoc", "missing; DOCX uploads will use the fallback PDF renderer"));
+  }
+
+  const officeCommands = [
+    env.LIBREOFFICE_BIN,
+    env.SOFFICE_BIN,
+    "soffice",
+    "libreoffice",
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  for (const command of officeCommands) {
+    const resolved = resolveCommandPath(cwd, command);
+    const office = await checkCommandVersion(resolved, ["--version"]);
+    if (office.ok) {
+      checks.push(ok("DOCX template renderer: LibreOffice", `${resolved}: ${firstLine(office.output)}`));
+      return;
+    }
+  }
+  checks.push(warn("DOCX template renderer: LibreOffice", "missing; DOCX uploads will use the fallback PDF renderer"));
 }
 
 function finish(envPath: string | null, checks: ReadinessCheck[]): ReadinessReport {
@@ -333,6 +362,10 @@ function resolveCommandPath(cwd: string, command: string): string {
     return path.resolve(cwd, command);
   }
   return command;
+}
+
+function firstLine(value: string): string {
+  return value.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? value;
 }
 
 function ok(name: string, message: string): ReadinessCheck {

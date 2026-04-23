@@ -144,6 +144,7 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     input.instructions ? `- Operator instructions: ${input.instructions}` : "- Operator instructions: none",
     "",
     "Translate when needed, keep terminology consistent, preserve a professional business tone, and format the result as clean Markdown unless the source format requires a different practical output.",
+    "For DOCX-derived artifacts, preserve the original section order, table/list semantics, headings, and labels in Markdown so the worker can render the result through the source DOCX template.",
     "",
     "## Prepared Artifacts",
     "",
