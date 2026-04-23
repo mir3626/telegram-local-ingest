@@ -101,7 +101,7 @@
   ],
   "handoff": {
     "currentSprintId": "sprint-12-utility-cleanup-polish",
-    "lastActionSummary": "Worker now normalizes final translated deliverables to source-stem `_translated` names, removes intermediate agent files from output directories, and appends `[원문]` itself after translation content.",
+    "lastActionSummary": "Raw snapshot guards now scope to the current bundle, retries reuse existing finalized raw bundles, and non-audio jobs log STT skipped instead of looking like speech transcription ran.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -115,7 +115,7 @@
       "Prefer official Anthropic skills for document tasks when a suitable official skill exists"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-23T14:49:07.000Z"
+    "updatedAt": "2026-04-23T15:18:00.000Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -130,8 +130,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-23T14:49:07.000Z",
-  "verifiedAt": "2026-04-23T14:49:07.000Z",
+  "stateUpdatedAt": "2026-04-23T15:18:00.000Z",
+  "verifiedAt": "2026-04-23T15:18:00.000Z",
   "verificationCommands": [
     {
       "id": "typecheck",

@@ -79,7 +79,7 @@ export async function runAgentPostprocess(
   const promptPath = path.join(workDir, "prompt.md");
   await fs.writeFile(promptPath, prompt, "utf8");
 
-  const beforeRaw = await snapshotTree(input.rawRoot);
+  const beforeRaw = await snapshotTree(input.rawRoot, input.bundlePath);
   const command = buildAgentCommand(input.command, {
     bundlePath: path.resolve(input.bundlePath),
     jobId: input.jobId,
@@ -92,7 +92,7 @@ export async function runAgentPostprocess(
     stdin: command.usesPromptPlaceholder ? "" : prompt,
     timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   });
-  const afterRaw = await snapshotTree(input.rawRoot);
+  const afterRaw = await snapshotTree(input.rawRoot, input.bundlePath);
   const rawDiff = diffSnapshots(beforeRaw, afterRaw);
   if (rawDiff.length > 0) {
     throw new AgentAdapterError(`Agent postprocess modified raw files: ${rawDiff.join(", ")}`);
@@ -331,15 +331,19 @@ export function parseCommandLine(value: string): string[] {
   return tokens;
 }
 
-export async function snapshotTree(root: string): Promise<Map<string, string>> {
+export async function snapshotTree(root: string, scopeRoot = root): Promise<Map<string, string>> {
   const resolvedRoot = path.resolve(root);
+  const resolvedScopeRoot = path.resolve(scopeRoot);
+  if (!isPathInside(resolvedRoot, resolvedScopeRoot)) {
+    throw new AgentAdapterError(`Snapshot scope must be inside root: ${scopeRoot}`);
+  }
   const entries = new Map<string, string>();
   try {
-    await fs.access(resolvedRoot);
+    await fs.access(resolvedScopeRoot);
   } catch {
     return entries;
   }
-  await snapshotDirectory(resolvedRoot, resolvedRoot, entries);
+  await snapshotDirectory(resolvedRoot, resolvedScopeRoot, entries);
   return entries;
 }
 

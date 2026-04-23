@@ -11,6 +11,7 @@ import type { AppConfig } from "@telegram-local-ingest/core";
 import {
   addJobFile,
   createJob,
+  createSourceBundle,
   createJobOutput,
   getJob,
   getJobOutput,
@@ -20,6 +21,7 @@ import {
   migrate,
   mustGetSourceBundleForJob,
   openIngestDatabase,
+  requestRetry,
   transitionJob,
 } from "@telegram-local-ingest/db";
 import type { RtzrTranscribeConfig, RtzrTranscript, WaitForTranscriptionOptions } from "@telegram-local-ingest/rtzr";
@@ -28,6 +30,7 @@ import { TelegramBotApiClient, type FetchLike } from "@telegram-local-ingest/tel
 
 import {
   pollTelegramUpdatesOnce,
+  processJob,
   processRunnableJobs,
   runWorkerOnce,
   type AgentPostprocessor,
@@ -437,6 +440,79 @@ test("pollTelegramUpdatesOnce retries a failed job from a retry button", async (
     assert.equal(getJob(dbHandle.db, "job-retry")?.retryCount, 1);
     assert.match(JSON.stringify(answeredCallbacks[0]), /재시도 대기열/);
     assert.equal(sentMessages.at(-1)?.text, "🔁 재시도 대기열에 넣었어요: job-retry");
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("processJob reuses an existing finalized raw bundle when a retry reaches bundle writing again", async () => {
+  const fixture = createFixture();
+  const originalPath = writeFile(fixture.runtimeDir, "archive/originals/aa/hash/lead.txt", "This contract still needs translation.");
+  const bundlePath = path.join(fixture.vaultPath, "raw", "2026-04-22", "job-retry");
+  const manifestPath = writeFile(fixture.vaultPath, "raw/2026-04-22/job-retry/manifest.yaml", "schema_version: 1\n");
+  const sourceMarkdownPath = writeFile(fixture.vaultPath, "raw/2026-04-22/job-retry/source.md", "# Source\n");
+  writeFile(fixture.vaultPath, "raw/2026-04-22/job-retry/.finalized", "finalized_at=2026-04-22T12:00:00.000Z\n");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, {
+      id: "job-retry",
+      source: "telegram-local-bot-api",
+      chatId: "300",
+      userId: "400",
+      project: "sales",
+      now: NOW_FOR_TESTS,
+    });
+    transitionJob(dbHandle.db, "job-retry", "QUEUED", { now: NOW_FOR_TESTS });
+    addJobFile(dbHandle.db, {
+      id: "file-1",
+      jobId: "job-retry",
+      sourceFileId: "file-1",
+      fileUniqueId: "file-1-unique",
+      originalName: "lead.txt",
+      mimeType: "text/plain",
+      sizeBytes: 38,
+      sha256: "hash",
+      localPath: originalPath,
+      archivePath: originalPath,
+      now: NOW_FOR_TESTS,
+    });
+    transitionJob(dbHandle.db, "job-retry", "IMPORTING", { now: NOW_FOR_TESTS });
+    transitionJob(dbHandle.db, "job-retry", "NORMALIZING", { now: NOW_FOR_TESTS });
+    transitionJob(dbHandle.db, "job-retry", "BUNDLE_WRITING", { now: NOW_FOR_TESTS });
+    createSourceBundle(dbHandle.db, {
+      id: "job-retry",
+      jobId: "job-retry",
+      bundlePath,
+      manifestPath,
+      sourceMarkdownPath,
+      finalizedAt: NOW_FOR_TESTS,
+      now: NOW_FOR_TESTS,
+    });
+    transitionJob(dbHandle.db, "job-retry", "INGESTING", { now: NOW_FOR_TESTS });
+    transitionJob(dbHandle.db, "job-retry", "FAILED", { now: NOW_FOR_TESTS, error: "agent failed" });
+    const retryRequested = requestRetry(dbHandle.db, "job-retry", { now: NOW_FOR_TESTS, message: "Retry requested" });
+    transitionJob(dbHandle.db, retryRequested.id, "QUEUED", { now: NOW_FOR_TESTS, message: "Retry queued" });
+    transitionJob(dbHandle.db, "job-retry", "IMPORTING", { now: NOW_FOR_TESTS, message: "Retry importing" });
+    transitionJob(dbHandle.db, "job-retry", "NORMALIZING", { now: NOW_FOR_TESTS, message: "Retry normalizing" });
+    transitionJob(dbHandle.db, "job-retry", "BUNDLE_WRITING", { now: NOW_FOR_TESTS, message: "Retry writing bundle" });
+
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages),
+      ),
+    };
+
+    const result = await processJob(context, "job-retry");
+
+    assert.equal(result.status, "COMPLETED");
+    assert.equal(getJob(dbHandle.db, "job-retry")?.status, "COMPLETED");
+    assert.ok(listJobEvents(dbHandle.db, "job-retry").some((event) => event.type === "bundle.reused"));
+    assert.match(sentMessages.at(-1)?.text ?? "", /✅ 처리 완료: job-retry \(sales\)/);
   } finally {
     dbHandle.close();
   }

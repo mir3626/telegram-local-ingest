@@ -20,6 +20,7 @@ import {
   appendJobEvent,
   claimRunnableJobs,
   createSourceBundle,
+  getSourceBundleForJob,
   getJob,
   getTelegramOffset,
   getJobOutput,
@@ -510,18 +511,36 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     }
 
     if (job.status === "NORMALIZING") {
-      logWorker(`STT phase started job=${job.id} provider=${context.config.stt.provider}`, "info", "STT");
-      await runWithSemaphore(context, "stt", () => runConfiguredSttTranscription(context, job));
+      const audioFiles = listJobFiles(context.db, job.id).filter(isAudioJobFile);
+      if (audioFiles.length > 0) {
+        logWorker(`STT phase started job=${job.id} provider=${context.config.stt.provider} files=${audioFiles.length}`, "info", "STT");
+        await runWithSemaphore(context, "stt", () => runConfiguredSttTranscription(context, job));
+        const stopped = terminalJobIfStopped(context.db, job.id);
+        if (stopped) {
+          return stopped;
+        }
+        logWorker(`STT phase finished job=${job.id} provider=${context.config.stt.provider}`, "info", "STT");
+      } else {
+        logWorker(`STT skipped job=${job.id} reason=no_audio_files`, "info", "STT");
+      }
       const stopped = terminalJobIfStopped(context.db, job.id);
       if (stopped) {
         return stopped;
       }
-      logWorker(`STT phase finished job=${job.id} provider=${context.config.stt.provider}`, "info", "STT");
       transitionJob(context.db, job.id, "BUNDLE_WRITING", { message: "Writing Obsidian raw bundle" });
       job = mustGetJob(context.db, job.id);
     }
 
     if (job.status === "BUNDLE_WRITING") {
+      const existingBundle = getSourceBundleForJob(context.db, job.id);
+      if (existingBundle && await isReusableSourceBundle(existingBundle)) {
+        appendJobEvent(context.db, job.id, "bundle.reused", existingBundle.bundlePath, {
+          bundleId: existingBundle.id,
+        });
+        logWorker(`reusing existing raw bundle job=${job.id} path=${existingBundle.bundlePath}`, "info", "BUNDLE");
+        transitionJob(context.db, job.id, "INGESTING", { message: "Reusing existing Obsidian raw bundle" });
+        job = mustGetJob(context.db, job.id);
+      } else {
       logWorker(`writing raw bundle job=${job.id}`, "info", "BUNDLE");
       const events = listJobEvents(context.db, job.id);
       const bundle = await writeRawBundle({
@@ -543,6 +562,7 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       logWorker(`bundle written job=${job.id} path=${bundle.paths.root}`, "info", "BUNDLE");
       transitionJob(context.db, job.id, "INGESTING", { message: "Raw bundle ready for wiki ingest" });
       job = mustGetJob(context.db, job.id);
+      }
     }
 
     if (job.status === "INGESTING") {
@@ -688,6 +708,21 @@ function terminalJobIfStopped(db: DatabaseSync, jobId: string): StoredJob | null
     return current;
   }
   return null;
+}
+
+async function isReusableSourceBundle(bundle: { bundlePath: string; manifestPath: string; sourceMarkdownPath: string }): Promise<boolean> {
+  const markerPath = path.join(bundle.bundlePath, ".finalized");
+  try {
+    await Promise.all([
+      fs.access(bundle.bundlePath),
+      fs.access(bundle.manifestPath),
+      fs.access(bundle.sourceMarkdownPath),
+      fs.access(markerPath),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function cleanupExpiredOutputFiles(context: WorkerContext): Promise<void> {

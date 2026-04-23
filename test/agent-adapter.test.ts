@@ -89,6 +89,20 @@ test("runAgentPostprocess rejects raw bundle mutations", async () => {
   );
 });
 
+test("runAgentPostprocess ignores unrelated raw changes outside the current bundle scope", async () => {
+  const fixture = createFixture();
+  const runner: CommandRunner = async () => {
+    fs.mkdirSync(path.join(fixture.rawRoot, "job-2"), { recursive: true });
+    fs.writeFileSync(path.join(fixture.rawRoot, "job-2", "source.md"), "other job", "utf8");
+    return { exitCode: 0, stdout: "ok", stderr: "" };
+  };
+
+  const result = await runAgentPostprocess(inputFixture(fixture), runner);
+
+  assert.equal(result.stdout, "ok");
+  assert.equal(fs.existsSync(path.join(fixture.rawRoot, "job-2", "source.md")), true);
+});
+
 function createFixture(): { root: string; rawRoot: string; bundlePath: string; outputDir: string; transcriptPath: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-adapter-"));
   const rawRoot = path.join(root, "vault", "raw");

@@ -94,6 +94,27 @@ test("runWikiIngestAdapter rejects raw bundle mutations", async () => {
   );
 });
 
+test("runWikiIngestAdapter ignores unrelated raw changes outside the current bundle scope", async () => {
+  const fixture = createFixture();
+  const runner: CommandRunner = async () => {
+    const siblingBundle = path.join(fixture.rawRoot, "2026-04-22", "job-2");
+    fs.mkdirSync(siblingBundle, { recursive: true });
+    fs.writeFileSync(path.join(siblingBundle, "source.md"), "other raw", "utf8");
+    return { exitCode: 0, stdout: "ok", stderr: "" };
+  };
+
+  const result = await runWikiIngestAdapter({
+    command: "codex exec",
+    bundlePath: fixture.bundlePath,
+    rawRoot: fixture.rawRoot,
+    wikiRoot: fixture.wikiRoot,
+    lockPath: fixture.lockPath,
+    jobId: "job-1",
+  }, runner);
+
+  assert.equal(result.stdout, "ok");
+});
+
 test("runWikiIngestAdapter rejects overlapping raw and wiki roots", async () => {
   const fixture = createFixture();
   await assert.rejects(
