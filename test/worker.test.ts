@@ -116,13 +116,13 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.kind, "agent_translation");
-    assert.equal(outputs[0]?.fileName, "original-and-translated.pdf");
+    assert.equal(outputs[0]?.fileName, "lead_translated.pdf");
     assert.equal(outputs[0]?.mimeType, "application/pdf");
     assert.equal(fs.readFileSync(outputs[0]?.filePath ?? "").subarray(0, 4).toString("utf8"), "%PDF");
     const completion = sentMessages.at(-1);
     assert.match(completion?.text ?? "", /자동번역이 완료되었습니다/);
     assert.match(completion?.text ?? "", /만료 시각/);
-    assert.match(completion?.text ?? "", /original-and-translated\.pdf: \d{4}-\d{2}-\d{2} \d{2}:\d{2} KST/);
+    assert.match(completion?.text ?? "", /lead_translated\.pdf: \d{4}-\d{2}-\d{2} \d{2}:\d{2} KST/);
     assert.match(JSON.stringify(completion?.reply_markup), /download:/);
     assert.match(JSON.stringify(completion?.reply_markup), /PDF 다운로드/);
     assert.match(JSON.stringify(completion?.reply_markup), /까지/);
@@ -144,15 +144,18 @@ test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is av
   const toolRoot = path.join(fixture.root, "tools");
   const fakePandoc = writeExecutable(toolRoot, "pandoc", [
     "#!/bin/sh",
+    "input=\"\"",
     "out=\"\"",
     "ref=\"\"",
     "prev=\"\"",
     "for arg in \"$@\"; do",
+    "  if [ -z \"$input\" ]; then input=\"$arg\"; fi",
     "  if [ \"$prev\" = \"--output\" ]; then out=\"$arg\"; fi",
     "  if [ \"$prev\" = \"--reference-doc\" ]; then ref=\"$arg\"; fi",
     "  prev=\"$arg\"",
     "done",
     "printf 'template=%s\\n' \"$ref\" > \"$out\"",
+    "cat \"$input\" >> \"$out\"",
   ].join("\n"));
   const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
@@ -183,10 +186,12 @@ test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is av
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
-    assert.equal(outputs[0]?.fileName, "original-and-translated.docx");
+    assert.equal(outputs[0]?.fileName, "vendor-template_translated.docx");
     assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /vendor-template\.docx/);
-    const renderedDocx = path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "original-and-translated.docx");
+    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /# \[원문\]/);
+    assert.doesNotMatch(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /# 원문/);
+    const renderedDocx = path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "vendor-template_translated.docx");
     assert.match(fs.readFileSync(renderedDocx, "utf8"), /vendor-template\.docx/);
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
   } finally {

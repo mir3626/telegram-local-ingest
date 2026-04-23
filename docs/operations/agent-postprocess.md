@@ -42,9 +42,9 @@ This creates a temporary fixture under `runtime/agent-smoke/`, invokes Codex thr
 
 The Telegram completion message lists the real expiry timestamp in KST, and the download button includes the same deadline in compact form. Runtime download files are valid for 24 hours.
 
-For DOCX/HWP-family uploads, the worker does not force PDF delivery. If the agent creates `original-and-translated.docx`, `translated.docx`, `.hwp`, or `.hwpx`, that document is sent directly. If the agent returns Markdown, the worker uses `pandoc` to create `original-and-translated.docx`; DOCX sources use `--reference-doc <source.docx>` so more source styling can carry over. HWP/HWPX sources are delivered as DOCX unless a native HWP/HWPX file is created by the agent.
+For DOCX/HWP-family uploads, the worker does not force PDF delivery. If the agent creates DOCX/HWP/HWPX output, that document is sent directly with the uploaded source stem plus `_translated` as the download filename. If the agent returns Markdown, the worker uses `pandoc` to create `<source-stem>_translated.docx`; DOCX sources use `--reference-doc <source.docx>` so more source styling can carry over. HWP/HWPX sources are delivered as DOCX unless a native HWP/HWPX file is created by the agent. When the original text is included after the translation, it must be labeled `[원문]`, not appendix/`부록`.
 
-For non-DOCX/HWP uploads, the worker converts the agent's translated Markdown/text result plus the preprocessed original text into one mobile-friendly `original-and-translated.pdf`. For Korean/CJK PDF text, WSL normally auto-detects the Windows Malgun Gothic font at `/mnt/c/Windows/Fonts/malgun.ttf`. Set `PDF_FONT_PATH` when running on a host with a different font location.
+For non-DOCX/HWP uploads, the worker converts the agent's translated Markdown/text result plus the preprocessed original text into one mobile-friendly `<source-stem>_translated.pdf`. For Korean/CJK PDF text, WSL normally auto-detects the Windows Malgun Gothic font at `/mnt/c/Windows/Fonts/malgun.ttf`. Set `PDF_FONT_PATH` when running on a host with a different font location.
 
 Optional tool overrides:
 

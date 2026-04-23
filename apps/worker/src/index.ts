@@ -1509,7 +1509,13 @@ async function createDownloadableAgentFile(input: {
     }
   }
 
-  return await createOriginalAndTranslationPdf(input);
+  return await createOriginalAndTranslationPdf({
+    job: input.job,
+    artifacts: input.artifacts,
+    generatedFiles: input.generatedFiles,
+    outputDir: input.outputDir,
+    sourceFileName: primaryOutputSourceFileName(input.files, input.job),
+  });
 }
 
 async function createOriginalAndTranslationPdf(input: {
@@ -1517,6 +1523,7 @@ async function createOriginalAndTranslationPdf(input: {
   artifacts: AgentPostprocessInput["artifacts"];
   generatedFiles: GeneratedFile[];
   outputDir: string;
+  sourceFileName: string;
 }): Promise<GeneratedFile> {
   const translationFile = findTranslationFile(input.generatedFiles);
   if (!translationFile) {
@@ -1528,7 +1535,8 @@ async function createOriginalAndTranslationPdf(input: {
     fs.readFile(translationFile.path, "utf8"),
     findPdfFontPath(),
   ]);
-  const pdfPath = path.join(input.outputDir, "original-and-translated.pdf");
+  const pdfName = buildTranslatedOutputFileName(input.sourceFileName, ".pdf");
+  const pdfPath = path.join(input.outputDir, pdfName);
 
   await writeOriginalAndTranslationPdf({
     pdfPath,
@@ -1583,7 +1591,13 @@ async function createDocumentTranslationDocx(input: {
   const existingDocumentOutput = findDocumentOutput(input.generatedFiles);
   if (existingDocumentOutput) {
     logWorker(`document output selected job=${input.job.id} file=${existingDocumentOutput.relativePath}`, "info", "OUTPUT");
-    return existingDocumentOutput;
+    return {
+      path: existingDocumentOutput.path,
+      relativePath: buildTranslatedOutputFileName(
+        input.documentSource.fileName,
+        path.extname(existingDocumentOutput.relativePath) || ".docx",
+      ),
+    };
   }
 
   const translationFile = findTranslationFile(input.generatedFiles);
@@ -1598,7 +1612,10 @@ async function createDocumentTranslationDocx(input: {
       "warn",
       "OUTPUT",
     );
-    return translationFile;
+    return {
+      path: translationFile.path,
+      relativePath: buildTranslatedOutputFileName(input.documentSource.fileName, path.extname(translationFile.relativePath) || ".md"),
+    };
   }
 
   const [originalSections, translationText] = await Promise.all([
@@ -1607,7 +1624,8 @@ async function createDocumentTranslationDocx(input: {
   ]);
   const workDir = path.join(path.dirname(input.outputDir), ".render-work");
   const markdownPath = path.join(workDir, "original-and-translated.md");
-  const docxPath = path.join(input.outputDir, "original-and-translated.docx");
+  const docxName = buildTranslatedOutputFileName(input.documentSource.fileName, ".docx");
+  const docxPath = path.join(input.outputDir, docxName);
   await fs.mkdir(workDir, { recursive: true });
   await fs.writeFile(markdownPath, renderOriginalAndTranslationMarkdown({
     job: input.job,
@@ -1637,11 +1655,14 @@ async function createDocumentTranslationDocx(input: {
     logWorker(`document render complete job=${input.job.id} source=${input.documentSource.fileName}`, "info", "OUTPUT");
     return {
       path: docxPath,
-      relativePath: path.basename(docxPath),
+      relativePath: docxName,
     };
   } catch (error) {
     logWorker(`document render failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
-    return translationFile;
+    return {
+      path: translationFile.path,
+      relativePath: buildTranslatedOutputFileName(input.documentSource.fileName, path.extname(translationFile.relativePath) || ".md"),
+    };
   }
 }
 
@@ -1651,17 +1672,24 @@ function renderOriginalAndTranslationMarkdown(input: {
   translation: PdfTextSection;
 }): string {
   const lines = [
-    "% 원본 + 번역본",
+    "% 번역본 + 원문",
     `% Job: ${input.job.id}`,
     `% Generated: ${formatKstDateTime(new Date().toISOString())}`,
     "",
-    "# 원문",
+    "# 번역문",
+    "",
+    `## ${input.translation.title}`,
+    "",
+    normalizeMarkdownText(input.translation.text),
+    "",
+    "\\newpage",
+    "",
+    "# [원문]",
     "",
   ];
   for (const section of input.originalSections) {
     lines.push(`## ${section.title}`, "", normalizeMarkdownText(section.text), "");
   }
-  lines.push("\\newpage", "", "# 번역문", "", `## ${input.translation.title}`, "", normalizeMarkdownText(input.translation.text), "");
   return lines.join("\n");
 }
 
@@ -1714,6 +1742,37 @@ function findTranslationFile(files: GeneratedFile[]): GeneratedFile | null {
     ?? sorted.find((file) => path.extname(file.relativePath).toLowerCase() === ".md")
     ?? sorted.find((file) => path.extname(file.relativePath).toLowerCase() === ".txt")
     ?? null;
+}
+
+function primaryOutputSourceFileName(files: StoredJobFile[], job: StoredJob): string {
+  if (files.length === 1) {
+    const file = files[0];
+    if (file?.originalName) {
+      return file.originalName;
+    }
+    if (file?.archivePath || file?.localPath) {
+      return path.basename(file.archivePath ?? file.localPath ?? "");
+    }
+  }
+  return job.id;
+}
+
+function buildTranslatedOutputFileName(sourceFileName: string, extension: string): string {
+  const normalizedExtension = extension.startsWith(".") ? extension : `.${extension}`;
+  const sourceBaseName = path.basename(sourceFileName).replace(/\u0000/g, "");
+  const parsed = path.parse(sourceBaseName);
+  const stem = sanitizeOutputFileStem(parsed.name || sourceBaseName || "document");
+  return `${stem}_translated${normalizedExtension.toLowerCase()}`;
+}
+
+function sanitizeOutputFileStem(value: string): string {
+  const sanitized = value
+    .replace(/[\\/]+/g, "_")
+    .replace(/[\u0000-\u001f<>:"|?*]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "");
+  return sanitized.length > 0 ? sanitized : "document";
 }
 
 function findDocumentOutput(files: GeneratedFile[]): GeneratedFile | null {
