@@ -19,6 +19,9 @@ test("buildAgentPrompt constrains agents to raw read and output writes", () => {
   assert.match(prompt, /Target language: ko/);
   assert.match(prompt, /Relationship\/tone preset: business/);
   assert.match(prompt, /meeting\.transcript\.md/);
+  assert.match(prompt, /Business Document Translation Preset/);
+  assert.match(prompt, /2 translators \+ 1 reviewer/);
+  assert.match(prompt, /official Anthropic `docx` skill/);
 });
 
 test("buildAgentCommand replaces placeholders and detects prompt file usage", () => {

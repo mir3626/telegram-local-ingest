@@ -134,7 +134,7 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
   }
 });
 
-test("runWorkerOnce renders DOCX uploads through source template tools when available", async () => {
+test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is available", async () => {
   const fixture = createFixture();
   writeMinimalDocx(
     fixture.botRoot,
@@ -154,27 +154,12 @@ test("runWorkerOnce renders DOCX uploads through source template tools when avai
     "done",
     "printf 'template=%s\\n' \"$ref\" > \"$out\"",
   ].join("\n"));
-  const fakeOffice = writeExecutable(toolRoot, "soffice", [
-    "#!/bin/sh",
-    "outdir=\"\"",
-    "input=\"\"",
-    "prev=\"\"",
-    "for arg in \"$@\"; do",
-    "  if [ \"$prev\" = \"--outdir\" ]; then outdir=\"$arg\"; fi",
-    "  input=\"$arg\"",
-    "  prev=\"$arg\"",
-    "done",
-    "base=$(basename \"$input\" .docx)",
-    "printf '%%PDF template\\n' > \"$outdir/$base.pdf\"",
-  ].join("\n"));
   const oldPandoc = process.env.PANDOC_BIN;
-  const oldOffice = process.env.LIBREOFFICE_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const agentInputs: AgentPostprocessInput[] = [];
   try {
     process.env.PANDOC_BIN = fakePandoc;
-    process.env.LIBREOFFICE_BIN = fakeOffice;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.agent = {
@@ -198,14 +183,14 @@ test("runWorkerOnce renders DOCX uploads through source template tools when avai
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
-    assert.equal(outputs[0]?.fileName, "original-and-translated.pdf");
-    assert.equal(outputs[0]?.mimeType, "application/pdf");
-    assert.equal(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), "%PDF template\n");
+    assert.equal(outputs[0]?.fileName, "original-and-translated.docx");
+    assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /vendor-template\.docx/);
     const renderedDocx = path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "original-and-translated.docx");
     assert.match(fs.readFileSync(renderedDocx, "utf8"), /vendor-template\.docx/);
+    assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
   } finally {
     restoreEnv("PANDOC_BIN", oldPandoc);
-    restoreEnv("LIBREOFFICE_BIN", oldOffice);
     dbHandle.close();
   }
 });

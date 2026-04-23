@@ -203,26 +203,10 @@ async function checkDocxTemplateRenderTools(checks: ReadinessCheck[], cwd: strin
   const pandocCommand = resolveCommandPath(cwd, env.PANDOC_BIN || "pandoc");
   const pandoc = await checkCommandVersion(pandocCommand, ["--version"]);
   if (pandoc.ok) {
-    checks.push(ok("DOCX template renderer: pandoc", firstLine(pandoc.output)));
+    checks.push(ok("DOCX document renderer: pandoc", firstLine(pandoc.output)));
   } else {
-    checks.push(warn("DOCX template renderer: pandoc", "missing; DOCX uploads will use the fallback PDF renderer"));
+    checks.push(warn("DOCX document renderer: pandoc", "missing; DOCX/HWP uploads may fall back to the agent's raw output"));
   }
-
-  const officeCommands = [
-    env.LIBREOFFICE_BIN,
-    env.SOFFICE_BIN,
-    "soffice",
-    "libreoffice",
-  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-  for (const command of officeCommands) {
-    const resolved = resolveCommandPath(cwd, command);
-    const office = await checkCommandVersion(resolved, ["--version"]);
-    if (office.ok) {
-      checks.push(ok("DOCX template renderer: LibreOffice", `${resolved}: ${firstLine(office.output)}`));
-      return;
-    }
-  }
-  checks.push(warn("DOCX template renderer: LibreOffice", "missing; DOCX uploads will use the fallback PDF renderer"));
 }
 
 function finish(envPath: string | null, checks: ReadinessCheck[]): ReadinessReport {

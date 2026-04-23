@@ -112,6 +112,7 @@ export async function runAgentPostprocess(
 }
 
 export function buildAgentPrompt(input: AgentPostprocessInput): string {
+  const outputFormat = inferRequestedOutputFormat(input);
   const artifactLines = input.artifacts.length === 0
     ? ["- None"]
     : input.artifacts.map((artifact) => [
@@ -143,8 +144,10 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     `- Translation needed: ${input.language.translationNeeded}`,
     input.instructions ? `- Operator instructions: ${input.instructions}` : "- Operator instructions: none",
     "",
-    "Translate when needed, keep terminology consistent, preserve a professional business tone, and format the result as clean Markdown unless the source format requires a different practical output.",
-    "For DOCX-derived artifacts, preserve the original section order, table/list semantics, headings, and labels in Markdown so the worker can render the result through the source DOCX template.",
+    "Use the fixed business document translation preset below whenever translation is needed.",
+    "Run the translator/reviewer methodology internally; do not write separate draft files unless they are needed for the final deliverable.",
+    "When producing DOCX, use the installed official Anthropic `docx` skill/workflow if available. Preserve headings, numbering, tables, lists, labels, and footnote references with DOCX-native structure.",
+    "Do not create PDF output yourself. The worker handles PDF delivery only for non-DOCX/HWP source files.",
     "",
     "## Prepared Artifacts",
     "",
@@ -153,9 +156,129 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "## Required Output",
     "",
     "- Create at least one operator-downloadable file in the output directory.",
-    "- Prefer `translated.md` for translated or reformatted Markdown output.",
+    outputFormat === ".docx"
+      ? "- For DOCX-derived artifacts, prefer `original-and-translated.docx`; if only the translation is practical, use `translated.docx`."
+      : "- Prefer `translated.md` for translated or reformatted Markdown output. The worker may combine it with source text into a PDF for Telegram delivery.",
+    "- Put translation metadata, glossary, translated document, and translator notes into the final deliverable. Include the original/source section when practical because the deliverable may later become wiki reference material.",
     "- Keep any temporary reasoning or scratch files out of the output directory.",
     "",
+    buildBusinessDocumentTranslationPreset(input, outputFormat),
+    "",
+  ].join("\n");
+}
+
+function inferRequestedOutputFormat(input: AgentPostprocessInput): ".docx" | ".md" {
+  return input.artifacts.some((artifact) => {
+    const kind = artifact.kind.toLowerCase();
+    const extension = path.extname(artifact.fileName).toLowerCase();
+    return kind.includes("docx") || extension === ".docx";
+  })
+    ? ".docx"
+    : ".md";
+}
+
+function buildBusinessDocumentTranslationPreset(input: AgentPostprocessInput, outputFormat: ".docx" | ".md"): string {
+  const sourceLanguage = input.language.primaryLanguage || "unknown";
+  const targetLanguage = input.targetLanguage || input.language.targetLanguage || "ko";
+  const documentType = input.instructions
+    ? "business/legal/administrative document; refine from operator instructions when specified"
+    : "business/legal/administrative document";
+  const scope = "full uploaded document represented by the finalized raw bundle and prepared artifacts";
+
+  return [
+    "# Business Document Translation Preset",
+    "",
+    "## ROLE",
+    "You are a senior translator with 20+ years of experience specializing in legal, administrative, and business documents. You orchestrate a multi-agent workflow (2 translators + 1 reviewer) to produce publication-quality translations.",
+    "",
+    "## TASK",
+    "Translate the uploaded document package using the three-agent methodology defined below.",
+    "",
+    "## INPUT PARAMETERS",
+    `- SOURCE_LANG: ${sourceLanguage}`,
+    `- TARGET_LANG: ${targetLanguage}`,
+    `- DOCUMENT_TYPE: ${documentType}`,
+    `- SCOPE: ${scope}`,
+    `- OUTPUT_FORMAT: ${outputFormat}`,
+    "- PRIORITY: balanced",
+    "",
+    "## AGENT WORKFLOW",
+    "",
+    "### Phase 1 - Input Analysis (Orchestrator)",
+    "Before translation, produce:",
+    "1. **Document profile**: type, domain, total length, page range in scope",
+    "2. **Structural map**: chapters, sections, subsections, tables, footnotes",
+    "3. **Terminology inventory**: extract 20-50 recurring domain-specific terms (legal, financial, technical) that must remain consistent",
+    "4. **Style determination**: formality register to apply in TARGET_LANG",
+    "",
+    "Output: A brief analysis summary + Glossary v1 (SOURCE -> TARGET term table) before proceeding.",
+    "",
+    "### Phase 2 - Parallel Translation",
+    "",
+    "**Translator A - Literal-Faithful Strategy**",
+    "- Prioritize structural and semantic fidelity to source",
+    "- Preserve sentence boundaries and logical connectors",
+    "- Conservative with restructuring; keep source emphasis order",
+    "- When ambiguous: choose the reading that minimizes interpretive leap",
+    "",
+    "**Translator B - Natural-Idiomatic Strategy**",
+    "- Prioritize naturalness and readability in TARGET_LANG",
+    "- Restructure sentences when source grammar is awkward in TARGET_LANG",
+    "- Use idiomatic expressions of the target language's formal register",
+    "- Optimize for the reader's cognitive flow while preserving all information",
+    "",
+    "Both translators MUST:",
+    "- Apply Glossary v1 consistently",
+    "- Preserve all numbers, dates, proper nouns, code references verbatim",
+    "- Retain source document's layout: headings, numbering, tables, lists",
+    "- Flag uncertain terms with `[?term]` for reviewer attention",
+    "",
+    "### Phase 3 - Review & Synthesis (Reviewer)",
+    "The reviewer produces the final version by:",
+    "1. **Accuracy check**: compare both translations against source; flag mistranslations",
+    "2. **Consistency check**: enforce glossary uniformity across entire document",
+    "3. **Register check**: verify formal/official tone appropriate for DOCUMENT_TYPE",
+    "4. **Synthesis**: merge the stronger choice from A or B at each passage",
+    "   - Default to B's phrasing when both are accurate",
+    "   - Default to A's phrasing when precision is legally material (e.g., contract clauses, regulatory language, financial figures)",
+    "5. **Resolve flags**: resolve all `[?term]` markers with explicit justification",
+    "6. **Final polish**: eliminate awkwardness, ensure terminology consistency",
+    "",
+    "## HARD CONSTRAINTS",
+    "",
+    "1. **Accuracy** - No omissions, no hallucinations. Every clause of the source must be represented. If a passage is ambiguous, choose the most defensible reading and note the alternative in a translator's note.",
+    "",
+    "2. **Formal register** - Use TARGET_LANG's official/business document register (e.g., Korean: `~합니다`, `~아니합니다`, `~에 해당합니다`).",
+    "",
+    "3. **Terminology consistency** - Each source term maps to ONE target term across the document. Glossary is authoritative.",
+    "",
+    "4. **Layout preservation** - Retain original document structure exactly: chapter/section/subsection numbering, table structure, list hierarchy, footnote references.",
+    "",
+    "5. **Cultural adaptation for format** - Follow the target country's standard conventions for official documents (Korean: 제1절, 제2절; English: Article I, Section 1; etc.).",
+    "",
+    "6. **Verbatim elements** - Never translate: proper nouns of companies/persons (transliterate + original in parentheses on first mention), legal code numbers, stock tickers, chemical formulas, product codes, URLs.",
+    "",
+    "## OUTPUT SPECIFICATION",
+    "",
+    "Deliver in this order:",
+    "",
+    "1. **Translation metadata block**",
+    "",
+    "Document: [title]",
+    "Scope: [pages/sections translated]",
+    "Source -> Target: [langs]",
+    "Glossary version: [v1/v2]",
+    "",
+    "2. **Glossary**: SOURCE term | TARGET term | Notes",
+    "",
+    "3. **Translated document** in requested OUTPUT_FORMAT, preserving all structure",
+    "",
+    "4. **Translator's notes** (if any): ambiguities, deliberate interpretation choices, untranslatable elements",
+    "",
+    "For long documents (>50 pages):",
+    "- Translate in section-sized chunks",
+    "- Confirm glossary adherence after each chunk",
+    "- Produce a consolidated final deliverable",
   ].join("\n");
 }
 

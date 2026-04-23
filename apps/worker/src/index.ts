@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
@@ -1039,7 +1038,7 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
   const artifacts = readPreprocessedArtifacts(events);
   const files = listJobFiles(context.db, job.id);
   const downloadableFiles = [
-    await createOriginalAndTranslationPdf({
+    await createDownloadableAgentFile({
       job,
       files,
       artifacts,
@@ -1176,7 +1175,7 @@ function buildDownloadKeyboard(outputs: StoredJobOutput[]): InlineKeyboardMarkup
   return {
     inline_keyboard: outputs.map((output, index) => [{
       text: outputs.length === 1
-        ? `⬇️ PDF 다운로드 (${formatKstCompact(output.expiresAt)}까지)`
+        ? `⬇️ ${downloadTypeLabel(output.fileName)} 다운로드 (${formatKstCompact(output.expiresAt)}까지)`
         : `⬇️ ${index + 1}. ${truncateButtonLabel(output.fileName)} (${formatKstCompact(output.expiresAt)}까지)`,
       callback_data: `download:${output.id}`,
     }]),
@@ -1489,9 +1488,32 @@ function getOutputCallbackAccess(
   return { output, job };
 }
 
-async function createOriginalAndTranslationPdf(input: {
+async function createDownloadableAgentFile(input: {
   job: StoredJob;
   files: StoredJobFile[];
+  artifacts: AgentPostprocessInput["artifacts"];
+  generatedFiles: GeneratedFile[];
+  outputDir: string;
+}): Promise<GeneratedFile> {
+  const documentSource = findDocumentSourceFile(input.files);
+  if (documentSource) {
+    const documentOutput = await createDocumentTranslationDocx({
+      job: input.job,
+      artifacts: input.artifacts,
+      generatedFiles: input.generatedFiles,
+      documentSource,
+      outputDir: input.outputDir,
+    });
+    if (documentOutput) {
+      return documentOutput;
+    }
+  }
+
+  return await createOriginalAndTranslationPdf(input);
+}
+
+async function createOriginalAndTranslationPdf(input: {
+  job: StoredJob;
   artifacts: AgentPostprocessInput["artifacts"];
   generatedFiles: GeneratedFile[];
   outputDir: string;
@@ -1506,24 +1528,7 @@ async function createOriginalAndTranslationPdf(input: {
     fs.readFile(translationFile.path, "utf8"),
     findPdfFontPath(),
   ]);
-  const templateDocx = findDocxTemplateFile(input.files);
   const pdfPath = path.join(input.outputDir, "original-and-translated.pdf");
-  if (templateDocx) {
-    const templated = await tryCreateTemplatedDocxPdf({
-      job: input.job,
-      originalSections,
-      translation: {
-        title: path.basename(translationFile.relativePath),
-        text: translationText,
-      },
-      templateDocx,
-      outputDir: input.outputDir,
-      pdfPath,
-    });
-    if (templated) {
-      return templated;
-    }
-  }
 
   await writeOriginalAndTranslationPdf({
     pdfPath,
@@ -1541,7 +1546,7 @@ async function createOriginalAndTranslationPdf(input: {
   };
 }
 
-function findDocxTemplateFile(files: StoredJobFile[]): { path: string; fileName: string } | null {
+function findDocumentSourceFile(files: StoredJobFile[]): { kind: "docx" | "hwp"; path: string; fileName: string } | null {
   for (const file of files) {
     const candidatePath = file.archivePath ?? file.localPath;
     if (!candidatePath) {
@@ -1552,6 +1557,14 @@ function findDocxTemplateFile(files: StoredJobFile[]): { path: string; fileName:
     const mimeType = file.mimeType?.toLowerCase();
     if (extension === ".docx" || mimeType === DOCX_MIME_TYPE) {
       return {
+        kind: "docx",
+        path: candidatePath,
+        fileName,
+      };
+    }
+    if (extension === ".hwp" || extension === ".hwpx" || mimeType?.includes("hwp") || mimeType?.includes("hwpx")) {
+      return {
+        kind: "hwp",
         path: candidatePath,
         fileName,
       };
@@ -1560,32 +1573,52 @@ function findDocxTemplateFile(files: StoredJobFile[]): { path: string; fileName:
   return null;
 }
 
-async function tryCreateTemplatedDocxPdf(input: {
+async function createDocumentTranslationDocx(input: {
   job: StoredJob;
-  originalSections: PdfTextSection[];
-  translation: PdfTextSection;
-  templateDocx: { path: string; fileName: string };
+  artifacts: AgentPostprocessInput["artifacts"];
+  generatedFiles: GeneratedFile[];
+  documentSource: { kind: "docx" | "hwp"; path: string; fileName: string };
   outputDir: string;
-  pdfPath: string;
 }): Promise<GeneratedFile | null> {
-  const [pandocBin, officeBin] = await Promise.all([
-    findExecutable(process.env.PANDOC_BIN, "pandoc"),
-    findExecutable(process.env.LIBREOFFICE_BIN ?? process.env.SOFFICE_BIN, "soffice", "libreoffice"),
-  ]);
-  if (!pandocBin || !officeBin) {
+  const existingDocumentOutput = findDocumentOutput(input.generatedFiles);
+  if (existingDocumentOutput) {
+    logWorker(`document output selected job=${input.job.id} file=${existingDocumentOutput.relativePath}`, "info", "OUTPUT");
+    return existingDocumentOutput;
+  }
+
+  const translationFile = findTranslationFile(input.generatedFiles);
+  if (!translationFile) {
+    throw new Error(`Agent postprocess did not create translated markdown/text output in ${input.outputDir}`);
+  }
+
+  const pandocBin = await findExecutable(process.env.PANDOC_BIN, "pandoc");
+  if (!pandocBin) {
     logWorker(
-      `template render skipped job=${input.job.id} reason=missing_tool pandoc=${pandocBin ? "ok" : "missing"} office=${officeBin ? "ok" : "missing"}`,
+      `document render skipped job=${input.job.id} reason=missing_tool pandoc=missing source=${input.documentSource.fileName}`,
       "warn",
       "OUTPUT",
     );
-    return null;
+    return translationFile;
   }
 
-  const markdownPath = path.join(input.outputDir, "original-and-translated.pandoc.md");
+  const [originalSections, translationText] = await Promise.all([
+    readOriginalPdfSections(input.artifacts),
+    fs.readFile(translationFile.path, "utf8"),
+  ]);
+  const workDir = path.join(path.dirname(input.outputDir), ".render-work");
+  const markdownPath = path.join(workDir, "original-and-translated.md");
   const docxPath = path.join(input.outputDir, "original-and-translated.docx");
-  await fs.writeFile(markdownPath, renderOriginalAndTranslationMarkdown(input), "utf8");
+  await fs.mkdir(workDir, { recursive: true });
+  await fs.writeFile(markdownPath, renderOriginalAndTranslationMarkdown({
+    job: input.job,
+    originalSections,
+    translation: {
+      title: path.basename(translationFile.relativePath),
+      text: translationText,
+    },
+  }), "utf8");
   try {
-    await execFileAsync(pandocBin, [
+    const args = [
       markdownPath,
       "--from",
       "markdown+raw_tex",
@@ -1593,25 +1626,22 @@ async function tryCreateTemplatedDocxPdf(input: {
       "docx",
       "--output",
       docxPath,
-      "--reference-doc",
-      input.templateDocx.path,
-    ], {
+    ];
+    if (input.documentSource.kind === "docx") {
+      args.push("--reference-doc", input.documentSource.path);
+    }
+    await execFileAsync(pandocBin, args, {
       timeout: COMMAND_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
     });
-    await convertDocxToPdf({
-      officeBin,
-      docxPath,
-      pdfPath: input.pdfPath,
-    });
-    logWorker(`template render complete job=${input.job.id} template=${input.templateDocx.fileName}`, "info", "OUTPUT");
+    logWorker(`document render complete job=${input.job.id} source=${input.documentSource.fileName}`, "info", "OUTPUT");
     return {
-      path: input.pdfPath,
-      relativePath: path.basename(input.pdfPath),
+      path: docxPath,
+      relativePath: path.basename(docxPath),
     };
   } catch (error) {
-    logWorker(`template render failed job=${input.job.id} error=${errorMessage(error)}`, "warn", "OUTPUT");
-    return null;
+    logWorker(`document render failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
+    return translationFile;
   }
 }
 
@@ -1619,7 +1649,6 @@ function renderOriginalAndTranslationMarkdown(input: {
   job: StoredJob;
   originalSections: PdfTextSection[];
   translation: PdfTextSection;
-  templateDocx: { path: string; fileName: string };
 }): string {
   const lines = [
     "% 원본 + 번역본",
@@ -1638,29 +1667,6 @@ function renderOriginalAndTranslationMarkdown(input: {
 
 function normalizeMarkdownText(value: string): string {
   return value.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
-async function convertDocxToPdf(input: { officeBin: string; docxPath: string; pdfPath: string }): Promise<void> {
-  const outputDir = path.dirname(input.pdfPath);
-  await fs.mkdir(outputDir, { recursive: true });
-  const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-local-ingest-lo-"));
-  try {
-    await execFileAsync(input.officeBin, [
-      `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
-      "--headless",
-      "--convert-to",
-      "pdf",
-      "--outdir",
-      outputDir,
-      input.docxPath,
-    ], {
-      timeout: COMMAND_TIMEOUT_MS,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    await fs.access(input.pdfPath);
-  } finally {
-    await fs.rm(profileDir, { recursive: true, force: true });
-  }
 }
 
 async function findExecutable(preferred: string | undefined, ...fallbacks: string[]): Promise<string | null> {
@@ -1707,6 +1713,14 @@ function findTranslationFile(files: GeneratedFile[]): GeneratedFile | null {
   return sorted.find((file) => file.relativePath.toLowerCase() === "translated.md")
     ?? sorted.find((file) => path.extname(file.relativePath).toLowerCase() === ".md")
     ?? sorted.find((file) => path.extname(file.relativePath).toLowerCase() === ".txt")
+    ?? null;
+}
+
+function findDocumentOutput(files: GeneratedFile[]): GeneratedFile | null {
+  const sorted = [...files].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return sorted.find((file) => file.relativePath.toLowerCase() === "original-and-translated.docx")
+    ?? sorted.find((file) => file.relativePath.toLowerCase() === "translated.docx")
+    ?? sorted.find((file) => [".docx", ".hwp", ".hwpx"].includes(path.extname(file.relativePath).toLowerCase()))
     ?? null;
 }
 
@@ -1889,6 +1903,10 @@ function inferMimeType(fileName: string): string | undefined {
       return "application/pdf";
     case ".docx":
       return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case ".hwp":
+      return "application/x-hwp";
+    case ".hwpx":
+      return "application/vnd.hancom.hwpx";
     case ".xlsx":
       return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     default:
@@ -1898,6 +1916,24 @@ function inferMimeType(fileName: string): string | undefined {
 
 function truncateButtonLabel(value: string): string {
   return value.length > 32 ? `${value.slice(0, 29)}...` : value;
+}
+
+function downloadTypeLabel(fileName: string): string {
+  const extension = path.extname(fileName).toLowerCase();
+  switch (extension) {
+    case ".pdf":
+      return "PDF";
+    case ".docx":
+      return "DOCX";
+    case ".hwp":
+      return "HWP";
+    case ".hwpx":
+      return "HWPX";
+    case ".md":
+      return "MD";
+    default:
+      return "파일";
+  }
 }
 
 function resolveProjectRelativePath(value: string): string {

@@ -101,7 +101,7 @@
   ],
   "handoff": {
     "currentSprintId": "sprint-12-utility-cleanup-polish",
-    "lastActionSummary": "DOCX postprocess outputs now try template-aware pandoc reference-doc plus LibreOffice PDF rendering before falling back to the built-in PDF renderer.",
+    "lastActionSummary": "Document postprocess outputs now use the fixed business translation preset; DOCX/HWP-family uploads deliver document files and non-DOCX/HWP uploads retain PDF delivery.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -111,10 +111,11 @@
       "LLM agent only updates wiki through adapter",
       "Runtime outputs are TTL cache artifacts, not source-of-truth vault content",
       "Personal OAuth-backed agent automation is operator-only",
-      "Pre-agent language checks must be deterministic and not LLM-dependent"
+      "Pre-agent language checks must be deterministic and not LLM-dependent",
+      "Prefer official Anthropic skills for document tasks when a suitable official skill exists"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-23T10:30:07.000Z"
+    "updatedAt": "2026-04-23T13:12:35.000Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -129,8 +130,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-23T10:30:07.000Z",
-  "verifiedAt": "2026-04-23T10:30:07.000Z",
+  "stateUpdatedAt": "2026-04-23T13:12:35.000Z",
+  "verifiedAt": "2026-04-23T13:12:35.000Z",
   "verificationCommands": [
     {
       "id": "typecheck",
