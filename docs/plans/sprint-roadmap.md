@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-11-codex-agent-postprocess
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check
-> **Pending**: sprint-12-utility-cleanup-polish
+> **Current**: sprint-12-utility-cleanup-polish
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess
+> **Pending**:
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -224,7 +224,7 @@ Telegram mobile/desktop
   - Agent input is a prepared data package, not arbitrary workspace access.
   - Agent writes only output artifacts; `raw/**` remains immutable.
   - Claude Code can be added later behind the same interface.
-- **status**: in progress. Added `packages/agent-adapter`, local command placeholder/stdin prompt execution, prompt hard-boundaries, output/work directory separation, raw snapshot protection, and disabled-by-default config via `AGENT_POSTPROCESS_PROVIDER`. The worker now runs the agent adapter when deterministic language detection marks translation as needed, registers generated files through `packages/output-store`, and sends a Korean completion message with `download:<output_id>` buttons for 24-hour downloads.
+- **status**: completed. Added `packages/agent-adapter`, local command placeholder/stdin prompt execution, prompt hard-boundaries, output/work directory separation, raw snapshot protection, and disabled-by-default config via `AGENT_POSTPROCESS_PROVIDER`. The worker now runs the agent adapter when deterministic language detection marks translation as needed, registers generated files through `packages/output-store`, and sends a Korean completion message with `download:<output_id>` buttons for 24-hour downloads. Added `{projectRoot}` command placeholders, `scripts/run-codex-postprocess.sh`, `scripts/smoke-agent-postprocess.sh`, `npm run smoke:agent:ready`, `npm run smoke:agent:live`, and operations documentation for the Codex command recipe.
 
 ## Sprint 12 — Utility Cleanup And Bot Separation Prep
 
@@ -239,4 +239,4 @@ Telegram mobile/desktop
   - Utility concerns are isolated from wiki/raw capture concerns.
   - Expired output cleanup is repeatable after worker restart.
   - Public/multi-user service constraints are documented.
-- **status**: pending.
+- **status**: in progress. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent.

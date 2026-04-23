@@ -8,6 +8,7 @@ import { createJob, getJobOutput, listJobEvents, migrate, openIngestDatabase } f
 import {
   cleanupExpiredOutputs,
   createRuntimeOutput,
+  discardRuntimeOutput,
   resolveDownloadableOutput,
 } from "@telegram-local-ingest/output-store";
 
@@ -72,6 +73,36 @@ test("cleanupExpiredOutputs deletes expired output files and marks records", asy
     assert.equal(cleanup.deletedOutputs.map((deleted) => deleted.id).join(","), "out-old");
     assert.equal(fs.existsSync(output.filePath), false);
     assert.equal(resolveDownloadableOutput(dbHandle.db, "out-old", "2026-04-22T12:00:02.000Z").status, "deleted");
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("discardRuntimeOutput deletes an active output and marks it deleted", async () => {
+  const fixture = createFixture();
+  const sourcePath = path.join(fixture.root, "discard.md");
+  fs.writeFileSync(sourcePath, "discard", "utf8");
+  const dbHandle = openIngestDatabase(":memory:");
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, { id: "job-discard", source: "telegram-local-bot-api", now: NOW });
+    const output = await createRuntimeOutput({
+      db: dbHandle.db,
+      jobId: "job-discard",
+      runtimeDir: fixture.runtimeDir,
+      sourcePath,
+      kind: "agent_translation",
+      now: NOW,
+      ttlMs: 10_000,
+      outputId: "out-discard",
+    });
+
+    const discarded = await discardRuntimeOutput(dbHandle.db, output.id, "2026-04-22T12:00:02.000Z");
+
+    assert.equal(discarded.fileDeleted, true);
+    assert.equal(fs.existsSync(output.filePath), false);
+    assert.equal(resolveDownloadableOutput(dbHandle.db, output.id, "2026-04-22T12:00:03.000Z").status, "deleted");
+    assert.ok(listJobEvents(dbHandle.db, "job-discard").some((event) => event.type === "output.deleted"));
   } finally {
     dbHandle.close();
   }

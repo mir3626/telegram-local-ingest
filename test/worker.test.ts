@@ -10,6 +10,7 @@ import {
   createJob,
   createJobOutput,
   getJob,
+  getJobOutput,
   getTelegramOffset,
   listJobEvents,
   listJobOutputs,
@@ -412,6 +413,92 @@ test("pollTelegramUpdatesOnce sends active output documents from a download butt
   }
 });
 
+test("pollTelegramUpdatesOnce handles hidden output discard callbacks", async () => {
+  const fixture = createFixture();
+  const outputPath = writeFile(fixture.runtimeDir, "outputs/job-output/out-discard/translated.md", "translated");
+  const dbHandle = openIngestDatabase(":memory:");
+  const answeredCallbacks: unknown[] = [];
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, {
+      id: "job-output",
+      source: "telegram-local-bot-api",
+      chatId: "300",
+      userId: "400",
+      now: "2026-04-22T12:00:00.000Z",
+    });
+    createJobOutput(dbHandle.db, {
+      id: "out-discard",
+      jobId: "job-output",
+      kind: "agent_translation",
+      filePath: outputPath,
+      fileName: "translated.md",
+      createdAt: "2026-04-22T12:00:01.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockOutputLifecycleCallbackFetch("output-discard:out-discard", answeredCallbacks),
+      ),
+    };
+
+    const result = await pollTelegramUpdatesOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(fs.existsSync(outputPath), false);
+    assert.ok(getJobOutput(dbHandle.db, "out-discard")?.deletedAt);
+    assert.match(JSON.stringify(answeredCallbacks[0]), /폐기/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("pollTelegramUpdatesOnce records hidden output regenerate callbacks", async () => {
+  const fixture = createFixture();
+  const outputPath = writeFile(fixture.runtimeDir, "outputs/job-output/out-regen/translated.md", "translated");
+  const dbHandle = openIngestDatabase(":memory:");
+  const answeredCallbacks: unknown[] = [];
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, {
+      id: "job-output",
+      source: "telegram-local-bot-api",
+      chatId: "300",
+      userId: "400",
+      now: "2026-04-22T12:00:00.000Z",
+    });
+    createJobOutput(dbHandle.db, {
+      id: "out-regen",
+      jobId: "job-output",
+      kind: "agent_translation",
+      filePath: outputPath,
+      fileName: "translated.md",
+      createdAt: "2026-04-22T12:00:01.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockOutputLifecycleCallbackFetch("output-regenerate:out-regen", answeredCallbacks),
+      ),
+    };
+
+    const result = await pollTelegramUpdatesOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(fs.existsSync(outputPath), true);
+    assert.ok(listJobEvents(dbHandle.db, "job-output").some((event) => event.type === "output.regenerate_requested"));
+    assert.match(JSON.stringify(answeredCallbacks[0]), /다시 생성 요청/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce handles operator status without creating a job", async () => {
   const fixture = createFixture();
   const dbHandle = openIngestDatabase(":memory:");
@@ -764,6 +851,36 @@ function mockDownloadCallbackFetch(
           document: { file_id: "doc", file_name: "translated.md" },
         },
       });
+    }
+    return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
+function mockOutputLifecycleCallbackFetch(data: string, answeredCallbacks: unknown[]): FetchLike {
+  return async (input, init) => {
+    const method = input.split("/").at(-1);
+    if (method === "getUpdates") {
+      return jsonResponse({
+        ok: true,
+        result: [{
+          update_id: 43,
+          callback_query: {
+            id: "output-lifecycle-callback-1",
+            from: { id: 400, is_bot: false, first_name: "Tony" },
+            message: {
+              message_id: 44,
+              date: 1_777_000_005,
+              chat: { id: 300, type: "private" },
+              text: "output",
+            },
+            data,
+          },
+        }],
+      });
+    }
+    if (method === "answerCallbackQuery") {
+      answeredCallbacks.push(init?.body ? JSON.parse(String(init.body)) : {});
+      return jsonResponse({ ok: true, result: true });
     }
     return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
   };

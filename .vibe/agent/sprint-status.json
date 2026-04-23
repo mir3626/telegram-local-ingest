@@ -88,13 +88,20 @@
     {
       "id": "sprint-11-codex-agent-postprocess",
       "name": "Codex Agent Post-Processing",
+      "status": "passed",
+      "startedAt": "2026-04-23T05:50:45.000Z",
+      "completedAt": "2026-04-23T08:20:44.000Z"
+    },
+    {
+      "id": "sprint-12-utility-cleanup-polish",
+      "name": "Utility Cleanup And Bot Separation Prep",
       "status": "in_progress",
-      "startedAt": "2026-04-23T05:50:45.000Z"
+      "startedAt": "2026-04-23T08:20:44.000Z"
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-11-codex-agent-postprocess",
-    "lastActionSummary": "Synced local vibe-doctor harness updates through v1.5.15 and prepared them for push. Product flow remains at Sprint 11 worker-integrated agent post-processing; next step is an operator-ready Codex command recipe/live smoke harness plus regenerate/discard polish.",
+    "currentSprintId": "sprint-12-utility-cleanup-polish",
+    "lastActionSummary": "Completed Sprint 11 Codex agent post-processing with projectRoot command placeholders, Codex wrapper/readiness/live smoke scripts, and docs. Started Sprint 12 with hidden output discard/regenerate callback interfaces.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -107,7 +114,7 @@
       "Pre-agent language checks must be deterministic and not LLM-dependent"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-23T06:47:25.000Z"
+    "updatedAt": "2026-04-23T08:26:04.000Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -122,8 +129,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-23T06:47:25.000Z",
-  "verifiedAt": "2026-04-23T06:47:25.000Z",
+  "stateUpdatedAt": "2026-04-23T08:26:04.000Z",
+  "verifiedAt": "2026-04-23T08:26:04.000Z",
   "verificationCommands": [
     {
       "id": "typecheck",

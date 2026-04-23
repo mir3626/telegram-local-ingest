@@ -15,6 +15,7 @@ import {
   createSourceBundle,
   getJob,
   getTelegramOffset,
+  getJobOutput,
   listJobEvents,
   listJobFiles,
   listJobOutputs,
@@ -38,7 +39,12 @@ import {
   buildJobFailureMessage,
   sendOperatorCommandResponse,
 } from "@telegram-local-ingest/operator";
-import { cleanupExpiredOutputs, createRuntimeOutput, resolveDownloadableOutput } from "@telegram-local-ingest/output-store";
+import {
+  cleanupExpiredOutputs,
+  createRuntimeOutput,
+  discardRuntimeOutput,
+  resolveDownloadableOutput,
+} from "@telegram-local-ingest/output-store";
 import { collectPreprocessedTextArtifacts } from "@telegram-local-ingest/preprocessors";
 import { detectLanguageAcrossArtifacts, type DetectedLanguage } from "@telegram-local-ingest/language-detector";
 import {
@@ -314,6 +320,7 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
       try {
         if (isTelegramUserAllowed(callback.userId, context.config.telegram.allowedUserIds)) {
           const handled = await handleRetryCallback(context, callback)
+            || await handleOutputLifecycleCallback(context, callback)
             || await handleDownloadCallback(context, callback)
             || await handleSttContextCallback(context, callback);
           operatorCommandsHandled += handled ? 1 : 0;
@@ -578,6 +585,68 @@ async function handleDownloadCallback(context: WorkerContext, callback: ParsedTe
     caption: `📎 ${output.fileName}`,
   });
   logWorker(`download sent output=${output.id} job=${output.jobId}`, "info", "OUTPUT");
+  return true;
+}
+
+async function handleOutputLifecycleCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
+  const discard = parseOutputDiscardCallbackData(callback.data);
+  if (discard) {
+    return handleOutputDiscardCallback(context, callback, discard.outputId);
+  }
+  const regenerate = parseOutputRegenerateCallbackData(callback.data);
+  if (regenerate) {
+    return handleOutputRegenerateCallback(context, callback, regenerate.outputId);
+  }
+  return false;
+}
+
+async function handleOutputDiscardCallback(
+  context: WorkerContext,
+  callback: ParsedTelegramCallback,
+  outputId: string,
+): Promise<boolean> {
+  if (!callback.chatId) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 폐기할 채팅을 확인할 수 없습니다.");
+    return true;
+  }
+
+  const access = getOutputCallbackAccess(context, callback, outputId);
+  if ("error" in access) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, access.error);
+    return true;
+  }
+
+  const discarded = await discardRuntimeOutput(context.db, access.output.id);
+  await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🗑️ 결과 파일을 폐기했습니다.");
+  logWorker(`output discarded output=${discarded.output.id} job=${discarded.output.jobId}`, "info", "OUTPUT");
+  return true;
+}
+
+async function handleOutputRegenerateCallback(
+  context: WorkerContext,
+  callback: ParsedTelegramCallback,
+  outputId: string,
+): Promise<boolean> {
+  if (!callback.chatId) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 다시 생성할 채팅을 확인할 수 없습니다.");
+    return true;
+  }
+
+  const access = getOutputCallbackAccess(context, callback, outputId);
+  if ("error" in access) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, access.error);
+    return true;
+  }
+
+  appendJobEvent(context.db, access.job.id, "output.regenerate_requested", access.output.fileName, {
+    outputId: access.output.id,
+    status: "interface_only",
+  });
+  await context.telegram.answerCallbackQuery(
+    callback.callbackQueryId,
+    "♻️ 다시 생성 요청을 기록했습니다. 자동 재생성은 아직 비활성화되어 있습니다.",
+  );
+  logWorker(`output regenerate requested output=${access.output.id} job=${access.job.id} status=interface_only`, "info", "OUTPUT");
   return true;
 }
 
@@ -935,6 +1004,7 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
     bundlePath: bundle.bundlePath,
     rawRoot: path.resolve(context.config.vault.obsidianVaultPath, context.config.vault.rawRoot),
     outputDir,
+    projectRoot: process.env.INIT_CWD ?? process.cwd(),
     targetLanguage: context.config.translation.targetLanguage,
     defaultRelation: context.config.translation.defaultRelation,
     language,
@@ -1241,6 +1311,22 @@ function parseDownloadCallbackData(data: string | undefined): { outputId: string
   return { outputId: match[1] };
 }
 
+function parseOutputDiscardCallbackData(data: string | undefined): { outputId: string } | null {
+  const match = /^output-discard:([a-zA-Z0-9._-]+)$/.exec(data ?? "");
+  if (!match?.[1]) {
+    return null;
+  }
+  return { outputId: match[1] };
+}
+
+function parseOutputRegenerateCallbackData(data: string | undefined): { outputId: string } | null {
+  const match = /^output-regenerate:([a-zA-Z0-9._-]+)$/.exec(data ?? "");
+  if (!match?.[1]) {
+    return null;
+  }
+  return { outputId: match[1] };
+}
+
 function selectedSttPresetEvent(events: StoredJobEvent[]): StoredJobEvent | undefined {
   return [...events].reverse().find((event) => event.type === "stt.preset_selected" || event.type === "rtzr.preset_selected");
 }
@@ -1316,6 +1402,25 @@ function readPreprocessedArtifacts(events: StoredJobEvent[]): AgentPostprocessIn
 function listActiveJobOutputs(db: DatabaseSync, jobId: string): StoredJobOutput[] {
   const now = new Date().toISOString();
   return listJobOutputs(db, jobId).filter((output) => !output.deletedAt && output.expiresAt > now);
+}
+
+function getOutputCallbackAccess(
+  context: WorkerContext,
+  callback: ParsedTelegramCallback,
+  outputId: string,
+): { output: StoredJobOutput; job: StoredJob; error?: never } | { error: string; output?: never; job?: never } {
+  const output = getJobOutput(context.db, outputId);
+  if (!output) {
+    return { error: "⚠️ 결과 파일을 찾을 수 없습니다." };
+  }
+  const job = getJob(context.db, output.jobId);
+  if (!job) {
+    return { error: "⚠️ 원본 작업을 찾을 수 없습니다." };
+  }
+  if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
+    return { error: "🔒 이 결과 파일을 변경할 권한이 없습니다." };
+  }
+  return { output, job };
 }
 
 async function listGeneratedFiles(root: string): Promise<Array<{ path: string; relativePath: string }>> {

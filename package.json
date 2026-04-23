@@ -17,6 +17,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.app.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "smoke:ready": "npx tsx apps/worker/src/readiness.ts",
+    "smoke:agent:ready": "bash scripts/smoke-agent-postprocess.sh --ready",
+    "smoke:agent:live": "bash scripts/smoke-agent-postprocess.sh --live",
     "ops:start": "bash scripts/start-local-stack.sh",
     "ops:stop": "bash scripts/stop-local-stack.sh",
     "ops:restart": "bash scripts/restart-local-stack.sh",

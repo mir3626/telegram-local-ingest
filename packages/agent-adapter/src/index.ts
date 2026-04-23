@@ -26,6 +26,7 @@ export interface AgentPostprocessInput {
   bundlePath: string;
   rawRoot: string;
   outputDir: string;
+  projectRoot?: string;
   targetLanguage: string;
   defaultRelation: string;
   language: AgentLanguageContext;
@@ -83,6 +84,7 @@ export async function runAgentPostprocess(
     bundlePath: path.resolve(input.bundlePath),
     jobId: input.jobId,
     outputDir: path.resolve(input.outputDir),
+    projectRoot: path.resolve(input.projectRoot ?? process.cwd()),
     promptFile: promptPath,
   });
   const result = await runner(command.command, command.args, {
@@ -158,7 +160,7 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
 
 export function buildAgentCommand(
   commandLine: string,
-  replacements: { bundlePath: string; jobId: string; outputDir: string; promptFile: string },
+  replacements: { bundlePath: string; jobId: string; outputDir: string; projectRoot?: string; promptFile: string },
 ): { command: string; args: string[]; usesPromptPlaceholder: boolean } {
   const [command, ...args] = parseCommandLine(commandLine).map((token) => replaceToken(token, replacements));
   if (!command) {
@@ -227,11 +229,15 @@ function validateAgentPaths(input: AgentPostprocessInput): void {
   }
 }
 
-function replaceToken(token: string, replacements: { bundlePath: string; jobId: string; outputDir: string; promptFile: string }): string {
+function replaceToken(
+  token: string,
+  replacements: { bundlePath: string; jobId: string; outputDir: string; projectRoot?: string; promptFile: string },
+): string {
   return token
     .replaceAll("{bundlePath}", replacements.bundlePath)
     .replaceAll("{jobId}", replacements.jobId)
     .replaceAll("{outputDir}", replacements.outputDir)
+    .replaceAll("{projectRoot}", replacements.projectRoot ?? process.cwd())
     .replaceAll("{promptFile}", replacements.promptFile);
 }
 

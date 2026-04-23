@@ -44,6 +44,11 @@ export interface CleanupExpiredOutputsResult {
   failedOutputs: Array<{ output: StoredJobOutput; error: Error }>;
 }
 
+export interface DiscardRuntimeOutputResult {
+  output: StoredJobOutput;
+  fileDeleted: boolean;
+}
+
 export async function createRuntimeOutput(input: CreateRuntimeOutputInput): Promise<StoredJobOutput> {
   const createdAt = input.now ?? new Date().toISOString();
   const ttlMs = input.ttlMs ?? DEFAULT_OUTPUT_TTL_MS;
@@ -110,6 +115,25 @@ export async function cleanupExpiredOutputs(
   }
 
   return { deletedOutputs, failedOutputs };
+}
+
+export async function discardRuntimeOutput(
+  db: DatabaseSync,
+  outputId: string,
+  now = new Date().toISOString(),
+): Promise<DiscardRuntimeOutputResult> {
+  const output = getJobOutput(db, outputId);
+  if (!output) {
+    throw new Error(`Job output not found: ${outputId}`);
+  }
+  if (!output.deletedAt) {
+    await fs.rm(output.filePath, { force: true });
+    await removeEmptyDirectory(path.dirname(output.filePath));
+  }
+  return {
+    output: markJobOutputDeleted(db, output.id, now),
+    fileDeleted: !output.deletedAt,
+  };
 }
 
 function createOutputId(): string {

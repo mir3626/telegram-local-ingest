@@ -22,15 +22,16 @@ test("buildAgentPrompt constrains agents to raw read and output writes", () => {
 });
 
 test("buildAgentCommand replaces placeholders and detects prompt file usage", () => {
-  const command = buildAgentCommand("codex exec --prompt {promptFile} --output {outputDir} --job {jobId}", {
+  const command = buildAgentCommand("{projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}", {
     bundlePath: "/raw/job",
     jobId: "job-1",
     outputDir: "/runtime/out",
+    projectRoot: "/repo",
     promptFile: "/runtime/work/prompt.md",
   });
 
-  assert.equal(command.command, "codex");
-  assert.deepEqual(command.args, ["exec", "--prompt", "/runtime/work/prompt.md", "--output", "/runtime/out", "--job", "job-1"]);
+  assert.equal(command.command, "/repo/scripts/run-codex-postprocess.sh");
+  assert.deepEqual(command.args, ["--prompt", "/runtime/work/prompt.md", "--output", "/runtime/out", "--bundle", "/raw/job", "--job", "job-1"]);
   assert.equal(command.usesPromptPlaceholder, true);
 });
 

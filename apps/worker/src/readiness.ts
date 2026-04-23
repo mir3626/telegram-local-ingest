@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 
+import { buildAgentCommand } from "@telegram-local-ingest/agent-adapter";
 import {
   type AppConfig,
   ConfigError,
@@ -121,6 +122,8 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
     checks.push(warn("WIKI_INGEST_COMMAND", "not set; worker will preserve raw bundles and skip wiki adaptation"));
   }
 
+  await checkAgentPostprocessReadiness(checks, config, cwd);
+
   if (options.checkTelegram ?? true) {
     const client = new TelegramBotApiClient(
       {
@@ -139,6 +142,58 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
   }
 
   return finish(envPath, checks);
+}
+
+async function checkAgentPostprocessReadiness(
+  checks: ReadinessCheck[],
+  config: AppConfig,
+  cwd: string,
+): Promise<void> {
+  if (config.agent.provider === "none") {
+    checks.push(warn("AGENT_POSTPROCESS_PROVIDER", "none; translation/formatting agent will be skipped"));
+    return;
+  }
+  if (!config.agent.command) {
+    checks.push(fail("AGENT_POSTPROCESS_COMMAND", "required when AGENT_POSTPROCESS_PROVIDER is enabled"));
+    return;
+  }
+
+  let command: ReturnType<typeof buildAgentCommand>;
+  try {
+    command = buildAgentCommand(config.agent.command, {
+      bundlePath: path.join(cwd, "raw-placeholder"),
+      jobId: "readiness-job",
+      outputDir: path.join(cwd, "runtime", "agent-readiness-output"),
+      projectRoot: cwd,
+      promptFile: path.join(cwd, "runtime", "agent-readiness-prompt.md"),
+    });
+  } catch (error) {
+    checks.push(fail("AGENT_POSTPROCESS_COMMAND", error instanceof Error ? error.message : String(error)));
+    return;
+  }
+
+  const commandPath = resolveCommandPath(cwd, command.command);
+  if (commandPath.includes(path.sep)) {
+    await checkReadableFile(checks, "AGENT_POSTPROCESS_COMMAND", commandPath);
+  } else {
+    const version = await checkCommandVersion(command.command, ["--version"]);
+    if (version.ok) {
+      checks.push(ok("AGENT_POSTPROCESS_COMMAND", `${command.command}: ${version.output}`));
+    } else {
+      checks.push(warn("AGENT_POSTPROCESS_COMMAND", `custom command not version-checkable: ${version.output}`));
+    }
+  }
+
+  if (path.basename(command.command) === "run-codex-postprocess.sh") {
+    const health = await checkCommandVersion(commandPath, ["--health"]);
+    if (health.ok) {
+      checks.push(ok("Codex postprocess wrapper", health.output));
+    } else {
+      checks.push(fail("Codex postprocess wrapper", health.output));
+    }
+  } else {
+    checks.push(warn("Codex postprocess wrapper", "not using scripts/run-codex-postprocess.sh; custom command live behavior was not checked"));
+  }
 }
 
 function finish(envPath: string | null, checks: ReadinessCheck[]): ReadinessReport {
@@ -268,6 +323,16 @@ async function nearestExistingPath(targetPath: string): Promise<string | null> {
 
 function resolveFrom(cwd: string, value: string): string {
   return path.isAbsolute(value) ? value : path.resolve(cwd, value);
+}
+
+function resolveCommandPath(cwd: string, command: string): string {
+  if (path.isAbsolute(command)) {
+    return command;
+  }
+  if (command.includes("/") || command.includes("\\")) {
+    return path.resolve(cwd, command);
+  }
+  return command;
 }
 
 function ok(name: string, message: string): ReadinessCheck {
