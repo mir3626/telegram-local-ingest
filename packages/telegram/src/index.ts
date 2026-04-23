@@ -1,3 +1,4 @@
+import { openAsBlob } from "node:fs";
 import path from "node:path";
 
 export interface TelegramLocalBotApiConfig {
@@ -161,6 +162,13 @@ export interface SendMessageOptions {
   replyMarkup?: InlineKeyboardMarkup;
 }
 
+export interface SendDocumentOptions {
+  caption?: string;
+  fileName?: string;
+  mimeType?: string;
+  replyMarkup?: InlineKeyboardMarkup;
+}
+
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export class TelegramApiError extends Error {
@@ -238,6 +246,20 @@ export class TelegramBotApiClient {
     });
   }
 
+  async sendDocument(chatId: string, filePath: string, options: SendDocumentOptions = {}): Promise<TelegramMessage> {
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    if (options.caption) {
+      form.append("caption", options.caption);
+    }
+    if (options.replyMarkup) {
+      form.append("reply_markup", JSON.stringify(options.replyMarkup));
+    }
+    const blob = await openAsBlob(filePath, options.mimeType ? { type: options.mimeType } : {});
+    form.append("document", blob, options.fileName ?? path.basename(filePath));
+    return this.requestForm<TelegramMessage>("sendDocument", form);
+  }
+
   async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean> {
     return this.request<boolean>("answerCallbackQuery", {
       callback_query_id: callbackQueryId,
@@ -256,6 +278,18 @@ export class TelegramBotApiClient {
         "content-type": "application/json",
       },
       body: payload ? JSON.stringify(payload) : "{}",
+    });
+    const body = (await response.json()) as TelegramApiResponse<T>;
+    if (!response.ok || !body.ok || body.result === undefined) {
+      throw new TelegramApiError(method, body.description ?? response.statusText, body.error_code);
+    }
+    return body.result;
+  }
+
+  private async requestForm<T>(method: string, form: FormData): Promise<T> {
+    const response = await this.fetchImpl(`${this.config.baseUrl}/bot${this.config.botToken}/${method}`, {
+      method: "POST",
+      body: form,
     });
     const body = (await response.json()) as TelegramApiResponse<T>;
     if (!response.ok || !body.ok || body.result === undefined) {

@@ -5,7 +5,7 @@
 - **repo**: `telegram-local-ingest`
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-1`
-- **current sprint**: `completed`
+- **current sprint**: `sprint-10-preprocessing-language-check`
 - **harnessVersion**: `1.5.4`
 
 ## Status
@@ -38,6 +38,10 @@ The Windows desktop launcher now behaves as a start/stop toggle. It calls `scrip
 
 Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot API Server storage. Those paths contain bot-token-derived directories, are intentionally deleted after completion, and make raw bundles non-portable. Keep raw bundle originals as copied, self-contained files; if links are needed later, use Obsidian-relative links to files already inside the finalized raw bundle.
 
+The post-processing utility roadmap is now documented in `docs/context/product.md`, `docs/context/architecture.md`, and `docs/plans/sprint-roadmap.md`. It keeps the Telegram/raw/wiki ingest pipeline as the durable source of truth, then adds deterministic preprocessing, language/translation-needed checks, local agent-based translation/formatting, runtime-only downloadable outputs, and later utility-bot separation. Personal OAuth-backed Codex/Claude Code usage is documented as operator-only; any public, paid, or multi-user service variant must move to official API credentials.
+
+Sprint 9 output delivery is complete. SQLite schema version 2 adds `job_outputs`; `packages/output-store` copies generated files into `runtime/outputs/<job_id>/<output_id>/`, records 24-hour expiry metadata, resolves active/expired/deleted state, and cleans up expired runtime files without touching `raw/**` or `wiki/**`. `packages/telegram` now supports multipart `sendDocument`, and the worker handles `download:<output_id>` inline callbacks with Telegram allowlist and job chat/user ownership validation before sending an active output file.
+
 ## Durable Decisions
 
 - Use Telegram as the single capture, command, and notify channel.
@@ -52,6 +56,7 @@ Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot 
 - Use `packages/rtzr` as the RTZR STT boundary for auth, submit/poll, transcript artifacts, and ffmpeg conversion helpers.
 - Use `packages/sensevoice` as the on-demand local SenseVoice STT boundary; invoke it per job rather than as a resident service.
 - Use `packages/wiki-adapter` as the LLM/wiki command boundary, guarded by a write lock and raw snapshot checks.
+- Use `packages/output-store` as the runtime-only output delivery boundary; output files are TTL cache artifacts, not source-of-truth vault content.
 - Use `packages/operator` for Telegram status/retry/cancel and notification/report text.
 - Use RTZR STT for audio and voice files.
 - Write immutable Obsidian raw bundles under `raw/<date>/<source_id>/`.
@@ -59,10 +64,10 @@ Symlink review for raw originals: do not symlink `raw/**` to Telegram Local Bot 
 
 ## Next Action
 
-MVP roadmap is complete and `apps/worker` now wires the main flow together. Next practical step is to set `.env` back to `STT_PROVIDER=rtzr`, restart the stack, upload the same audio file, choose recording environment and language in Telegram, then inspect the resulting `extracted/*.transcript.md` and manifest language/model config.
+MVP roadmap and Sprint 9 output delivery are complete. Next implementation step is Sprint 10: add deterministic preprocessing and a lightweight language/translation-needed boundary before agent execution. Start with `packages/language-detector` and a small preprocessor interface that can consume existing transcript/text artifacts and record job events without changing raw bundle immutability.
 
 ```text
-Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import -> raw bundle -> optional RTZR/wiki adapter -> Telegram status.
+Next utility flow target: local Telegram server -> upload file -> SQLite job -> import -> raw bundle -> preprocessing -> translation-needed check -> output store -> Telegram download button.
 ```
 
 ## Continuation Prompt
@@ -70,7 +75,7 @@ Run a live smoke: local Telegram server -> /ingest file -> SQLite job -> import 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.4` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`, including the WSL-safe Codex wrapper fix and project-safe `.gitignore` line merge. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and the Windows desktop launcher now starts/stops the pid/log-managed local stack. Bot responses are Korean-first. Audio/voice uploads ask first for recording environment, then recognition language; Korean/Japanese route to RTZR `sommers`, English/Chinese/mixed route to RTZR `whisper`, and the selected preset/language/provider config/translation default relation are stored in job events and raw bundle manifests. Failed job Telegram notifications include a `🔁 다시 처리` inline button that queues valid failed jobs for retry. RTZR STT is wired into the worker when credentials are set. SenseVoice local CPU STT is also wired as `STT_PROVIDER=sensevoice`; it runs on demand through `scripts/sensevoice-transcribe.py` and writes `*.sensevoice.json`/`*.transcript.md` extracted artifacts into raw bundles. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: set `.env` to `STT_PROVIDER=rtzr`, restart the stack, upload/retry the same audio file, choose environment and language, and compare transcript quality.
+Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Harness is synced to `v1.5.4` from local `/mnt/c/Users/Tony/Workspace/vibe-doctor`, including the WSL-safe Codex wrapper fix and project-safe `.gitignore` line merge. The MVP roadmap is complete, `npm run smoke:ready` exists, live smoke passed, upload-only file ingest is implemented, completed jobs delete their Telegram Local Bot API Server source files, and the Windows desktop launcher now starts/stops the pid/log-managed local stack. Bot responses are Korean-first. Audio/voice uploads ask first for recording environment, then recognition language; Korean/Japanese route to RTZR `sommers`, English/Chinese/mixed route to RTZR `whisper`, and the selected preset/language/provider config/translation default relation are stored in job events and raw bundle manifests. Failed job Telegram notifications include a `🔁 다시 처리` inline button that queues valid failed jobs for retry. RTZR STT is wired into the worker when credentials are set. SenseVoice local CPU STT is also wired as `STT_PROVIDER=sensevoice`; it runs on demand through `scripts/sensevoice-transcribe.py` and writes `*.sensevoice.json`/`*.transcript.md` extracted artifacts into raw bundles. Post-processing utility planning is documented. Sprint 9 output delivery is implemented: `job_outputs`, `packages/output-store`, Telegram `sendDocument`, active `download:<output_id>` callback handling, and expired runtime output cleanup. Do not add Dropbox. Use Telegram Local Bot API Server for large files. Next step: implement Sprint 10 preprocessing and language/translation-needed checks, then wire Sprint 11 Codex agent translation/formatting through the output store.
 ```
 
 ## Latest Verification
@@ -89,6 +94,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 - Latest verification after SenseVoice prewarm setup improvement: `npm run typecheck`, `npm run build`, app-focused tests passed (`57`), Python helper syntax checks passed, and full `npm test` passed (`320` passed, `0` failed).
 - Latest verification after failed-job retry button: `npm run typecheck`, `npm run build`, and app-focused tests passed (`54`).
 - Latest verification after RTZR language/model branching: `npm run typecheck`, `npm run build`, and app-focused tests passed (`54`).
+- Latest verification after post-processing utility roadmap and Sprint 9 output delivery: `npm run typecheck`, `npm run build`, app-focused tests passed (`59`), and full `npm test` passed (`327`).
 
 ## WSL Move Notes
 

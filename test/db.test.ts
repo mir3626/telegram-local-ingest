@@ -8,13 +8,18 @@ import {
   addJobFile,
   canRetry,
   createJob,
+  createJobOutput,
   createSourceBundle,
   getCurrentSchemaVersion,
   getJob,
+  getJobOutput,
   getTelegramOffset,
   isValidTransition,
+  listExpiredJobOutputs,
   listJobEvents,
   listJobFiles,
+  listJobOutputs,
+  markJobOutputDeleted,
   migrate,
   openIngestDatabase,
   requestRetry,
@@ -41,6 +46,7 @@ test("migrate creates the dashboard-ready operational schema", () => {
     assert.ok(tableNames.includes("job_events"));
     assert.ok(tableNames.includes("telegram_offsets"));
     assert.ok(tableNames.includes("source_bundles"));
+    assert.ok(tableNames.includes("job_outputs"));
   } finally {
     handle.close();
   }
@@ -170,6 +176,41 @@ test("telegram offsets and source bundles are persisted", () => {
 
     assert.equal(bundle.finalizedAt, NOW);
     assert.equal(listJobEvents(handle.db, "job-4").at(-1)?.type, "bundle.created");
+  } finally {
+    handle.close();
+  }
+});
+
+test("job outputs track downloadable files with expiry and deletion state", () => {
+  const handle = openIngestDatabase(":memory:");
+  try {
+    migrate(handle.db);
+    createJob(handle.db, { id: "job-outputs", source: "telegram-local-bot-api", now: NOW });
+
+    const output = createJobOutput(handle.db, {
+      id: "out-1",
+      jobId: "job-outputs",
+      kind: "agent_translation",
+      filePath: "/tmp/out.md",
+      fileName: "translated.md",
+      mimeType: "text/markdown",
+      sizeBytes: 123,
+      sha256: "abc123",
+      createdAt: NOW,
+      expiresAt: "2026-04-23T08:30:00.000Z",
+    });
+
+    assert.equal(output.fileName, "translated.md");
+    assert.equal(getJobOutput(handle.db, "out-1")?.kind, "agent_translation");
+    assert.equal(listJobOutputs(handle.db, "job-outputs").length, 1);
+    assert.equal(listExpiredJobOutputs(handle.db, "2026-04-23T08:29:59.000Z").length, 0);
+    assert.equal(listExpiredJobOutputs(handle.db, "2026-04-23T08:30:00.000Z").length, 1);
+
+    const deleted = markJobOutputDeleted(handle.db, "out-1", "2026-04-23T09:00:00.000Z");
+    assert.equal(deleted.deletedAt, "2026-04-23T09:00:00.000Z");
+    assert.equal(listExpiredJobOutputs(handle.db, "2026-04-24T00:00:00.000Z").length, 0);
+    assert.ok(listJobEvents(handle.db, "job-outputs").some((event) => event.type === "output.created"));
+    assert.ok(listJobEvents(handle.db, "job-outputs").some((event) => event.type === "output.deleted"));
   } finally {
     handle.close();
   }

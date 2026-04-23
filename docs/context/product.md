@@ -21,6 +21,19 @@
 7. Worker calls a narrow wiki ingest adapter that can update wiki notes but cannot modify raw bundles.
 8. Worker sends Telegram ACK, completion, failure, status, and retry notifications.
 
+## Post-Processing Utility Workflow
+
+The next product layer adds a personal utility flow on top of the ingest pipeline. It remains local-first and operator-only:
+
+1. User uploads a file to the allowlisted Telegram bot.
+2. Worker imports the file, runs type-specific preprocessing, and writes immutable source evidence.
+3. Worker runs a deterministic language/translation-needed check over extracted text or transcripts.
+4. If translation or formatting is needed, worker calls a local agent adapter. Codex is the first provider; Claude Code can be added through the same adapter later.
+5. Agent output is written to an output-only workspace and, when appropriate, to the wiki boundary. `raw/**` remains immutable.
+6. Worker sends a Telegram completion message with a download button. Downloadable outputs expire after 24 hours and are deleted from runtime storage.
+
+The utility layer is intentionally designed for later extraction into a separate bot: preprocessing, language detection, agent execution, and output retention are separate boundaries rather than worker-internal scripts.
+
 ## Success Criteria
 
 - Mobile and PC capture are both usable through Telegram share/send flows.
@@ -29,6 +42,8 @@
 - Raw source bytes and derived artifacts are traceable through manifest metadata.
 - Raw bundles are immutable once finalized.
 - LLM agent access is constrained to wiki ingest, not capture, file import, queue state, or retry decisions.
+- Downloadable generated outputs are stored outside the vault, have explicit expiry metadata, and can be deleted without losing source evidence.
+- Local agent automation is for personal/operator use only; future paid or multi-user service variants must use official API credentials instead of routing other users through a personal OAuth session.
 - MVP can run on one local Windows machine with Node 24+, SQLite, ffmpeg, Telegram Local Bot API Server, and an Obsidian vault path.
 
 ## Non-Goals For V1
@@ -40,6 +55,8 @@
 - Full human review UI.
 - n8n production gateway.
 - General-purpose OpenClaw/Hermes automation as the front door.
+- Public or paid utility bot backed by personal Codex/Claude OAuth credentials.
+- Pixel-perfect Office/PDF layout preservation in the first utility slice.
 
 ## Key Product Decisions
 
@@ -49,3 +66,4 @@
 - Obsidian raw bundles are the source of truth for ingested source packages.
 - RTZR STT output is copied into the raw bundle immediately because remote STT results are temporary.
 - The initial package manager is npm workspaces to stay compatible with the `vibe-doctor` harness.
+- Generated user-download outputs are operational artifacts under `runtime/outputs`, not source-of-truth vault content.

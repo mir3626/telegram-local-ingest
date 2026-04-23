@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: completed
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel
-> **Pending**: none
+> **Current**: sprint-10-preprocessing-language-check
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads
+> **Pending**: sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -179,3 +179,64 @@ Telegram mobile/desktop
 - Vector DB.
 - Human review UI.
 - Telegram webhook deployment.
+
+## Sprint 9 — Output Store And Telegram Downloads
+
+- **id**: `sprint-9-output-store-downloads`
+- **goal**: Add a runtime-only output delivery cache for generated artifacts and expose active outputs through Telegram download callbacks.
+- **tasks**:
+  - Add `job_outputs` SQLite table and repository functions.
+  - Add `packages/output-store` to copy generated files into `runtime/outputs/<job_id>/<output_id>/`.
+  - Add 24-hour expiry metadata and cleanup helpers.
+  - Add `sendDocument` support to `packages/telegram`.
+  - Add worker callback routing for `download:<output_id>` with allowlist and job ownership validation.
+- **acceptance criteria**:
+  - Generated output files are tracked independently from raw bundles.
+  - Expired/deleted outputs are not sent to Telegram.
+  - Cleanup can delete expired output files without touching raw/wiki content.
+- **status**: completed. Added `job_outputs`, `packages/output-store`, `sendDocument` support, worker `download:<output_id>` callback handling with chat/user ownership validation, and expired-output cleanup that only touches `runtime/outputs`.
+
+## Sprint 10 — Preprocessing And Translation Need Check
+
+- **id**: `sprint-10-preprocessing-language-check`
+- **goal**: Introduce deterministic preprocessing and language-check boundaries before agent execution.
+- **tasks**:
+  - Add `packages/preprocessors` interface for audio, image, document, spreadsheet, and generic text artifacts.
+  - Reuse RTZR/SenseVoice transcript artifacts for audio.
+  - Add a simple `packages/language-detector` script for primary language, confidence, and translation-needed decisions.
+  - Record preprocessing and language-check events on jobs.
+- **acceptance criteria**:
+  - Worker can decide whether translation is needed without asking an LLM.
+  - Unsupported file types are preserved and logged without blocking the source bundle.
+- **status**: pending.
+
+## Sprint 11 — Codex Agent Post-Processing
+
+- **id**: `sprint-11-codex-agent-postprocess`
+- **goal**: Run local Codex non-interactive agent tasks for personal translation and document formatting.
+- **tasks**:
+  - Add `packages/agent-adapter` provider interface.
+  - Implement Codex provider first using a job-scoped workspace and output-only write target.
+  - Create preset prompts for natural Korean translation, terminology consistency, tone, and Markdown formatting.
+  - Register generated outputs through `packages/output-store`.
+  - Notify Telegram when automatic translation/formatting is complete.
+- **acceptance criteria**:
+  - Agent input is a prepared data package, not arbitrary workspace access.
+  - Agent writes only output artifacts; `raw/**` remains immutable.
+  - Claude Code can be added later behind the same interface.
+- **status**: pending.
+
+## Sprint 12 — Utility Cleanup And Bot Separation Prep
+
+- **id**: `sprint-12-utility-cleanup-polish`
+- **goal**: Prepare the post-processing flow for later extraction into a standalone utility bot.
+- **tasks**:
+  - Add hidden/skeleton interfaces for regenerate and discard output actions.
+  - Add scheduled cleanup cadence to the worker loop.
+  - Add operator-facing output status messages.
+  - Document the personal-OAuth-only operating boundary and API migration path for future paid service use.
+- **acceptance criteria**:
+  - Utility concerns are isolated from wiki/raw capture concerns.
+  - Expired output cleanup is repeatable after worker restart.
+  - Public/multi-user service constraints are documented.
+- **status**: pending.

@@ -13,6 +13,7 @@ Telegram clients
   -> RTZR STT for audio/voice
   -> Obsidian vault raw bundle writer
   -> wiki ingest adapter
+  -> optional agent post-processing + runtime outputs
   -> Telegram notifications
 ```
 
@@ -36,6 +37,10 @@ Telegram clients
    - `packages/rtzr`: RTZR auth, submit, polling, result persistence.
    - `packages/vault`: Obsidian raw bundle layout, manifest writer, source markdown writer, write lock helpers.
    - `packages/wiki-adapter`: Protected CLI adapter boundary for LLM/wiki updates.
+   - `packages/output-store`: Runtime-only downloadable output registration, expiry, and cleanup.
+   - Planned `packages/preprocessors`: File-type-specific extraction boundary for images, documents, spreadsheets, and audio.
+   - Planned `packages/language-detector`: Deterministic translation-needed check.
+   - Planned `packages/agent-adapter`: Codex-first local agent execution boundary, with Claude Code as a future provider.
 
 ## Runtime Directories
 
@@ -46,11 +51,15 @@ runtime/
   archive/
     originals/
   temp/
+  outputs/
+    <job_id>/
+      <output_id>/
   logs/
   wiki.lock
 ```
 
 `runtime/` is operational state and must not be treated as Obsidian content.
+`runtime/outputs/` is a TTL-controlled delivery cache. Files under it can be deleted after expiry because raw bundles and wiki artifacts remain the durable sources of truth.
 
 ## Worker Dispatch
 
@@ -60,6 +69,15 @@ runtime/
 2. Route `/status`, `/retry`, and `/cancel` through `packages/operator`.
 3. Route file uploads, with or without `/ingest`, through `packages/capture`.
 4. Process queued jobs through file import, raw bundle writing, optional wiki adapter execution, Telegram notification, and terminal state transition.
+
+The post-processing utility layer extends this loop after source artifacts exist:
+
+1. Preprocess by file type and collect text/structured artifacts.
+2. Run a deterministic language check to decide whether translation is needed.
+3. Call the configured agent adapter in a job-scoped workspace.
+4. Register downloadable files in `job_outputs` and `runtime/outputs`.
+5. Notify Telegram with a download button whose callback resolves the output only if it is still active.
+6. Periodically delete expired output files and mark them deleted in SQLite.
 
 ## Obsidian Vault Layout
 
@@ -119,6 +137,7 @@ SQLite tables planned for Sprint 2:
 - `job_events`
 - `telegram_offsets`
 - `source_bundles`
+- `job_outputs`
 
 Sprint 2 uses Node 24's built-in `node:sqlite` module to avoid Windows native npm install friction. The module currently emits an experimental warning in Node 24.14.1, so all SQL access is isolated under `packages/db` and can be swapped later if needed.
 
@@ -134,6 +153,8 @@ Sprint 7 adds the wiki ingest adapter boundary through `packages/wiki-adapter`: 
 
 Sprint 8 adds Telegram operator commands through `packages/operator`: `/status` summary/detail responses, failed-job retry back to `QUEUED`, active-job cancellation, concise completion/failure messages, and a daily failed-job report text builder.
 
+Post-MVP utility work adds `job_outputs` and `packages/output-store`. Output records point to generated files under `runtime/outputs`, include an expiry timestamp, and are resolved by Telegram download callbacks. This keeps the future utility-bot delivery behavior separate from wiki/raw bundle semantics.
+
 ## Security Boundaries
 
 - Telegram user allowlist is mandatory.
@@ -144,6 +165,9 @@ Sprint 8 adds Telegram operator commands through `packages/operator`: `/status` 
 - If `TELEGRAM_LOCAL_FILES_ROOT` is configured, both relative and absolute Telegram `file_path` values must resolve inside that root.
 - Commands such as `/retry` and `/cancel` operate only on jobs belonging to the allowlisted chat/user context.
 - Raw bundles remain self-contained copies. Do not place symlinks from `raw/**` to Telegram Local Bot API Server storage: those targets include bot-token-derived paths, may disappear after cleanup, and make raw bundles non-portable. If linking is needed, prefer Obsidian-relative links to files copied inside the finalized raw bundle.
+- Local agent adapters may read prepared input copies and write only to job-scoped output directories. They must not receive bot tokens, OAuth credential files, `.env`, `runtime/ingest.db`, or arbitrary workspace access.
+- Generated download callbacks must validate Telegram allowlist and job chat/user ownership before sending files.
+- Personal Codex/Claude OAuth automation is allowed only for the operator's own local workflow; public, paid, or multi-user service flows must switch to official API credentials and product-grade tenant isolation.
 
 ## External Dependencies
 

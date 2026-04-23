@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { IngestSource, JobStatus } from "@telegram-local-ingest/core";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export interface DbHandle {
   db: DatabaseSync;
@@ -100,6 +100,33 @@ export interface StoredSourceBundle extends Required<Omit<SourceBundleInput, "no
   createdAt: string;
 }
 
+export interface CreateJobOutputInput {
+  id: string;
+  jobId: string;
+  kind: string;
+  filePath: string;
+  fileName: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  createdAt?: string;
+  expiresAt: string;
+}
+
+export interface StoredJobOutput {
+  id: string;
+  jobId: string;
+  kind: string;
+  filePath: string;
+  fileName: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  createdAt: string;
+  expiresAt: string;
+  deletedAt?: string;
+}
+
 const ACTIVE_STATUSES: JobStatus[] = [
   "RECEIVED",
   "QUEUED",
@@ -154,11 +181,14 @@ export function migrate(db: DatabaseSync): void {
 
   db.exec("BEGIN;");
   try {
-    applyV1(db);
-    db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(
-      SCHEMA_VERSION,
-      nowIso(),
-    );
+    if (current < 1) {
+      applyV1(db);
+      recordMigration(db, 1);
+    }
+    if (current < 2) {
+      applyV2(db);
+      recordMigration(db, 2);
+    }
     db.exec("COMMIT;");
   } catch (error) {
     db.exec("ROLLBACK;");
@@ -440,6 +470,79 @@ export function mustGetSourceBundleForJob(db: DatabaseSync, jobId: string): Stor
   return mapSourceBundle(row);
 }
 
+export function createJobOutput(db: DatabaseSync, input: CreateJobOutputInput): StoredJobOutput {
+  const timestamp = input.createdAt ?? nowIso();
+  db.prepare(`
+    INSERT INTO job_outputs (
+      id, job_id, kind, file_path, file_name, mime_type, size_bytes, sha256,
+      created_at, expires_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.id,
+    input.jobId,
+    input.kind,
+    input.filePath,
+    input.fileName,
+    input.mimeType ?? null,
+    input.sizeBytes ?? null,
+    input.sha256 ?? null,
+    timestamp,
+    input.expiresAt,
+  );
+  appendJobEvent(db, input.jobId, "output.created", input.fileName, {
+    outputId: input.id,
+    kind: input.kind,
+    fileName: input.fileName,
+    expiresAt: input.expiresAt,
+  }, timestamp);
+  return mustGetJobOutput(db, input.id);
+}
+
+export function getJobOutput(db: DatabaseSync, outputId: string): StoredJobOutput | null {
+  const row = db.prepare("SELECT * FROM job_outputs WHERE id = ?").get(outputId) as JobOutputRow | undefined;
+  return row ? mapJobOutput(row) : null;
+}
+
+export function mustGetJobOutput(db: DatabaseSync, outputId: string): StoredJobOutput {
+  const output = getJobOutput(db, outputId);
+  if (!output) {
+    throw new Error(`Job output not found: ${outputId}`);
+  }
+  return output;
+}
+
+export function listJobOutputs(db: DatabaseSync, jobId: string): StoredJobOutput[] {
+  return db
+    .prepare("SELECT * FROM job_outputs WHERE job_id = ? ORDER BY created_at ASC")
+    .all(jobId)
+    .map((row) => mapJobOutput(row as unknown as JobOutputRow));
+}
+
+export function listExpiredJobOutputs(db: DatabaseSync, now = nowIso(), limit = 100): StoredJobOutput[] {
+  return db
+    .prepare(`
+      SELECT * FROM job_outputs
+      WHERE deleted_at IS NULL AND expires_at <= ?
+      ORDER BY expires_at ASC
+      LIMIT ?
+    `)
+    .all(now, limit)
+    .map((row) => mapJobOutput(row as unknown as JobOutputRow));
+}
+
+export function markJobOutputDeleted(db: DatabaseSync, outputId: string, deletedAt = nowIso()): StoredJobOutput {
+  const current = mustGetJobOutput(db, outputId);
+  if (current.deletedAt) {
+    return current;
+  }
+  db.prepare("UPDATE job_outputs SET deleted_at = ? WHERE id = ?").run(deletedAt, outputId);
+  appendJobEvent(db, current.jobId, "output.deleted", current.fileName, {
+    outputId: current.id,
+    fileName: current.fileName,
+  }, deletedAt);
+  return mustGetJobOutput(db, outputId);
+}
+
 function applyV1(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE jobs (
@@ -509,6 +612,31 @@ function applyV1(db: DatabaseSync): void {
 
     CREATE INDEX idx_source_bundles_finalized_at ON source_bundles(finalized_at);
   `);
+}
+
+function applyV2(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE job_outputs (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      mime_type TEXT,
+      size_bytes INTEGER,
+      sha256 TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+
+    CREATE INDEX idx_job_outputs_job_id ON job_outputs(job_id);
+    CREATE INDEX idx_job_outputs_expires_at ON job_outputs(expires_at, deleted_at);
+  `);
+}
+
+function recordMigration(db: DatabaseSync, version: number): void {
+  db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(version, nowIso());
 }
 
 function nowIso(): string {
@@ -596,6 +724,23 @@ function mapSourceBundle(row: SourceBundleRow): StoredSourceBundle {
   };
 }
 
+function mapJobOutput(row: JobOutputRow): StoredJobOutput {
+  const output: StoredJobOutput = {
+    id: row.id,
+    jobId: row.job_id,
+    kind: row.kind,
+    filePath: row.file_path,
+    fileName: row.file_name,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+  assignDefined(output, "mimeType", definedString(row.mime_type));
+  assignDefined(output, "sizeBytes", definedNumber(row.size_bytes));
+  assignDefined(output, "sha256", definedString(row.sha256));
+  assignDefined(output, "deletedAt", definedString(row.deleted_at));
+  return output;
+}
+
 function assignDefined<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | undefined): void {
   if (value !== undefined) {
     target[key] = value;
@@ -650,4 +795,18 @@ interface SourceBundleRow {
   source_markdown_path: string;
   finalized_at: string;
   created_at: string;
+}
+
+interface JobOutputRow {
+  id: string;
+  job_id: string;
+  kind: string;
+  file_path: string;
+  file_name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  sha256: string | null;
+  created_at: string;
+  expires_at: string;
+  deleted_at: string | null;
 }

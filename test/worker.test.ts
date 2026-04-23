@@ -7,6 +7,7 @@ import test from "node:test";
 import type { AppConfig } from "@telegram-local-ingest/core";
 import {
   createJob,
+  createJobOutput,
   getJob,
   getTelegramOffset,
   listJobEvents,
@@ -54,8 +55,9 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
     assert.equal(getTelegramOffset(dbHandle.db, "123:abc"), 11);
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
     assert.equal(fs.existsSync(path.join(fixture.botRoot, "documents", "lead.txt")), false);
-    assert.ok(fs.existsSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml")));
-    assert.equal(mustGetSourceBundleForJob(dbHandle.db, "tg_300_21").sourceMarkdownPath.endsWith("source.md"), true);
+    const bundle = mustGetSourceBundleForJob(dbHandle.db, "tg_300_21");
+    assert.ok(fs.existsSync(bundle.manifestPath));
+    assert.equal(bundle.sourceMarkdownPath.endsWith("source.md"), true);
     assert.deepEqual(sentMessages.map((message) => message.text), [
       "📥 접수했어요: tg_300_21\n- lead.txt",
       "✅ 처리 완료: tg_300_21 (sales)\n- lead.txt",
@@ -137,7 +139,7 @@ test("runWorkerOnce asks for RTZR preset on audio uploads and queues after callb
     assert.ok(answeredCallbacks.length > 0);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "stt.preset_selected"));
     assert.ok(
-      fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml"), "utf8")
+      fs.readFileSync(mustGetSourceBundleForJob(dbHandle.db, "tg_300_21").manifestPath, "utf8")
         .includes("default_relation: \"business\""),
     );
   } finally {
@@ -168,7 +170,8 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     await runWorkerOnce(context);
     await runWorkerOnce(context);
 
-    const manifest = fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml"), "utf8");
+    const bundle = mustGetSourceBundleForJob(dbHandle.db, "tg_300_21");
+    const manifest = fs.readFileSync(bundle.manifestPath, "utf8");
     assert.equal(rtzrCalls.length, 1);
     assert.equal(rtzrCalls[0]?.config.model_name, "whisper");
     assert.equal(rtzrCalls[0]?.config.language, "en");
@@ -178,7 +181,7 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     assert.match(manifest, /model_name: "whisper"/);
     assert.match(manifest, /call\.rtzr\.json/);
     assert.match(manifest, /call\.transcript\.md/);
-    assert.match(fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
+    assert.match(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "rtzr.transcribed"));
   } finally {
     dbHandle.close();
@@ -211,14 +214,15 @@ test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles arti
     await runWorkerOnce(context);
     await runWorkerOnce(context);
 
-    const manifest = fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "manifest.yaml"), "utf8");
+    const bundle = mustGetSourceBundleForJob(dbHandle.db, "tg_300_21");
+    const manifest = fs.readFileSync(bundle.manifestPath, "utf8");
     assert.equal(senseVoiceCalls.length, 1);
     assert.equal(senseVoiceCalls[0]?.options.device, "cpu");
     assert.equal(senseVoiceCalls[0]?.options.language, "ko");
     assert.match(manifest, /provider: "sensevoice"/);
     assert.match(manifest, /call\.sensevoice\.json/);
     assert.match(manifest, /call\.transcript\.md/);
-    assert.match(fs.readFileSync(path.join(fixture.vaultPath, "raw", "2026-04-22", "tg_300_21", "extracted", "call.transcript.md"), "utf8"), /센스보이스 전사입니다/);
+    assert.match(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "call.transcript.md"), "utf8"), /센스보이스 전사입니다/);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "sensevoice.transcribed"));
   } finally {
     dbHandle.close();
@@ -293,6 +297,54 @@ test("pollTelegramUpdatesOnce retries a failed job from a retry button", async (
     assert.equal(getJob(dbHandle.db, "job-retry")?.retryCount, 1);
     assert.match(JSON.stringify(answeredCallbacks[0]), /재시도 대기열/);
     assert.equal(sentMessages.at(-1)?.text, "🔁 재시도 대기열에 넣었어요: job-retry");
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("pollTelegramUpdatesOnce sends active output documents from a download button", async () => {
+  const fixture = createFixture();
+  const outputPath = writeFile(fixture.runtimeDir, "outputs/job-download/out-1/translated.md", "translated");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }> = [];
+  const answeredCallbacks: unknown[] = [];
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, {
+      id: "job-download",
+      source: "telegram-local-bot-api",
+      chatId: "300",
+      userId: "400",
+      now: "2026-04-22T12:00:00.000Z",
+    });
+    createJobOutput(dbHandle.db, {
+      id: "out-1",
+      jobId: "job-download",
+      kind: "agent_translation",
+      filePath: outputPath,
+      fileName: "translated.md",
+      mimeType: "text/markdown",
+      createdAt: "2026-04-22T12:00:01.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockDownloadCallbackFetch(sentDocuments, answeredCallbacks),
+      ),
+    };
+
+    const result = await pollTelegramUpdatesOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.match(JSON.stringify(answeredCallbacks[0]), /파일을 전송/);
+    assert.deepEqual(sentDocuments, [{
+      chat_id: "300",
+      caption: "📎 translated.md",
+      document: "translated.md",
+    }]);
   } finally {
     dbHandle.close();
   }
@@ -593,6 +645,58 @@ function mockRetryCallbackFetch(
     if (method === "answerCallbackQuery") {
       answeredCallbacks.push(body);
       return jsonResponse({ ok: true, result: true });
+    }
+    return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
+function mockDownloadCallbackFetch(
+  sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }>,
+  answeredCallbacks: unknown[],
+): FetchLike {
+  return async (input, init) => {
+    const method = input.split("/").at(-1);
+    const body = init?.body instanceof FormData ? init.body : undefined;
+    if (method === "getUpdates") {
+      return jsonResponse({
+        ok: true,
+        result: [{
+          update_id: 41,
+          callback_query: {
+            id: "download-callback-1",
+            from: { id: 400, is_bot: false, first_name: "Tony" },
+            message: {
+              message_id: 42,
+              date: 1_777_000_004,
+              chat: { id: 300, type: "private" },
+              text: "download",
+            },
+            data: "download:out-1",
+          },
+        }],
+      });
+    }
+    if (method === "answerCallbackQuery") {
+      answeredCallbacks.push(init?.body ? JSON.parse(String(init.body)) : {});
+      return jsonResponse({ ok: true, result: true });
+    }
+    if (method === "sendDocument" && body) {
+      const document = body.get("document");
+      sentDocuments.push({
+        chat_id: String(body.get("chat_id")),
+        caption: String(body.get("caption")),
+        ...(typeof document === "string" ? { document } : {}),
+        ...(typeof document !== "string" && document?.name ? { document: document.name } : {}),
+      });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: 101,
+          date: 1,
+          chat: { id: 300, type: "private" },
+          document: { file_id: "doc", file_name: "translated.md" },
+        },
+      });
     }
     return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
   };

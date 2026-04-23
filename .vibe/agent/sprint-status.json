@@ -70,21 +70,36 @@
       "status": "passed",
       "startedAt": "2026-04-22T09:08:52.326Z",
       "completedAt": "2026-04-22T09:14:36.164Z"
+    },
+    {
+      "id": "sprint-9-output-store-downloads",
+      "name": "Output Store And Telegram Downloads",
+      "status": "passed",
+      "startedAt": "2026-04-23T14:00:00+09:00",
+      "completedAt": "2026-04-23T14:07:12+09:00"
+    },
+    {
+      "id": "sprint-10-preprocessing-language-check",
+      "name": "Preprocessing And Translation Need Check",
+      "status": "in_progress",
+      "startedAt": "2026-04-23T14:07:12+09:00"
     }
   ],
   "handoff": {
-    "currentSprintId": "completed",
-    "lastActionSummary": "Completed Sprint 8: added Telegram status, retry, cancel, completion/failure messages, daily failed report text, and README operator flow. MVP roadmap complete.",
+    "currentSprintId": "sprint-10-preprocessing-language-check",
+    "lastActionSummary": "Completed Sprint 9 output delivery: added job_outputs, packages/output-store, Telegram sendDocument, download callbacks with ownership checks, and expired runtime output cleanup. Next step is deterministic preprocessing and language/translation-needed checks.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
       "Dropbox excluded from V1",
       "npm workspaces for vibe-doctor compatibility",
       "Obsidian raw bundles are immutable",
-      "LLM agent only updates wiki through adapter"
+      "LLM agent only updates wiki through adapter",
+      "Runtime outputs are TTL cache artifacts, not source-of-truth vault content",
+      "Personal OAuth-backed agent automation is operator-only"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-22T09:14:36.164Z"
+    "updatedAt": "2026-04-23T14:07:12+09:00"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -99,8 +114,8 @@
   "lastSprintScope": [],
   "lastSprintScopeGlob": [],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-22T09:14:36.164Z",
-  "verifiedAt": "2026-04-22T09:14:36.164Z",
+  "stateUpdatedAt": "2026-04-23T14:07:12+09:00",
+  "verifiedAt": "2026-04-23T14:07:12+09:00",
   "verificationCommands": [
     {
       "id": "typecheck",

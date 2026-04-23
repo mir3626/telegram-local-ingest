@@ -100,6 +100,47 @@ test("TelegramBotApiClient calls local Bot API endpoints", async () => {
   ]);
 });
 
+test("TelegramBotApiClient sends documents as multipart form data", async () => {
+  const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "telegram-send-doc-")), "translated.md");
+  fs.writeFileSync(filePath, "translated", "utf8");
+  const calls: Array<{ input: string; fields: string[] }> = [];
+  const client = new TelegramBotApiClient(
+    { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081" },
+    async (input, init) => {
+      const fields: string[] = [];
+      if (init?.body instanceof FormData) {
+        for (const [key, value] of init.body.entries()) {
+          fields.push(`${key}:${typeof value === "string" ? value : value.name}`);
+        }
+      }
+      calls.push({ input, fields });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: 10,
+          date: 1,
+          chat: { id: 300, type: "private" },
+          document: { file_id: "doc", file_name: "translated.md" },
+        },
+      });
+    },
+  );
+
+  const sent = await client.sendDocument("300", filePath, {
+    fileName: "translated.md",
+    mimeType: "text/markdown",
+    caption: "done",
+  });
+
+  assert.equal(sent.document?.file_name, "translated.md");
+  assert.equal(calls[0]?.input, "http://127.0.0.1:8081/bot123:abc/sendDocument");
+  assert.deepEqual(calls[0]?.fields, [
+    "chat_id:300",
+    "caption:done",
+    "document:translated.md",
+  ]);
+});
+
 test("getFile preserves absolute Local Bot API file paths", async () => {
   const absolutePath = process.platform === "win32" ? "C:\\telegram-bot-api\\files\\big.zip" : "/var/lib/telegram-bot-api/files/big.zip";
   const client = new TelegramBotApiClient(

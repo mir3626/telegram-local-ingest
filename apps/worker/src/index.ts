@@ -30,6 +30,7 @@ import {
   buildJobFailureMessage,
   sendOperatorCommandResponse,
 } from "@telegram-local-ingest/operator";
+import { cleanupExpiredOutputs, resolveDownloadableOutput } from "@telegram-local-ingest/output-store";
 import {
   ensureRtzrSupportedAudio,
   RtzrOpenApiClient,
@@ -267,6 +268,7 @@ export async function runWorkerLoop(context: WorkerContext, options: WorkerLoopO
 export async function runWorkerOnce(context: WorkerContext): Promise<WorkerOnceResult> {
   const updateResult = await pollTelegramUpdatesOnce(context);
   const jobsProcessed = await processRunnableJobs(context);
+  await cleanupExpiredOutputFiles(context);
   return {
     ...updateResult,
     jobsProcessed,
@@ -293,6 +295,7 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
       try {
         if (isTelegramUserAllowed(callback.userId, context.config.telegram.allowedUserIds)) {
           const handled = await handleRetryCallback(context, callback)
+            || await handleDownloadCallback(context, callback)
             || await handleSttContextCallback(context, callback);
           operatorCommandsHandled += handled ? 1 : 0;
         }
@@ -452,6 +455,16 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
   }
 }
 
+async function cleanupExpiredOutputFiles(context: WorkerContext): Promise<void> {
+  const cleanup = await cleanupExpiredOutputs(context.db, { limit: 50 });
+  if (cleanup.deletedOutputs.length > 0) {
+    logWorker(`expired output cleanup deleted=${cleanup.deletedOutputs.length}`, "info", "OUTPUT");
+  }
+  if (cleanup.failedOutputs.length > 0) {
+    logWorker(`expired output cleanup failures=${cleanup.failedOutputs.length}`, "warn", "OUTPUT");
+  }
+}
+
 async function handleRetryCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
   const parsed = parseRetryCallbackData(callback.data);
   if (!parsed) {
@@ -486,6 +499,54 @@ async function handleRetryCallback(context: WorkerContext, callback: ParsedTeleg
   await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔁 재시도 대기열에 넣었습니다.");
   await context.telegram.sendMessage(callback.chatId, `🔁 재시도 대기열에 넣었어요: ${queued.id}`);
   logWorker(`retry queued job=${queued.id} from=telegram_button`, "info", "RETRY");
+  return true;
+}
+
+async function handleDownloadCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
+  const parsed = parseDownloadCallbackData(callback.data);
+  if (!parsed) {
+    return false;
+  }
+
+  if (!callback.chatId) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 다운로드할 채팅을 확인할 수 없습니다.");
+    return true;
+  }
+
+  const resolved = resolveDownloadableOutput(context.db, parsed.outputId);
+  if (resolved.status === "not_found") {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 다운로드 파일을 찾을 수 없습니다.");
+    return true;
+  }
+  if (resolved.status === "expired" || resolved.status === "deleted") {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⏳ 다운로드 기간이 만료되었습니다.");
+    return true;
+  }
+
+  const output = resolved.output;
+  if (!output) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 다운로드 파일을 확인할 수 없습니다.");
+    return true;
+  }
+
+  const job = getJob(context.db, output.jobId);
+  if (!job) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⚠️ 원본 작업을 찾을 수 없습니다.");
+    return true;
+  }
+
+  if ((job.chatId && job.chatId !== callback.chatId) || (job.userId && callback.userId && job.userId !== callback.userId)) {
+    await context.telegram.answerCallbackQuery(callback.callbackQueryId, "🔒 이 파일을 다운로드할 권한이 없습니다.");
+    return true;
+  }
+
+  await context.telegram.answerCallbackQuery(callback.callbackQueryId, "⬇️ 파일을 전송합니다.");
+  await context.telegram.sendDocument(callback.chatId, output.filePath, {
+    fileName: output.fileName,
+    ...(output.mimeType ? { mimeType: output.mimeType } : {}),
+    caption: `📎 ${output.fileName}`,
+  });
+  logWorker(`download sent output=${output.id} job=${output.jobId}`, "info", "OUTPUT");
   return true;
 }
 
@@ -972,6 +1033,14 @@ function parseRetryCallbackData(data: string | undefined): { jobId: string } | n
     return null;
   }
   return { jobId: match[1] };
+}
+
+function parseDownloadCallbackData(data: string | undefined): { outputId: string } | null {
+  const match = /^download:([a-zA-Z0-9._-]+)$/.exec(data ?? "");
+  if (!match?.[1]) {
+    return null;
+  }
+  return { outputId: match[1] };
 }
 
 function selectedSttPresetEvent(events: StoredJobEvent[]): StoredJobEvent | undefined {
