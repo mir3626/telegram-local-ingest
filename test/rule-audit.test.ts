@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -86,14 +87,20 @@ describe('vibe-rule-audit', () => {
       `--gaps=${gapsPath}`,
     ]);
     const parsed = JSON.parse(result.stdout) as {
-      summary: { total: number; covered: number; uncovered: number };
-      rules: Array<{ text: string; covered: boolean; coveredBy: string | null }>;
+      summary: { total: number; covered: number; uncovered: number; disposed: number; undisposed: number };
+      rules: Array<{ text: string; covered: boolean; coveredBy: string | null; disposition: string; disposedBy: string | null }>;
     };
 
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(parsed.summary, { total: 2, covered: 1, uncovered: 1 });
+    assert.equal(parsed.summary.total, 2);
+    assert.equal(parsed.summary.covered, 1);
+    assert.equal(parsed.summary.uncovered, 1);
+    assert.equal(parsed.summary.disposed, 1);
+    assert.equal(parsed.summary.undisposed, 1);
     assert.equal(parsed.rules[0]?.coveredBy, 'gap-covered-rule');
+    assert.equal(parsed.rules[0]?.disposition, 'covered');
     assert.equal(parsed.rules[1]?.covered, false);
+    assert.equal(parsed.rules[1]?.disposition, 'undisposed');
     assert.equal(parsed.rules.some((rule) => rule.text.includes('fenced')), false);
   });
 
@@ -115,8 +122,67 @@ describe('vibe-rule-audit', () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /## Uncovered \(candidates for next Sprint\)/);
+    assert.match(result.stdout, /## Undisposed \(needs explicit coverage disposition\)/);
     assert.match(result.stdout, /## Covered/);
     assert.match(result.stdout, /## Covered\n\(none\)/);
+  });
+
+  it('distinguishes pending dispositions from undisposed rules', async () => {
+    const root = await makeTempDir('rule-audit-disposition-');
+    const claudePath = path.join(root, 'CLAUDE.md');
+    const gapsPath = path.join(root, 'harness-gaps.md');
+    await writeText(
+      claudePath,
+      [
+        'Rule MUST mention gap-pending-rule.',
+        'Rule MUST mention gap-manual-rule.',
+        'Rule MUST mention nothing.',
+      ].join('\n'),
+    );
+    await writeText(
+      gapsPath,
+      [
+        '| id | symptom | covered_by | status | script-gate | migration-deadline |',
+        '|---|---|---|---|---|---|',
+        '| gap-pending-rule | sample | `script` | open | pending | +1 sprint |',
+        '| gap-manual-rule | sample | `rubric` | under-review | manual-review | — |',
+      ].join('\n'),
+    );
+
+    const result = await runRuleAudit([
+      '--format=json',
+      `--claude-md=${claudePath}`,
+      `--gaps=${gapsPath}`,
+    ]);
+    const parsed = JSON.parse(result.stdout) as {
+      summary: { byDisposition: Record<string, number>; disposed: number; undisposed: number };
+      rules: Array<{ disposition: string; disposedBy: string | null }>;
+    };
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(parsed.summary.disposed, 2);
+    assert.equal(parsed.summary.undisposed, 1);
+    assert.equal(parsed.summary.byDisposition.pending, 1);
+    assert.equal(parsed.summary.byDisposition['manual-review'], 1);
+    assert.deepEqual(parsed.rules.map((rule) => rule.disposition), ['pending', 'manual-review', 'undisposed']);
+  });
+
+  it('can fail as a gate when undisposed rules remain', async () => {
+    const root = await makeTempDir('rule-audit-fail-');
+    const claudePath = path.join(root, 'CLAUDE.md');
+    const gapsPath = path.join(root, 'harness-gaps.md');
+    await writeText(claudePath, 'Rule MUST be mapped.\n');
+    await writeText(gapsPath, '| id | symptom | covered_by | status | script-gate | migration-deadline |\n');
+
+    const result = spawnSync(process.execPath, [
+      scriptPath,
+      '--fail-on-undisposed',
+      `--claude-md=${claudePath}`,
+      `--gaps=${gapsPath}`,
+    ], { encoding: 'utf8' });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /undisposed rules: 1/);
   });
 
   it('scans transcripts and aggregates failure/drift tag counts', async () => {

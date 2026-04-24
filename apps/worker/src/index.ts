@@ -1337,6 +1337,12 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
     "info",
     "PREPROCESS",
   );
+  const blockingPreprocessSkip = findBlockingPreprocessSkip(preprocessing.skippedFiles);
+  if (context.config.agent.provider !== "none" && blockingPreprocessSkip) {
+    throw new Error(
+      `PDF text extraction is required for agent postprocess but failed for ${blockingPreprocessSkip.fileName}: ${blockingPreprocessSkip.reason}`,
+    );
+  }
 
   const detection = detectLanguageAcrossArtifacts(
     preprocessing.artifacts.map((artifact) => ({ id: artifact.id, text: artifact.text })),
@@ -1357,6 +1363,14 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
     "info",
     "LANGUAGE",
   );
+}
+
+function findBlockingPreprocessSkip(skippedFiles: Array<{ fileName: string; reason: string }>): { fileName: string; reason: string } | null {
+  return skippedFiles.find((file) =>
+    file.reason === "pdf_tool_missing" ||
+    file.reason === "pdf_text_extraction_failed" ||
+    file.reason === "pdf_no_text"
+  ) ?? null;
 }
 
 function transitionToFailedIfPossible(db: DatabaseSync, jobId: string, error: unknown): StoredJob | null {
@@ -1788,7 +1802,7 @@ async function createOriginalAndTranslationPdf(input: {
   };
 }
 
-function findDocumentSourceFile(files: StoredJobFile[]): { kind: "docx" | "hwp"; path: string; fileName: string } | null {
+function findDocumentSourceFile(files: StoredJobFile[]): { kind: "docx" | "hwp" | "pdf"; path: string; fileName: string } | null {
   for (const file of files) {
     const candidatePath = file.archivePath ?? file.localPath;
     if (!candidatePath) {
@@ -1811,6 +1825,13 @@ function findDocumentSourceFile(files: StoredJobFile[]): { kind: "docx" | "hwp";
         fileName,
       };
     }
+    if (extension === ".pdf" || mimeType === "application/pdf") {
+      return {
+        kind: "pdf",
+        path: candidatePath,
+        fileName,
+      };
+    }
   }
   return null;
 }
@@ -1820,7 +1841,7 @@ async function createDocumentTranslationDocx(input: {
   artifacts: AgentPostprocessInput["artifacts"];
   originalSections: PdfTextSection[];
   generatedFiles: GeneratedFile[];
-  documentSource: { kind: "docx" | "hwp"; path: string; fileName: string };
+  documentSource: { kind: "docx" | "hwp" | "pdf"; path: string; fileName: string };
   outputDir: string;
 }): Promise<GeneratedFile | null> {
   const existingDocumentOutput = findDocumentOutput(input.generatedFiles);
@@ -1829,6 +1850,7 @@ async function createDocumentTranslationDocx(input: {
     return await normalizeDocumentOutputFile({
       job: input.job,
       documentSource: input.documentSource,
+      originalSections: input.originalSections,
       sourcePath: existingDocumentOutput.path,
       outputDir: input.outputDir,
       extension: path.extname(existingDocumentOutput.relativePath) || ".docx",
@@ -1935,20 +1957,29 @@ async function createDocumentTranslationDocx(input: {
 
 async function normalizeDocumentOutputFile(input: {
   job: StoredJob;
-  documentSource: { kind: "docx" | "hwp"; path: string; fileName: string };
+  documentSource: { kind: "docx" | "hwp" | "pdf"; path: string; fileName: string };
+  originalSections: PdfTextSection[];
   sourcePath: string;
   outputDir: string;
   extension: string;
 }): Promise<GeneratedFile> {
   const fileName = buildTranslatedOutputFileName(input.documentSource.fileName, input.extension);
   const destinationPath = path.join(input.outputDir, fileName);
-  if (path.extname(fileName).toLowerCase() === ".docx" && input.documentSource.kind === "docx") {
+  if (path.extname(fileName).toLowerCase() === ".docx") {
     try {
-      await appendOriginalDocxSection({
-        translatedDocxPath: input.sourcePath,
-        originalDocxPath: input.documentSource.path,
-        outputPath: destinationPath,
-      });
+      if (input.documentSource.kind === "docx") {
+        await appendOriginalDocxSection({
+          translatedDocxPath: input.sourcePath,
+          originalDocxPath: input.documentSource.path,
+          outputPath: destinationPath,
+        });
+      } else {
+        await appendOriginalTextDocxSection({
+          translatedDocxPath: input.sourcePath,
+          originalSections: input.originalSections,
+          outputPath: destinationPath,
+        });
+      }
       return { path: destinationPath, relativePath: fileName };
     } catch (error) {
       logWorker(`docx source append failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
@@ -1961,7 +1992,7 @@ async function renderCombinedMarkdownDocx(input: {
   pandocBin: string;
   markdownPath: string;
   outputPath: string;
-  documentSource: { kind: "docx" | "hwp"; path: string; fileName: string };
+  documentSource: { kind: "docx" | "hwp" | "pdf"; path: string; fileName: string };
 }): Promise<void> {
   const args = [
     input.markdownPath,
@@ -2069,6 +2100,26 @@ async function appendOriginalDocxSection(input: {
   await writeZipEntries(input.outputPath, translatedEntries);
 }
 
+async function appendOriginalTextDocxSection(input: {
+  translatedDocxPath: string;
+  originalSections: PdfTextSection[];
+  outputPath: string;
+}): Promise<void> {
+  const translatedEntries = await readZipEntries(input.translatedDocxPath);
+  const translatedDocument = translatedEntries.get("word/document.xml");
+  if (!translatedDocument) {
+    throw new Error("DOCX document.xml is missing");
+  }
+  translatedEntries.set(
+    "word/document.xml",
+    Buffer.from(
+      appendOriginalTextSectionsDocumentXml(translatedDocument.toString("utf8"), input.originalSections),
+      "utf8",
+    ),
+  );
+  await writeZipEntries(input.outputPath, translatedEntries);
+}
+
 function appendOriginalDocumentXml(translatedXml: string, originalXml: string): string {
   const translatedBody = splitWordBodyXml(translatedXml);
   const originalBody = splitWordBodyXml(originalXml);
@@ -2084,6 +2135,74 @@ function appendOriginalDocumentXml(translatedXml: string, originalXml: string): 
     translatedBody.sectPr,
     translatedBody.suffix,
   ].join("");
+}
+
+function appendOriginalTextSectionsDocumentXml(translatedXml: string, originalSections: PdfTextSection[]): string {
+  const translatedBody = splitWordBodyXml(translatedXml);
+  const headingXml = [
+    '<w:p><w:r><w:br w:type="page"/></w:r></w:p>',
+    '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>[원문]</w:t></w:r></w:p>',
+  ].join("");
+  return [
+    translatedBody.prefix,
+    translatedBody.contentWithoutSectPr,
+    headingXml,
+    renderOriginalSectionsWordXml(originalSections),
+    translatedBody.sectPr,
+    translatedBody.suffix,
+  ].join("");
+}
+
+function renderOriginalSectionsWordXml(originalSections: PdfTextSection[]): string {
+  if (originalSections.length === 0) {
+    return '<w:p><w:r><w:t xml:space="preserve">전처리된 원문 텍스트가 없습니다.</w:t></w:r></w:p>';
+  }
+  return originalSections.map((section) => renderOriginalSectionWordXml(section)).join("");
+}
+
+function renderOriginalSectionWordXml(section: PdfTextSection): string {
+  const lines = preserveOriginalText(section.text).split("\n");
+  const paragraphs = [
+    `<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>${escapeWordXmlText(section.title)}</w:t></w:r></w:p>`,
+  ];
+  for (const line of lines) {
+    if (line.length === 0) {
+      paragraphs.push("<w:p/>");
+      continue;
+    }
+    paragraphs.push(
+      `<w:p><w:r><w:t xml:space="preserve">${escapeWordXmlText(line)}</w:t></w:r></w:p>`,
+    );
+  }
+  return paragraphs.join("");
+}
+
+function escapeWordXmlText(value: string): string {
+  return sanitizeXmlText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function sanitizeXmlText(value: string): string {
+  let sanitized = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint === undefined) {
+      continue;
+    }
+    if (
+      codePoint === 0x09 ||
+      codePoint === 0x0a ||
+      codePoint === 0x0d ||
+      (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+      (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+      (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+    ) {
+      sanitized += char;
+    }
+  }
+  return sanitized;
 }
 
 function splitWordBodyXml(xml: string): {

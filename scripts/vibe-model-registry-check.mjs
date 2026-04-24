@@ -6,6 +6,8 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const EXACT_VERSION_REF_PATTERN = /^v?\d+\.\d+\.\d+$/;
+const CARET_VERSION_REF_PATTERN = /^\^v?\d+\.\d+\.\d+$/;
 
 function parseJson(filePath, fallback = null) {
   try {
@@ -31,13 +33,34 @@ function normalizeRemoteUrl(url) {
   return typeof url === 'string' ? url.trim().replace(/\/+$/, '') : '';
 }
 
+function normalizeGitRef(ref) {
+  if (typeof ref !== 'string') {
+    return null;
+  }
+
+  const trimmed = ref.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  if (EXACT_VERSION_REF_PATTERN.test(trimmed)) {
+    return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
+  }
+  if (CARET_VERSION_REF_PATTERN.test(trimmed)) {
+    const base = trimmed.slice(1);
+    return base.startsWith('v') ? base : `v${base}`;
+  }
+  return trimmed;
+}
+
 function loadUpstreamRegistry(config) {
   if (config?.upstream?.type !== 'git') {
     return null;
   }
 
-  if (typeof config.upstream.ref === 'string' && config.upstream.ref.length > 0) {
-    const raw = runGit(['show', `${config.upstream.ref}:.vibe/model-registry.json`]);
+  const gitRef = normalizeGitRef(config.upstream.ref);
+  if (gitRef) {
+    const raw = runGit(['show', `${gitRef}:.vibe/model-registry.json`]);
     return JSON.parse(raw);
   }
 

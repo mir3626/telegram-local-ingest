@@ -55,6 +55,13 @@ cat docs/prompts/task.md | ./scripts/run-codex.sh -
 가리키므로, `vibe:run-agent --provider codex` 호출도 자동으로
 wrapper를 경유한다.
 
+Windows에서 `vibe:run-agent`가 이 POSIX wrapper를 실행할 때는 bare `bash`를
+사용하지 않고 Git Bash 실행 파일을 직접 탐색한다. `where bash` 결과가
+`WindowsApps\bash.exe`이면 WSL launcher이므로 Windows Codex wrapper 실행에
+사용하지 않는다. WSL에서 Codex를 실행하려면 Linux용 `node`와 `codex`를 WSL
+내부에 별도로 설치한다. Windows npm shim(`/mnt/c/.../npm/codex`)은 WSL Codex
+실행 경로로 지원하지 않는다.
+
 wrapper가 자동 설정하는 항목:
 
 | 항목 | 값 | 이유 |
@@ -118,7 +125,7 @@ gate에 다음을 **필수 추가**:
 ```markdown
 - [ ] **Encoding integrity (REQUIRED)**:
   - `file <touched files>`가 모두 `UTF-8 Unicode text`로 분류
-  - `LC_ALL=C grep -lE '"\?[^"]*"' <touched files>` 결과 빈 줄
+  - `LC_ALL=C grep -lE '"[?][^"]*"' <touched files>` 결과 빈 줄
   - `git diff`의 비-ASCII string literal 변화가 의도된 것만 (mojibake 0건)
   - 변경된 .cs 파일에 BOM (`xxd | head -1`이 `efbbbf...`로 시작)
 ```
@@ -127,7 +134,7 @@ gate에 다음을 **필수 추가**:
 
 ```bash
 # 1) 손상 파일 식별
-LC_ALL=C grep -lE '"\?[^"]*[\xc0-\xff]' path/to/**/*.cs
+LC_ALL=C grep -lE '"[?][^"]*[\xc0-\xff]' path/to/**/*.cs
 
 # 2) git에서 가장 가까운 정상 버전으로 복구
 git checkout HEAD -- <file>
@@ -137,7 +144,7 @@ git checkout HEAD -- <file>
 
 # 4) 검증
 file <file>                           # "UTF-8 Unicode text"
-LC_ALL=C grep -nE '"\?[^"]*"' <file>  # 빈 결과
+LC_ALL=C grep -nE '"[?][^"]*"' <file>  # 빈 결과
 ```
 
 ## 7. 파생 프로젝트 체크리스트
@@ -173,7 +180,10 @@ vibe-doctor를 베이스로 새 프로젝트를 만들 때:
 Codex does not expose the same `SessionStart` and `PreCompact` hooks as Claude Code. The harness therefore routes Codex through generic lifecycle scripts where possible:
 
 - `scripts/run-codex.sh` calls `node scripts/vibe-agent-session-start.mjs` before non-health Codex runs.
+- `scripts/run-codex.sh` and `scripts/run-codex.cmd` append dashboard attention events when a Codex wrapper run completes or fails. This is a wrapper-level completion signal, not a native Codex permission hook.
 - `npm run vibe:run-agent -- --provider codex ...` also calls the same session-start entrypoint before executing the provider command.
-- `_common-rules.md` requires agents to update `.vibe/agent/handoff.md` and `.vibe/agent/session-log.md` before context compaction, handoff, or final response after meaningful work, then run `node scripts/vibe-checkpoint.mjs` when available.
+- Sprint Generator invocations are short-lived and normally do not need context-threshold checkpoint automation; they hand state back through the completion report and Orchestrator-owned sprint scripts.
+- Codex used as the main Orchestrator runs in Orchestrator maintenance mode, not Sprint Generator mode. It is the risky path because it can accumulate decisions outside the `run-codex.sh` wrapper. Use the `maintain-context` skill at work boundaries: after meaningful decisions, reviews, releases, tags, pushes, syncs, or before final handoff.
+- The portable checkpoint sequence is: update `.vibe/agent/handoff.md`, append a concise `.vibe/agent/session-log.md` entry, then run `npm run vibe:checkpoint` or `node scripts/vibe-checkpoint.mjs`.
 
-This is not a true Codex `PreCompact` hook. It is the portable fallback that works for Codex and other CLI providers without Claude-specific hook support.
+This is not a true Codex `PreCompact` hook and it cannot fire at a real 80% context threshold. It is the portable fallback that works for Codex and other CLI providers without Claude-specific hook support.

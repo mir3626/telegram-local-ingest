@@ -34,11 +34,19 @@ The next product layer adds a personal utility flow on top of the ingest pipelin
 
 The utility layer is intentionally designed for later extraction into a separate bot: preprocessing, language detection, agent execution, and output retention are separate boundaries rather than worker-internal scripts.
 `TRANSLATION_TARGET_LANGUAGE` defaults to `ko`; `TRANSLATION_DEFAULT_RELATION` defaults to `business` for later prompt tone and terminology handling.
-Local agent post-processing is disabled by default through `AGENT_POSTPROCESS_PROVIDER=none`; enabling Codex or a custom command requires an explicit `AGENT_POSTPROCESS_COMMAND`. When enabled, the worker runs the agent only for jobs whose deterministic language check says translation is needed, then stores a 24-hour runtime output and sends Telegram download buttons with the actual KST expiry deadline. DOCX/HWP-family sources are delivered as document files named `<source-stem>_translated.<ext>`, preferring agent-created DOCX/HWP outputs and falling back to worker-rendered DOCX through `pandoc`. Non-DOCX/HWP sources are delivered as a mobile-friendly `<source-stem>_translated.pdf` that combines the preprocessed original text and the translated/formatted result. The original text section must be labeled `[원문]`, not appendix/`부록`. The Codex recipe uses `{projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}`.
+Local agent post-processing is disabled by default through `AGENT_POSTPROCESS_PROVIDER=none`; enabling Codex or a custom command requires an explicit `AGENT_POSTPROCESS_COMMAND`. When enabled, the worker runs the agent only for jobs whose deterministic language check says translation is needed, then stores a 24-hour runtime output and sends Telegram download buttons with the actual KST expiry deadline. DOCX is the editable document baseline: DOCX/PDF/HWP-family sources are delivered as document files named `<source-stem>_translated.<ext>`, preferring agent-created DOCX/HWP/HWPX outputs and falling back to worker-rendered DOCX through `pandoc`. The current local skill inventory has DOCX editing support but no HWP/HWPX editing skill, so HWP/HWPX fallback remains DOCX unless an agent explicitly creates a valid native HWP/HWPX output. Non-document sources are delivered as a mobile-friendly `<source-stem>_translated.pdf` that combines the preprocessed original text and the translated/formatted result. PDF source uploads require `pdftotext` for text extraction before language detection. The original text section must be labeled `[원문]`, not appendix/`부록`. The Codex recipe uses `{projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}`.
 
 The worker now keeps Telegram polling/callback handling responsive while a bounded background pool processes jobs. Default concurrency is conservative: `WORKER_JOB_CONCURRENCY=2`, `WORKER_STT_CONCURRENCY=1`, and `WORKER_AGENT_CONCURRENCY=1`. This allows another upload or download click to be handled while a long post-processing job runs, without opening multiple personal OAuth agent sessions by default.
 
 Regenerate and discard output actions have hidden callback interfaces for future utility-bot UX. Discard is functional for runtime cache cleanup; regenerate currently records an intent event only. Exposing these controls as user-facing Telegram buttons is a low-priority follow-up goal after the upload, post-processing, and download path is stable.
+
+## Adoption Review Follow-Ups
+
+These product review items should stay visible as separate product work or validation, not as harness adoption scope:
+
+- Verify PDF `pdftotext` readiness, setup, and operator documentation for PDF preprocessing.
+- Verify PDF/DOCX output policy alignment across code, operations docs, and Telegram download labels.
+- Verify DOCX XML sanitizing for extracted source text before it is inserted into generated Word XML.
 
 ## Success Criteria
 

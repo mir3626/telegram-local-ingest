@@ -14,6 +14,13 @@ const PHASE3_UTILITY_OPT_IN_TAG = '[decision][phase3-utility-opt-in]';
 const WEB_PLATFORM_PATTERN = /\b(web|mobile|browser)\b/i;
 const PRODUCT_FETCHER_ROUTE_FILES = new Set(['route.ts', 'route.tsx', 'route.mjs', 'route.js']);
 const PRODUCT_FETCHER_SKIP_DIRS = new Set(['node_modules', '.next', 'dist', '.vibe']);
+const WIRING_REFERENCE_FILES = [
+  'package.json',
+  'CLAUDE.md',
+  'AGENTS.md',
+  'GEMINI.md',
+  '.claude/settings.json',
+];
 
 export interface PendingRestoration {
   sourceFile: string;
@@ -21,6 +28,13 @@ export interface PendingRestoration {
   title: string;
   tier: 'S' | 'A' | 'B' | 'C';
   reason: string;
+}
+
+export interface WiringDriftFinding {
+  artifactPath: string;
+  referencePaths: string[];
+  missingRuntimeReference: boolean;
+  missingSyncManifest: boolean;
 }
 
 export interface ReviewInputs {
@@ -40,6 +54,7 @@ export interface ReviewInputs {
   openHarnessGapCount: number;
   pendingRestorations: PendingRestoration[];
   productFetcherPaths: string[];
+  wiringDriftFindings: WiringDriftFinding[];
 }
 
 export interface ReviewConfigInput {
@@ -473,6 +488,92 @@ async function collectProductFetcherPaths(root: string): Promise<string[]> {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
+async function collectFilesInDir(
+  root: string,
+  relativeDir: string,
+  predicate: (relativePath: string) => boolean,
+): Promise<string[]> {
+  const absoluteDir = path.join(root, relativeDir);
+  const files: string[] = [];
+  if (!(await fileExists(absoluteDir))) {
+    return files;
+  }
+
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolutePath = path.join(directory, entry.name);
+      const relativePath = path.relative(root, absolutePath).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        await visit(absolutePath);
+        continue;
+      }
+      if (entry.isFile() && predicate(relativePath)) {
+        files.push(relativePath);
+      }
+    }
+  }
+
+  await visit(absoluteDir);
+  return files.sort((left, right) => left.localeCompare(right));
+}
+
+function referencesArtifact(content: string, artifactPath: string): boolean {
+  const basename = path.basename(artifactPath);
+  return content.includes(artifactPath) || content.includes(basename);
+}
+
+async function collectWiringReferenceFiles(root: string): Promise<Array<{ path: string; content: string }>> {
+  const skillFiles = [
+    ...(await collectFilesInDir(root, '.claude/skills', (relativePath) => relativePath.endsWith('/SKILL.md'))),
+    ...(await collectFilesInDir(root, '.codex/skills', (relativePath) => relativePath.endsWith('/SKILL.md'))),
+  ];
+  const scriptFiles = await collectFilesInDir(root, 'scripts', (relativePath) => /^scripts\/[\w-]+\.(?:mjs|cmd|sh)$/.test(relativePath));
+  const candidates = [...WIRING_REFERENCE_FILES, ...skillFiles, ...scriptFiles];
+  const references: Array<{ path: string; content: string }> = [];
+
+  for (const relativePath of candidates) {
+    const content = await readOptionalText(path.join(root, relativePath));
+    if (content.length > 0) {
+      references.push({ path: relativePath, content });
+    }
+  }
+
+  return references;
+}
+
+export async function collectWiringDriftFindings(root?: string): Promise<WiringDriftFinding[]> {
+  const resolvedRoot = resolveRoot(root);
+  const scriptPaths = await collectFilesInDir(
+    resolvedRoot,
+    'scripts',
+    (relativePath) => /^scripts\/vibe-[\w-]+\.mjs$/.test(relativePath),
+  );
+  const syncManifest = await readOptionalText(path.join(resolvedRoot, '.vibe', 'sync-manifest.json'));
+  const referenceFiles = await collectWiringReferenceFiles(resolvedRoot);
+  const findings: WiringDriftFinding[] = [];
+
+  for (const artifactPath of scriptPaths) {
+    const referencePaths = referenceFiles
+      .filter((reference) => reference.path !== artifactPath)
+      .filter((reference) => referencesArtifact(reference.content, artifactPath))
+      .map((reference) => reference.path)
+      .sort((left, right) => left.localeCompare(right));
+    const missingRuntimeReference = referencePaths.length === 0;
+    const missingSyncManifest = !syncManifest.includes(artifactPath);
+
+    if (missingRuntimeReference || missingSyncManifest) {
+      findings.push({
+        artifactPath,
+        referencePaths,
+        missingRuntimeReference,
+        missingSyncManifest,
+      });
+    }
+  }
+
+  return findings.sort((left, right) => left.artifactPath.localeCompare(right.artifactPath));
+}
+
 function auditIterationPriority(filePath: string): number {
   const match = filePath.replace(/\\/g, '/').match(/\.vibe\/audit\/iter-(\d+)\/rules-deleted\.md$/);
   return match?.[1] ? 1000 + Number.parseInt(match[1], 10) : 1000;
@@ -558,6 +659,7 @@ export async function collectReviewInputs(root?: string): Promise<ReviewInputs> 
     latestReviewReportPath,
     pendingRestorations,
     productFetcherPaths,
+    wiringDriftFindings,
   ] = await Promise.all([
     readOptionalText(handoffPath(resolvedRoot)),
     readOptionalText(sessionLogPath(resolvedRoot)),
@@ -568,6 +670,7 @@ export async function collectReviewInputs(root?: string): Promise<ReviewInputs> 
     findLatestReviewReport(resolvedRoot),
     collectPendingRestorationDecisions(resolvedRoot),
     collectProductFetcherPaths(resolvedRoot),
+    collectWiringDriftFindings(resolvedRoot),
   ]);
   const gitLogState = await readGitLog(resolvedRoot, latestReviewReportPath);
 
@@ -588,6 +691,7 @@ export async function collectReviewInputs(root?: string): Promise<ReviewInputs> 
     openHarnessGapCount: countOpenHarnessGaps(harnessGaps),
     pendingRestorations,
     productFetcherPaths,
+    wiringDriftFindings,
   };
 }
 

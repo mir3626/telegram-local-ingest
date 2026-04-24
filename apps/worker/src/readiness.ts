@@ -200,16 +200,24 @@ async function checkAgentPostprocessReadiness(
     checks.push(warn("Codex postprocess wrapper", "not using scripts/run-codex-postprocess.sh; custom command live behavior was not checked"));
   }
 
-  await checkDocxTemplateRenderTools(checks, cwd, env);
+  await checkDocumentProcessingTools(checks, cwd, env);
 }
 
-async function checkDocxTemplateRenderTools(checks: ReadinessCheck[], cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+async function checkDocumentProcessingTools(checks: ReadinessCheck[], cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
   const pandocCommand = resolveCommandPath(cwd, env.PANDOC_BIN || "pandoc");
   const pandoc = await checkCommandVersion(pandocCommand, ["--version"]);
   if (pandoc.ok) {
     checks.push(ok("DOCX document renderer: pandoc", firstLine(pandoc.output)));
   } else {
-    checks.push(warn("DOCX document renderer: pandoc", "missing; DOCX/HWP uploads may fall back to the agent's raw output"));
+    checks.push(warn("DOCX document renderer: pandoc", "missing; DOCX/PDF/HWP uploads may fall back to the agent's raw output"));
+  }
+
+  const pdftotextCommand = resolveCommandPath(cwd, env.PDFTOTEXT_BIN || "pdftotext");
+  const pdftotext = await checkCommandVersion(pdftotextCommand, ["-v"]);
+  if (pdftotext.ok) {
+    checks.push(ok("PDF text extractor: pdftotext", firstLine(pdftotext.output)));
+  } else {
+    checks.push(warn("PDF text extractor: pdftotext", "missing; PDF uploads cannot be language-checked or translated until poppler-utils/pdftotext is installed"));
   }
 }
 

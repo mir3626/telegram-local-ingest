@@ -64,6 +64,43 @@ function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isTemplateProjectStatus(root, status) {
+  return (
+    isRecord(status) &&
+    isRecord(status.project) &&
+    status.project.name === 'vibe-doctor' &&
+    path.basename(root).toLowerCase() !== 'vibe-doctor'
+  );
+}
+
+function emptyIterationHistory() {
+  return {
+    currentIteration: null,
+    iterations: [],
+  };
+}
+
+function normalizeStatusForDisplay(root, status) {
+  if (!isTemplateProjectStatus(root, status)) {
+    return status;
+  }
+
+  return {
+    ...status,
+    project: {
+      ...(isRecord(status.project) ? status.project : {}),
+      name: 'Project',
+    },
+    handoff: {
+      ...(isRecord(status.handoff) ? status.handoff : {}),
+      currentSprintId: 'idle',
+    },
+    sprints: [],
+    pendingRisks: [],
+    sprintsSinceLastAudit: 0,
+  };
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -900,13 +937,13 @@ dd{margin:0;min-width:0;word-break:break-word;color:var(--secondary);font-size:1
 
 async function buildModel(root) {
   const [
-    productMd,
-    roadmapMd,
-    milestonesMd,
-    status,
-    sessionLog,
-    handoff,
-    iterationHistoryRaw,
+    rawProductMd,
+    rawRoadmapMd,
+    rawMilestonesMd,
+    rawStatus,
+    rawSessionLog,
+    rawHandoff,
+    rawIterationHistory,
     config,
     packageJson,
   ] = await Promise.all([
@@ -916,16 +953,21 @@ async function buildModel(root) {
     readOptionalJson(path.join(root, '.vibe', 'agent', 'sprint-status.json'), {}),
     readOptionalText(path.join(root, '.vibe', 'agent', 'session-log.md')),
     readOptionalText(path.join(root, '.vibe', 'agent', 'handoff.md')),
-    readOptionalJson(path.join(root, '.vibe', 'agent', 'iteration-history.json'), {
-      currentIteration: null,
-      iterations: [],
-    }),
+    readOptionalJson(path.join(root, '.vibe', 'agent', 'iteration-history.json'), emptyIterationHistory()),
     readOptionalJson(path.join(root, '.vibe', 'config.json'), {}),
     readOptionalJson(path.join(root, 'package.json'), {}),
   ]);
+  const templateState = isTemplateProjectStatus(root, rawStatus);
+  const productMd = templateState ? '' : rawProductMd;
+  const roadmapMd = templateState ? '' : rawRoadmapMd;
+  const milestonesMd = templateState ? '' : rawMilestonesMd;
+  const status = normalizeStatusForDisplay(root, rawStatus);
+  const sessionLog = templateState ? '' : rawSessionLog;
+  const handoff = templateState ? '' : rawHandoff;
+  const iterationHistoryRaw = templateState ? emptyIterationHistory() : rawIterationHistory;
   const iterationHistory = normalizeIterationHistory(iterationHistoryRaw);
   const milestones = parseMilestones(milestonesMd);
-  const metaProject = isMetaProject({ config, packageJson, roadmapMd });
+  const metaProject = !templateState && isMetaProject({ config, packageJson, roadmapMd });
   const commits = filterCommits(readGitLog(root), metaProject);
   const excludedCommits = readGitLog(root).length - commits.length;
   const decisions = filterSessionDecisions(sessionLog, metaProject);

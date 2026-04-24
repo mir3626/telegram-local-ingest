@@ -22,6 +22,12 @@
 >
 > `codex:rescue` 플러그인은 잠정 보류 (Windows 환경에서 불안정·속도 저하 이슈).
 
+Windows 네이티브 환경에서 `vibe:run-agent`가 `./scripts/run-codex.sh`를 실행할 때는
+Git Bash를 직접 탐색한다. bare `bash`가 WSL launcher(`WindowsApps\bash.exe`)로
+잡히는 환경에서도 provider 실행이 WSL로 새지 않게 하기 위함이다. WSL에서 Codex를
+사용하려면 WSL 내부에 Linux용 `node`와 `codex`를 설치하고, Windows npm shim을
+재사용하지 않는다.
+
 ## 템플릿형 인자 치환
 
 이 베이스는 특정 CLI 버전에 강하게 결합되지 않도록 **템플릿형 인자 치환**을 사용한다.
@@ -129,3 +135,4 @@ claude mcp list
 `.codex/agents/`에 정의된 에이전트 (병렬 실행 등 CLI 직접 호출 시 사용):
 - `coder` — 코드 작성, workspace-write 샌드박스
 - `explorer` — 코드 탐색/조사, read-only 샌드박스
+- `developer_instructions` 에 정규식/역슬래시가 들어가면 TOML `""" ... """` 대신 literal multiline string(`''' ... '''`)을 사용한다.

@@ -170,6 +170,40 @@ describe('project report', () => {
     assert.match(result.html, /<main id="content" class="container">/);
   });
 
+  it('hides copied template sprint state before vibe-init', async () => {
+    const root = await makeTempDir('project-report-template-state-');
+    const { runProjectReportCli } = await loadReportModule();
+
+    await writeJson(path.join(root, 'package.json'), {
+      name: 'vibe-doctor',
+    });
+    await writeJson(path.join(root, '.vibe', 'agent', 'sprint-status.json'), {
+      project: { name: 'vibe-doctor', createdAt: '2026-04-01T00:00:00.000Z' },
+      handoff: { currentSprintId: 'idle' },
+      sprints: [
+        { id: 'sprint-template-a', status: 'passed' },
+        { id: 'sprint-template-b', status: 'passed' },
+      ],
+      pendingRisks: [{ id: 'risk-template-a', status: 'open' }],
+      sprintsSinceLastAudit: 11,
+    });
+    await writeJson(path.join(root, '.vibe', 'agent', 'iteration-history.json'), {
+      currentIteration: 'iter-template',
+      iterations: [{ id: 'iter-template', plannedSprints: ['sprint-template-a'], completedSprints: [] }],
+    });
+    await writeText(path.join(root, 'docs', 'plans', 'sprint-roadmap.md'), '- **id**: `sprint-template-a`\n');
+
+    const result = await runProjectReportCli(['--no-open'], {
+      root,
+      stdout: { write: () => undefined },
+    });
+
+    assert.equal(result.html.includes('data-sprint-id="sprint-template-a"'), false);
+    assert.match(result.html, /<strong>0<\/strong>\s*<span>0 recorded<\/span>/);
+    assert.match(result.html, /<strong>0<\/strong>\s*<span>0 sprints since audit<\/span>/);
+    assert.match(result.html, /<h1>Project<\/h1>/);
+  });
+
   it('excludes sprint-M cards for meta projects', async () => {
     const root = await makeTempDir('project-report-meta-');
     const { runProjectReportCli } = await loadReportModule();

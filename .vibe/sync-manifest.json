@@ -13,6 +13,8 @@
       "scripts/vibe-stop-qa-gate.mjs",
       "scripts/vibe-phase0-seal.mjs",
       "scripts/vibe-browser-smoke.mjs",
+      "playwright.config.ts",
+      "test/playwright/**",
       "scripts/vibe-audit-clear.mjs",
       ".vibe/agent/_common-rules.md",
       ".vibe/agent/re-incarnation.md",
@@ -27,6 +29,7 @@
       ".claude/skills/write-report/SKILL.md",
       ".claude/skills/maintain-context/SKILL.md",
       ".claude/skills/vibe-sync/SKILL.md",
+      ".codex/agents/**",
       ".codex/skills/**",
       ".claude/agents/sprint-planner.md",
       ".claude/agents/context-curator.md",
@@ -60,6 +63,7 @@
       "src/lib/review.ts",
       "src/providers/runner.ts",
       "src/providers/types.ts",
+      "test/checkpoint.test.ts",
       "test/args.test.ts",
       "test/browser-smoke-contract.test.ts",
       "test/bundle-size.test.ts",
@@ -107,7 +111,9 @@
       "migrations/1.1.0.mjs",
       "scripts/run-codex.cmd",
       "test/run-codex-wrapper.test.ts",
+      "test/shell.test.ts",
       "test/init-guard.test.ts",
+      "test/codex-agents.test.ts",
       "test/codex-skills.test.ts",
       "test/agent-session-start.test.ts",
       "test/upstream-bootstrap.test.ts",
@@ -198,7 +204,22 @@
       "docs/release/v1.5.12.md",
       "docs/release/v1.5.13.md",
       "docs/release/v1.5.14.md",
-      "docs/release/v1.5.15.md"
+      "docs/release/v1.5.15.md",
+      "docs/release/v1.5.16.md",
+      "docs/release/v1.5.17.md",
+      "docs/release/v1.6.0.md",
+      "docs/release/v1.6.1.md",
+      "docs/release/v1.6.2.md",
+      "docs/release/v1.6.3.md",
+      "docs/release/v1.6.4.md",
+      "docs/release/v1.6.5.md",
+      "docs/release/v1.6.6.md",
+      "docs/release/v1.6.7.md",
+      "docs/release/v1.6.8.md",
+      "docs/release/v1.6.9.md",
+      "docs/release/v1.6.10.md",
+      "docs/release/v1.6.11.md",
+      "migrations/1.6.2.mjs"
     ],
     "hybrid": {
       "CLAUDE.md": {
@@ -269,13 +290,13 @@
       },
       "package.json": {
         "strategy": "json-deep-merge",
-        "harnessKeys": ["scripts.vibe:*", "engines"],
+        "harnessKeys": ["scripts.vibe:*", "scripts.test:ui", "engines"],
         "projectKeys": ["name", "version", "description", "dependencies", "devDependencies"]
       },
       ".vibe/config.json": {
         "strategy": "json-deep-merge",
         "harnessKeys": ["harnessVersion", "qa", "mode"],
-        "projectKeys": ["orchestrator", "sprintRoles", "sprint", "providers", "harnessVersionInstalled", "upstream", "bundle", "browserSmoke"]
+        "projectKeys": ["orchestrator", "sprintRoles", "sprint", "providers", "harnessVersionInstalled", "upstream", "bundle", "browserSmoke", "audit"]
       }
     },
     "project": [
@@ -308,6 +329,7 @@
     "1.2.0": "migrations/1.2.0.mjs",
     "1.2.1": "migrations/1.2.1.mjs",
     "1.3.0": "migrations/1.3.0.mjs",
-    "1.4.0": "migrations/1.4.0.mjs"
+    "1.4.0": "migrations/1.4.0.mjs",
+    "1.6.2": "migrations/1.6.2.mjs"
   }
 }

@@ -7,6 +7,7 @@ const KEYWORDS = ['MUST NOT', 'MUST', 'NEVER', '반드시', '절대', '금지', 
 const SOFT_VERB_RE = /\bShould\b|권장|가능하면|가능한 경우|선택적으로|추천|원칙적으로/i;
 const TAGS = ['failure', 'drift-observed', 'decision', 'audit-clear'];
 const STOPWORDS = new Set('the and with this that from into when then only must should never 반드시 절대 금지 필수 한다 되는 있다 대한 으로 에서 또는 sprint scripts node mjs docs context agent claude codex orchestrator planner evaluator phase vibe json test grep tsc self-qa product architecture session-log run-codex'.split(' '));
+const DISPOSITIONS = new Set(['covered', 'pending', 'manual-review', 'delete-candidate']);
 
 function parseArgs(argv) {
   const options = { format: 'text', claudeMd: './CLAUDE.md', gaps: './docs/context/harness-gaps.md' };
@@ -24,6 +25,7 @@ function parseArgs(argv) {
     else if (arg === '--scan-transcripts') { set('scanTranscripts', args[index + 1] ?? ''); index += 1; }
     else if (arg.startsWith('--emit-report-md=')) set('emitReportMd', arg.slice(17));
     else if (arg === '--emit-report-md') { set('emitReportMd', args[index + 1] ?? ''); index += 1; }
+    else if (arg === '--fail-on-undisposed') set('failOnUndisposed', true);
   }
   return options;
 }
@@ -90,7 +92,31 @@ function splitMarkdownRow(line) {
 }
 
 function extractCoveredGaps(content) {
-  const covered = new Set();
+  const rows = extractGapRows(content);
+  return new Set([...rows.values()].filter((row) => row.disposition === 'covered').map((row) => row.id));
+}
+
+function normalizeDisposition(status, scriptGate) {
+  const normalizedStatus = String(status ?? '').trim().toLowerCase();
+  const normalizedGate = String(scriptGate ?? '').trim().toLowerCase();
+
+  if (DISPOSITIONS.has(normalizedGate)) {
+    return normalizedGate;
+  }
+  if (normalizedGate === 'partial') {
+    return 'manual-review';
+  }
+  if (normalizedStatus === 'covered' || normalizedStatus === 'closed') {
+    return 'covered';
+  }
+  if (normalizedStatus === 'open' || normalizedStatus === 'partial' || normalizedStatus === 'under-review') {
+    return 'pending';
+  }
+  return 'undisposed';
+}
+
+function extractGapRows(content) {
+  const rows = new Map();
 
   for (const line of content.split(/\r?\n/)) {
     if (!/^\|\s*gap-[\w-]+\s*\|/.test(line)) {
@@ -99,13 +125,35 @@ function extractCoveredGaps(content) {
 
     const cells = splitMarkdownRow(line);
     const id = cells[0];
+    const status = cells[3];
     const scriptGate = cells[4];
-    if (typeof id === 'string' && scriptGate === 'covered') {
-      covered.add(id);
+    if (typeof id === 'string') {
+      rows.set(id, {
+        id,
+        status: status ?? '',
+        scriptGate: scriptGate ?? '',
+        disposition: normalizeDisposition(status, scriptGate),
+      });
     }
   }
 
-  return covered;
+  return rows;
+}
+
+function summarizeDisposition(rules, tiered = false) {
+  const byDisposition = { covered: 0, pending: 0, 'manual-review': 0, 'delete-candidate': 0, undisposed: 0 };
+  for (const rule of rules) {
+    byDisposition[rule.disposition] = (byDisposition[rule.disposition] ?? 0) + 1;
+  }
+
+  return {
+    covered: byDisposition.covered,
+    uncovered: rules.length - byDisposition.covered,
+    disposed: rules.length - byDisposition.undisposed,
+    undisposed: byDisposition.undisposed,
+    byDisposition,
+    ...(tiered ? { tiered: true } : {}),
+  };
 }
 
 const slugify = (value) => value.toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-+|-+$/g, '') || 'cluster';
@@ -138,21 +186,23 @@ function recommendedAction(tier, softVerbDetected) {
   const action = { S: 'keep-script', A: 'keep-md-only', B: 'delete-md', C: 'delete-md-and-script', unclassified: 'keep-md-only' }[tier] ?? 'keep-md-only'; return softVerbDetected && (tier === 'S' || tier === 'A') ? `${action} + should-to-must-tighten` : action;
 }
 function buildClusterAudit(claudeContent, gapsContent, transcriptCsv) {
-  const coveredGaps = extractCoveredGaps(gapsContent), sources = transcriptCsv.split(',').map((path) => path.trim()).filter(Boolean), { bySource, incidents } = scanTranscripts(sources), clusters = extractClusters(claudeContent), evidence = matchEvidence(clusters, incidents), byTier = { S: 0, A: 0, B: 0, C: 0, unclassified: 0 };
-  const rules = clusters.map((cluster) => { const ids = Array.from(cluster.body.matchAll(/\bgap-[\w-]+\b/g), (match) => match[0]), coveredBy = ids.find((id) => coveredGaps.has(id)) ?? null, hits = evidence.get(cluster.id) ?? [], tier = classifyTier(cluster, hits.length, coveredBy !== null), keywords = extractKeywords(cluster.body); byTier[tier] += 1; return { line: cluster.startLine, text: cluster.label, kind: findKind(cluster.body) ?? 'MUST', covered: coveredBy !== null, coveredBy, cluster: { id: cluster.id, label: cluster.label, startLine: cluster.startLine, endLine: cluster.endLine, keywords, evidenceCount: hits.length, evidenceExamples: hits.slice(0, 3).map((hit) => hit.snippet), tier, recommendedAction: recommendedAction(tier, cluster.softVerbDetected), shouldToMustCandidate: cluster.softVerbDetected, tighteningSuggestion: cluster.softVerbDetected ? `trigger 조건을 ${keywords[0] ?? cluster.id} 포함 line 기준으로 tighten` : null, originalText: cluster.body } }; });
-  const coveredCount = rules.filter((rule) => rule.covered).length; return { summary: { total: rules.length, covered: coveredCount, uncovered: rules.length - coveredCount, tiered: true, bySource, byTier, shouldToMustCandidates: rules.filter((rule) => rule.cluster.shouldToMustCandidate).length }, rules };
+  const gapRows = extractGapRows(gapsContent), sources = transcriptCsv.split(',').map((path) => path.trim()).filter(Boolean), { bySource, incidents } = scanTranscripts(sources), clusters = extractClusters(claudeContent), evidence = matchEvidence(clusters, incidents), byTier = { S: 0, A: 0, B: 0, C: 0, unclassified: 0 };
+  const rules = clusters.map((cluster) => { const ids = Array.from(cluster.body.matchAll(/\bgap-[\w-]+\b/g), (match) => match[0]), disposedBy = ids.find((id) => gapRows.has(id)) ?? null, row = disposedBy === null ? null : gapRows.get(disposedBy), coveredBy = row?.disposition === 'covered' ? disposedBy : null, disposition = row?.disposition ?? 'undisposed', hits = evidence.get(cluster.id) ?? [], tier = classifyTier(cluster, hits.length, disposedBy !== null), keywords = extractKeywords(cluster.body); byTier[tier] += 1; return { line: cluster.startLine, text: cluster.label, kind: findKind(cluster.body) ?? 'MUST', covered: coveredBy !== null, coveredBy, disposed: disposition !== 'undisposed', disposedBy, disposition, cluster: { id: cluster.id, label: cluster.label, startLine: cluster.startLine, endLine: cluster.endLine, keywords, evidenceCount: hits.length, evidenceExamples: hits.slice(0, 3).map((hit) => hit.snippet), tier, recommendedAction: recommendedAction(tier, cluster.softVerbDetected), shouldToMustCandidate: cluster.softVerbDetected, tighteningSuggestion: cluster.softVerbDetected ? `trigger 조건을 ${keywords[0] ?? cluster.id} 포함 line 기준으로 tighten` : null, originalText: cluster.body } }; });
+  return { summary: { total: rules.length, ...summarizeDisposition(rules, true), bySource, byTier, shouldToMustCandidates: rules.filter((rule) => rule.cluster.shouldToMustCandidate).length }, rules };
 }
 
 function buildAudit(claudeContent, gapsContent, options = {}) {
   if (options.scanTranscripts) return buildClusterAudit(claudeContent, gapsContent, options.scanTranscripts);
-  const coveredGaps = extractCoveredGaps(gapsContent);
+  const gapRows = extractGapRows(gapsContent);
   const rules = extractRules(claudeContent).map((rule) => {
     const ids = Array.from(rule.text.matchAll(/\bgap-[\w-]+\b/g), (match) => match[0]);
-    const coveredBy = ids.find((id) => coveredGaps.has(id)) ?? null;
-    return { ...rule, covered: coveredBy !== null, coveredBy };
+    const disposedBy = ids.find((id) => gapRows.has(id)) ?? null;
+    const row = disposedBy === null ? null : gapRows.get(disposedBy);
+    const disposition = row?.disposition ?? 'undisposed';
+    const coveredBy = disposition === 'covered' ? disposedBy : null;
+    return { ...rule, covered: coveredBy !== null, coveredBy, disposed: disposition !== 'undisposed', disposedBy, disposition };
   });
-  const coveredCount = rules.filter((rule) => rule.covered).length;
-  return { summary: { total: rules.length, covered: coveredCount, uncovered: rules.length - coveredCount }, rules };
+  return { summary: { total: rules.length, ...summarizeDisposition(rules) }, rules };
 }
 
 function readOptional(filePath) {
@@ -182,15 +232,23 @@ function renderSection(title, rules, emptyText, renderDetail) {
 
 function renderText(audit) {
   const uncovered = audit.rules.filter((rule) => !rule.covered);
+  const undisposed = audit.rules.filter((rule) => rule.disposition === 'undisposed');
   const covered = audit.rules.filter((rule) => rule.covered);
   const lines = [
-    `# CLAUDE.md rule audit (${audit.summary.total} rules found; ${audit.summary.uncovered} uncovered)`,
+    `# CLAUDE.md rule audit (${audit.summary.total} rules found; ${audit.summary.uncovered} uncovered; ${audit.summary.undisposed} undisposed)`,
+    '',
+    ...renderSection(
+      'Undisposed (needs explicit coverage disposition)',
+      undisposed,
+      '(none)',
+      () => 'hint: add a gap-* id with script-gate=covered|pending|manual-review|delete-candidate',
+    ),
     '',
     ...renderSection(
       'Uncovered (candidates for next Sprint)',
       uncovered,
       '(none)',
-      () => 'hint: no matching gap-* id with script-gate=covered',
+      (rule) => rule.disposedBy === null ? 'hint: no matching gap-* id' : `disposition: ${rule.disposition} via ${rule.disposedBy}`,
     ),
     '',
     ...renderSection('Covered', covered, '(none)', (rule) => `covered-by: ${rule.coveredBy}`),
@@ -198,6 +256,10 @@ function renderText(audit) {
   if (audit.summary.tiered) {
     lines.push('', '## By tier (S/A/B/C)');
     for (const tier of ['S', 'A', 'B', 'C', 'unclassified']) lines.push(`- ${tier}: ${audit.summary.byTier[tier]}`);
+  }
+  lines.push('', '## By disposition');
+  for (const disposition of ['covered', 'pending', 'manual-review', 'delete-candidate', 'undisposed']) {
+    lines.push(`- ${disposition}: ${audit.summary.byDisposition[disposition] ?? 0}`);
   }
 
   return `${lines.join('\n')}\n`;
@@ -229,4 +291,8 @@ if (options.format === 'json') {
   process.stdout.write(`${JSON.stringify(audit, null, 2)}\n`);
 } else {
   process.stdout.write(renderText(audit));
+}
+if (options.failOnUndisposed && audit.summary.undisposed > 0) {
+  process.stderr.write(`[vibe-rule-audit] undisposed rules: ${audit.summary.undisposed}\n`);
+  process.exitCode = 1;
 }

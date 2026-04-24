@@ -165,6 +165,7 @@ describe('review inputs', () => {
     assert.equal(inputs.passedSprintCount, 1);
     assert.equal(inputs.openHarnessGapCount, 1);
     assert.deepEqual(inputs.pendingRestorations, []);
+    assert.deepEqual(inputs.wiringDriftFindings, []);
     assert.equal(inputs.gitLogMode, 'since-last-review');
     assert.equal(inputs.gitLog.length >= 1, true);
   });
@@ -314,6 +315,44 @@ describe('review inputs', () => {
       'app/api/bar/baz/route.ts',
       'app/api/foo/route.ts',
       'src/app/api/qux/route.ts',
+    ]);
+  });
+
+  it('collectReviewInputs flags unwired harness scripts and missing sync manifest entries', async () => {
+    const root = await makeTempDir('review-wiring-drift-');
+    await scaffoldRepo(root);
+    await writeText(path.join(root, 'scripts', 'vibe-orphan.mjs'), '#!/usr/bin/env node\n');
+    await writeText(path.join(root, 'scripts', 'vibe-missing-manifest.mjs'), '#!/usr/bin/env node\n');
+    await writeText(path.join(root, 'scripts', 'vibe-wired.mjs'), '#!/usr/bin/env node\n');
+    await writeJson(path.join(root, 'package.json'), {
+      scripts: {
+        'vibe:missing-manifest': 'node scripts/vibe-missing-manifest.mjs',
+        'vibe:wired': 'node scripts/vibe-wired.mjs',
+      },
+    });
+    await writeJson(path.join(root, '.vibe', 'sync-manifest.json'), {
+      files: {
+        harness: ['scripts/vibe-orphan.mjs', 'scripts/vibe-wired.mjs'],
+        hybrid: {},
+        project: [],
+      },
+    });
+
+    const result = await collectReviewInputs(root);
+
+    assert.deepEqual(result.wiringDriftFindings, [
+      {
+        artifactPath: 'scripts/vibe-missing-manifest.mjs',
+        referencePaths: ['package.json'],
+        missingRuntimeReference: false,
+        missingSyncManifest: true,
+      },
+      {
+        artifactPath: 'scripts/vibe-orphan.mjs',
+        referencePaths: [],
+        missingRuntimeReference: true,
+        missingSyncManifest: false,
+      },
     ]);
   });
 });

@@ -1,10 +1,12 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import zlib from "node:zlib";
 
 import type { StoredJob, StoredJobFile, StoredSourceBundle } from "@telegram-local-ingest/db";
 
-export type PreprocessedArtifactKind = "docx_text" | "original_text" | "transcript_markdown";
+export type PreprocessedArtifactKind = "docx_text" | "original_text" | "pdf_text" | "transcript_markdown";
 
 export interface PreprocessJobInput {
   job: StoredJob;
@@ -38,6 +40,7 @@ export interface PreprocessJobResult {
 }
 
 const DEFAULT_MAX_BYTES_PER_ARTIFACT = 512 * 1024;
+const execFileAsync = promisify(execFile);
 const TEXT_EXTENSIONS = new Set([
   ".csv",
   ".json",
@@ -65,6 +68,8 @@ const TEXT_MIME_TYPES = new Set([
   "text/yaml",
 ]);
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const PDF_MIME_TYPE = "application/pdf";
+const PDFTOTEXT_TIMEOUT_MS = 60 * 1000;
 
 export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput): Promise<PreprocessJobResult> {
   const maxBytes = input.maxBytesPerArtifact ?? DEFAULT_MAX_BYTES_PER_ARTIFACT;
@@ -100,6 +105,38 @@ export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput
         fileId: file.id,
         fileName: file.originalName ?? path.basename(sourcePath),
         sourcePath,
+        text: preview.text,
+        charCount: preview.text.length,
+        truncated: preview.truncated,
+      });
+      continue;
+    }
+
+    if (preprocessKind === "pdf") {
+      const preview = await readPdfTextPreview(sourcePath, maxBytes);
+      if (preview.reason) {
+        skippedFiles.push({
+          fileId: file.id,
+          fileName: file.originalName ?? file.id,
+          reason: preview.reason,
+        });
+        continue;
+      }
+      if (preview.text.trim().length === 0) {
+        skippedFiles.push({
+          fileId: file.id,
+          fileName: file.originalName ?? file.id,
+          reason: "pdf_no_text",
+        });
+        continue;
+      }
+      const extractedPath = await writeExtractedTextArtifact(input.artifactRoot, file, sourcePath, preview.text);
+      artifacts.push({
+        id: `${file.id}:pdf_text`,
+        kind: "pdf_text",
+        fileId: file.id,
+        fileName: `${file.originalName ?? path.basename(sourcePath)}.txt`,
+        sourcePath: extractedPath,
         text: preview.text,
         charCount: preview.text.length,
         truncated: preview.truncated,
@@ -147,7 +184,7 @@ export function isDocxJobFile(file: StoredJobFile): boolean {
   return classifyJobFile(file) === "docx";
 }
 
-function classifyJobFile(file: StoredJobFile): "docx" | "text" | null {
+function classifyJobFile(file: StoredJobFile): "docx" | "pdf" | "text" | null {
   const mimeType = file.mimeType?.toLowerCase();
   if (mimeType?.startsWith("text/") || (mimeType && TEXT_MIME_TYPES.has(mimeType))) {
     return "text";
@@ -155,6 +192,9 @@ function classifyJobFile(file: StoredJobFile): "docx" | "text" | null {
   const extension = path.extname(file.originalName ?? file.localPath ?? file.archivePath ?? "").toLowerCase();
   if (TEXT_EXTENSIONS.has(extension)) {
     return "text";
+  }
+  if (mimeType === PDF_MIME_TYPE || extension === ".pdf") {
+    return "pdf";
   }
   if (mimeType === DOCX_MIME_TYPE || extension === ".docx") {
     return "docx";
@@ -221,6 +261,25 @@ async function readDocxTextPreview(filePath: string, maxBytes: number): Promise<
     throw new Error(`DOCX document XML not found: ${filePath}`);
   }
   return truncateUtf8(extractTextFromWordDocumentXml(documentXml.toString("utf8")), maxBytes);
+}
+
+async function readPdfTextPreview(
+  filePath: string,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean; reason?: string }> {
+  const pdftotextBin = process.env.PDFTOTEXT_BIN?.trim() || "pdftotext";
+  try {
+    const { stdout } = await execFileAsync(pdftotextBin, ["-layout", "-nopgbrk", "-enc", "UTF-8", filePath, "-"], {
+      timeout: PDFTOTEXT_TIMEOUT_MS,
+      maxBuffer: Math.max(4 * 1024 * 1024, maxBytes * 8),
+    });
+    return truncateUtf8(stdout.replace(/\u0000/g, ""), maxBytes);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return { text: "", truncated: false, reason: "pdf_tool_missing" };
+    }
+    return { text: "", truncated: false, reason: "pdf_text_extraction_failed" };
+  }
 }
 
 async function writeExtractedTextArtifact(

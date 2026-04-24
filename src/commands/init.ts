@@ -124,6 +124,95 @@ async function ensureUpstreamConfig(): Promise<void> {
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isTemplateAgentState(value: unknown): boolean {
+  if (path.basename(paths.root).toLowerCase() === 'vibe-doctor') {
+    return false;
+  }
+  if (!isRecord(value) || !isRecord(value.project)) {
+    return false;
+  }
+  return value.project.name === 'vibe-doctor';
+}
+
+function initialSprintStatus(nowIso: string): Record<string, unknown> {
+  return {
+    $schema: './sprint-status.schema.json',
+    schemaVersion: '0.1',
+    project: {
+      name: path.basename(paths.root),
+      createdAt: nowIso,
+      runtime: 'node24',
+    },
+    sprints: [],
+    verificationCommands: [],
+    handoff: {
+      currentSprintId: 'idle',
+      lastActionSummary: 'Initialized project state; run /vibe-init to complete product context and roadmap setup.',
+      orchestratorContextBudget: 'medium',
+      preferencesActive: [],
+      handoffDocPath: '.vibe/agent/handoff.md',
+      updatedAt: nowIso,
+    },
+    pendingRisks: [],
+    lastSprintScope: [],
+    lastSprintScopeGlob: [],
+    sprintsSinceLastAudit: 0,
+    stateUpdatedAt: nowIso,
+    verifiedAt: null,
+  };
+}
+
+async function ensureInitialAgentState(): Promise<void> {
+  const statusPath = path.join(paths.root, '.vibe', 'agent', 'sprint-status.json');
+  const nowIso = new Date().toISOString();
+  let shouldWrite = !(await fileExists(statusPath));
+
+  if (!shouldWrite) {
+    try {
+      shouldWrite = isTemplateAgentState(await readJson<unknown>(statusPath));
+    } catch {
+      shouldWrite = true;
+    }
+  }
+
+  if (!shouldWrite) {
+    return;
+  }
+
+  await writeJson(statusPath, initialSprintStatus(nowIso));
+  await writeText(
+    path.join(paths.root, '.vibe', 'agent', 'handoff.md'),
+    [
+      '# Orchestrator Handoff',
+      '',
+      '## 1. Identity',
+      '',
+      `- repo: \`${path.basename(paths.root)}\``,
+      '- status: initialized',
+      '',
+      '## 2. Status',
+      '',
+      'IDLE - run /vibe-init to complete project context and roadmap setup.',
+      '',
+    ].join('\n'),
+  );
+  await writeText(
+    path.join(paths.root, '.vibe', 'agent', 'session-log.md'),
+    [
+      '# Session Log',
+      '',
+      '## Entries',
+      `- ${nowIso} [decision][vibe-init-state] initialized empty sprint state`,
+      '',
+    ].join('\n'),
+  );
+  logger.info('initialized .vibe/agent state with empty sprint history');
+}
+
 // ─── project customization ────────────────────────────────────────
 
 async function customizeProduct(rl: readline.Interface): Promise<void> {
@@ -258,6 +347,7 @@ async function main(): Promise<void> {
 
   await ensureUpstreamConfig();
   await ensureEnvFile();
+  await ensureInitialAgentState();
 
   const base = await readJson<VibeConfig>(paths.localConfigExample);
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);

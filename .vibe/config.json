@@ -1,5 +1,10 @@
 {
-  "harnessVersion": "1.5.15",
+  "harnessVersion": "1.6.11",
+  "project": {
+    "name": "telegram-local-ingest",
+    "adoptedAt": "2026-04-24T17:02:59+09:00",
+    "source": "existing-downstream-repo"
+  },
   "orchestrator": "claude-opus",
   "sprintRoles": {
     "planner": "claude-opus",
@@ -54,7 +59,7 @@
     "everyN": 5
   },
   "mode": "human",
-  "harnessVersionInstalled": "1.5.15",
+  "harnessVersionInstalled": "1.6.11",
   "upstream": {
     "type": "git",
     "url": "https://github.com/mir3626/vibe-doctor.git"

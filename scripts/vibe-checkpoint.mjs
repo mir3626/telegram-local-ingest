@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// vibe-checkpoint performs mechanical PreCompact checks.
+// vibe-checkpoint performs mechanical context persistence checks.
 // Usage: node scripts/vibe-checkpoint.mjs [--json]
 
 import { execSync } from 'node:child_process';
@@ -134,6 +134,6 @@ if (JSON_MODE) {
 
 const anyFail = results.some((r) => !r.ok);
 if (anyFail) {
-  process.stderr.write('PreCompact blocked — update .vibe/agent/handoff.md + session-log.md then retry.\n');
+  process.stderr.write('Checkpoint blocked - update .vibe/agent/handoff.md + session-log.md then retry.\n');
 }
 process.exit(anyFail ? 1 : 0);

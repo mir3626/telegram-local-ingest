@@ -25,6 +25,7 @@
     "ops:restart": "bash scripts/restart-local-stack.sh",
     "worker:dev": "npm --workspace @telegram-local-ingest/worker run dev",
     "worker:start": "npm --workspace @telegram-local-ingest/worker run start",
+    "test:ui": "playwright test",
     "vibe:doctor": "npx tsx src/commands/doctor.ts",
     "vibe:init": "npx tsx src/commands/init.ts",
     "vibe:interview": "node scripts/vibe-interview.mjs",
@@ -48,6 +49,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "^24.0.0",
     "@types/pdfkit": "^0.17.6",
     "tsx": "^4.20.0",

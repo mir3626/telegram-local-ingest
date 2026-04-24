@@ -44,4 +44,14 @@ describe('Codex skill parity', () => {
 
     assert.match(wrapper, /npm run vibe:init -- --from-agent-skill/);
   });
+
+  it('documents the Codex Orchestrator checkpoint workflow in maintain-context', async () => {
+    const shared = await readFile(path.join(process.cwd(), '.claude', 'skills', 'maintain-context', 'SKILL.md'), 'utf8');
+    const wrapper = await readFile(path.join(process.cwd(), '.codex', 'skills', 'maintain-context', 'SKILL.md'), 'utf8');
+
+    assert.match(shared, /Codex does not provide Claude Code's native `PreCompact`/);
+    assert.match(shared, /npm run vibe:checkpoint/);
+    assert.match(shared, /Generator agents normally do not need this workflow/);
+    assert.match(wrapper, /Codex main Orchestrator sessions/);
+  });
 });

@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 
-import { appendFile, mkdir } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
-import crypto from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { appendAttentionEvent } from './vibe-attention.mjs';
 
 function rootDir() {
   return process.env.VIBE_ROOT ? path.resolve(process.env.VIBE_ROOT) : process.cwd();
@@ -46,21 +43,61 @@ async function readStdin(maxBytes = 65_536, timeoutMs = 2_000) {
   });
 }
 
-function detailFromRaw(raw) {
+function titleForNotificationType(notificationType) {
+  if (notificationType === 'permission_prompt') {
+    return 'Claude permission required';
+  }
+  if (notificationType === 'idle_prompt') {
+    return 'Claude is ready';
+  }
+  if (notificationType === 'elicitation_dialog') {
+    return 'Claude needs input';
+  }
+  return 'User attention required';
+}
+
+function severityForNotificationType(notificationType) {
+  return notificationType === 'idle_prompt' || notificationType === 'auth_success' ? 'info' : 'urgent';
+}
+
+function notificationFromRaw(raw) {
   if (raw.trim() === '') {
-    return { detail: 'Permission prompt', rawPayload: null };
+    return {
+      detail: 'Permission prompt',
+      rawPayload: null,
+      notificationType: 'permission_prompt',
+      title: titleForNotificationType('permission_prompt'),
+      severity: 'urgent',
+    };
   }
   try {
     const parsed = JSON.parse(raw);
+    const notificationType =
+      typeof parsed?.notification_type === 'string' ? parsed.notification_type : 'unknown';
     const message =
       typeof parsed?.message === 'string'
         ? parsed.message
         : typeof parsed?.notification === 'string'
           ? parsed.notification
           : 'Permission prompt';
-    return { detail: message, rawPayload: parsed };
+    return {
+      detail: message,
+      rawPayload: parsed,
+      notificationType,
+      title:
+        typeof parsed?.title === 'string' && parsed.title.trim() !== ''
+          ? parsed.title
+          : titleForNotificationType(notificationType),
+      severity: severityForNotificationType(notificationType),
+    };
   } catch {
-    return { detail: raw.trim().slice(0, 500) || 'Permission prompt', rawPayload: raw };
+    return {
+      detail: raw.trim().slice(0, 500) || 'Permission prompt',
+      rawPayload: raw,
+      notificationType: 'unknown',
+      title: 'User attention required',
+      severity: 'urgent',
+    };
   }
 }
 
@@ -68,27 +105,15 @@ async function main() {
   try {
     const root = rootDir();
     const raw = await readStdin();
-    const { detail, rawPayload } = detailFromRaw(raw);
-    const event = {
-      ts: new Date().toISOString(),
-      id: crypto.randomUUID(),
-      type: 'attention-needed',
-      severity: 'urgent',
+    const { detail, rawPayload, notificationType, title, severity } = notificationFromRaw(raw);
+    await appendAttentionEvent({
+      severity,
       source: 'claude-code-notification',
-      title: 'User attention required',
+      provider: 'claude',
+      title,
       detail,
-      payload: { raw: rawPayload },
-    };
-    const attentionPath = path.join(root, '.vibe', 'agent', 'attention.jsonl');
-    await mkdir(path.dirname(attentionPath), { recursive: true });
-    await appendFile(attentionPath, `${JSON.stringify(event)}\n`, { encoding: 'utf8', flag: 'a' });
-
-    const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'vibe-daily-log.mjs');
-    spawnSync(process.execPath, [scriptPath, 'attention-needed', '--payload', JSON.stringify(event)], {
-      cwd: root,
-      env: { ...process.env, VIBE_ROOT: root },
-      stdio: 'ignore',
-    });
+      payload: { notificationType, raw: rawPayload },
+    }, root);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   }

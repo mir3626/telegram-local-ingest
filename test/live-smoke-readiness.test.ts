@@ -103,12 +103,14 @@ test("checkLiveSmokeReadiness checks configured Codex postprocess wrapper", asyn
   const vault = path.join(root, "vault");
   const telegramFiles = path.join(root, "telegram-files");
   const scripts = path.join(root, "scripts");
+  const tools = path.join(root, "tools");
   fs.mkdirSync(vault);
   fs.mkdirSync(telegramFiles);
   fs.mkdirSync(scripts);
-  const wrapper = path.join(scripts, "run-codex-postprocess.sh");
-  fs.writeFileSync(wrapper, "#!/usr/bin/env bash\necho codex wrapper ok\n", "utf8");
-  fs.chmodSync(wrapper, 0o755);
+  fs.mkdirSync(tools);
+  writeExecutable(scripts, "run-codex-postprocess.sh", "#!/usr/bin/env bash\necho codex wrapper ok");
+  const fakePandoc = writeExecutable(tools, "pandoc", "#!/bin/sh\necho 'pandoc 3.1.11'");
+  const fakePdftotext = writeExecutable(tools, "pdftotext", "#!/bin/sh\necho 'pdftotext version 24.02.0' >&2");
   fs.writeFileSync(
     path.join(root, ".env"),
     [
@@ -122,6 +124,8 @@ test("checkLiveSmokeReadiness checks configured Codex postprocess wrapper", asyn
       "OBSIDIAN_RAW_ROOT=raw",
       "AGENT_POSTPROCESS_PROVIDER=codex",
       "AGENT_POSTPROCESS_COMMAND={projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}",
+      `PANDOC_BIN=${fakePandoc}`,
+      `PDFTOTEXT_BIN=${fakePdftotext}`,
       "",
     ].join("\n"),
     "utf8",
@@ -135,8 +139,18 @@ test("checkLiveSmokeReadiness checks configured Codex postprocess wrapper", asyn
 
   assert.equal(report.ready, true);
   assert.equal(report.checks.some((check) => check.name === "Codex postprocess wrapper" && check.status === "ok"), true);
+  assert.equal(report.checks.some((check) => check.name === "DOCX document renderer: pandoc" && check.status === "ok"), true);
+  assert.equal(report.checks.some((check) => check.name === "PDF text extractor: pdftotext" && check.status === "ok"), true);
   assert.match(renderReadinessReport(report), /codex wrapper ok/);
 });
+
+function writeExecutable(root: string, fileName: string, content: string): string {
+  const filePath = path.join(root, fileName);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${content}\n`, "utf8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

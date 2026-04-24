@@ -12,6 +12,8 @@ const nodeScriptPath = path.resolve('.claude', 'statusline.mjs');
 const bashScriptPath = path.resolve('.claude', 'statusline.sh');
 const powershellScriptPath = path.resolve('.claude', 'statusline.ps1');
 const settingsPath = path.resolve('.claude', 'settings.json');
+const emojiTarget = '\u{1F3AF}';
+const emojiWarning = '\u26A0\uFE0F';
 
 function detectWorkingBash(): string | null {
   try {
@@ -117,7 +119,10 @@ describe('statusline wiring', () => {
   it('uses a cross-platform node command in Claude settings', async () => {
     const settings = JSON.parse(await import('node:fs/promises').then(({ readFile }) => readFile(settingsPath, 'utf8'))) as {
       statusLine?: { command?: string };
-      hooks?: { SessionStart?: Array<{ hooks?: Array<{ command?: string }> }> };
+      hooks?: {
+        SessionStart?: Array<{ hooks?: Array<{ command?: string }> }>;
+        Notification?: Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>;
+      };
     };
 
     assert.equal(settings.statusLine?.command, 'node .claude/statusline.mjs');
@@ -125,6 +130,14 @@ describe('statusline wiring', () => {
     assert.doesNotMatch(settings.statusLine?.command ?? '', /\/dev\/null|\|\| true/);
     assert.equal(settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command, 'node scripts/vibe-agent-session-start.mjs');
     assert.doesNotMatch(settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command ?? '', /\/dev\/null|\|\| true/);
+    assert.deepEqual(
+      settings.hooks?.Notification?.map((entry) => entry.matcher).sort(),
+      ['elicitation_dialog', 'idle_prompt', 'permission_prompt'],
+    );
+    for (const entry of settings.hooks?.Notification ?? []) {
+      assert.equal(entry.hooks?.[0]?.command, 'node scripts/vibe-attention-notify.mjs');
+      assert.doesNotMatch(entry.hooks?.[0]?.command ?? '', /\/dev\/null|\|\| true/);
+    }
   });
 });
 
@@ -137,6 +150,28 @@ describe('statusline.mjs', () => {
 
     assert.equal(stderr, '');
     assert.equal(stdout, '🎯 sprint-M9-statusline-permissions (2/3) | ⚠️ 2');
+  });
+
+  it('hides copied template sprint state before vibe-init', async () => {
+    const root = await makeTempDir('statusline-template-state-');
+    await writeJson(root, path.join('.vibe', 'agent', 'sprint-status.json'), {
+      project: {
+        name: 'vibe-doctor',
+      },
+      handoff: {
+        currentSprintId: 'idle',
+      },
+      sprints: [
+        { id: 'sprint-template-a', status: 'passed' },
+        { id: 'sprint-template-b', status: 'passed' },
+      ],
+      pendingRisks: [{ id: 'risk-template-a', status: 'open' }],
+    });
+
+    const { stdout, stderr } = runNodeStatusline(root);
+
+    assert.equal(stderr, '');
+    assert.equal(stdout, `${emojiTarget} idle (0/0) | ${emojiWarning} 0`);
   });
 
   it('reads Claude usage from redirected stdin by default', async () => {
@@ -152,6 +187,23 @@ describe('statusline.mjs', () => {
     const { stdout } = runNodeStatusline(root, `${JSON.stringify({ transcript_path: transcriptPath })}\n`);
 
     assert.equal(stdout, '🎯 sprint-M9-statusline-permissions (2/3) | 💭 Claude 2K | ⚠️ 2');
+  });
+
+  it('does not show update nags for exact upstream pins', async () => {
+    const root = await makeTempDir('statusline-node-exact-pin-');
+    await writeStatus(root);
+    await writeJson(root, path.join('.vibe', 'config.json'), {
+      harnessVersionInstalled: '1.3.1',
+      upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: 'v1.3.1' },
+    });
+    await writeJson(root, path.join('.vibe', 'sync-cache.json'), {
+      latestVersion: '1.4.0',
+    });
+
+    const { stdout } = runNodeStatusline(root);
+
+    assert.match(stdout, /v1\.3\.1 pinned$/);
+    assert.doesNotMatch(stdout, /\/vibe-sync/);
   });
 });
 
@@ -272,6 +324,23 @@ describe('statusline.sh', { skip: bashCommand === null }, () => {
     const { stdout } = await runBashStatusline(root);
 
     assert.equal(stdout, '🎯 sprint-M9-statusline-permissions (2/3) | ⚠️ 2 | 🏷️ v1.3.1 \u26A0 v1.4.0 (/vibe-sync)');
+  });
+
+  it('bash statusline does not show update nags for exact upstream pins', async () => {
+    const root = await makeTempDir('statusline-exact-pin-');
+    await writeStatus(root);
+    await writeJson(root, path.join('.vibe', 'config.json'), {
+      harnessVersionInstalled: '1.3.1',
+      upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: 'v1.3.1' },
+    });
+    await writeJson(root, path.join('.vibe', 'sync-cache.json'), {
+      latestVersion: '1.4.0',
+    });
+
+    const { stdout } = await runBashStatusline(root);
+
+    assert.match(stdout, /v1\.3\.1 pinned$/);
+    assert.doesNotMatch(stdout, /\/vibe-sync/);
   });
 
   it('bash statusline omits suffix when config missing', async () => {

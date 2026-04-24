@@ -209,6 +209,176 @@ test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is av
   }
 });
 
+test("runWorkerOnce renders PDF uploads as DOCX downloads when extracted text needs translation", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "documents/chinese-food-law.pdf", "%PDF-1.4\n");
+  const toolRoot = path.join(fixture.root, "tools");
+  const fakePandoc = writeExecutable(toolRoot, "pandoc", [
+    "#!/bin/sh",
+    "input=\"\"",
+    "out=\"\"",
+    "prev=\"\"",
+    "for arg in \"$@\"; do",
+    "  if [ -z \"$input\" ]; then input=\"$arg\"; fi",
+    "  if [ \"$prev\" = \"--output\" ]; then out=\"$arg\"; fi",
+    "  prev=\"$arg\"",
+    "done",
+    "cat \"$input\" > \"$out\"",
+  ].join("\n"));
+  const fakePdftotext = writeExecutable(toolRoot, "pdftotext", [
+    "#!/bin/sh",
+    "printf 'Chinese food law requires Korean translation.\\nArticle 1. Scope\\n'",
+  ].join("\n"));
+  const oldPandoc = process.env.PANDOC_BIN;
+  const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const agentInputs: AgentPostprocessInput[] = [];
+  try {
+    process.env.PANDOC_BIN = fakePandoc;
+    process.env.PDFTOTEXT_BIN = fakePdftotext;
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest project:sales", "documents/chinese-food-law.pdf"),
+      ),
+      agent: mockAgentPostprocessor(agentInputs),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsProcessed, 1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    assert.equal(agentInputs.length, 1);
+    assert.ok(agentInputs[0]?.artifacts.some((artifact) => artifact.kind === "pdf_text"));
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.fileName, "chinese-food-law_translated.docx");
+    assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /# \[원문\]/);
+    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /Chinese food law requires Korean translation/);
+    assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
+  } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
+    restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce fails PDF agent jobs when pdftotext is missing", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "documents/source.pdf", "%PDF-1.4\n");
+  const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const agentInputs: AgentPostprocessInput[] = [];
+  try {
+    process.env.PDFTOTEXT_BIN = path.join(fixture.root, "tools", "missing-pdftotext");
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest project:sales", "documents/source.pdf"),
+      ),
+      agent: mockAgentPostprocessor(agentInputs),
+    };
+
+    await assert.rejects(
+      () => runWorkerOnce(context),
+      /PDF text extraction is required for agent postprocess.*pdf_tool_missing/,
+    );
+
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "FAILED");
+    assert.equal(agentInputs.length, 0);
+    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "preprocess.completed"));
+    assert.equal(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "language.detected"), false);
+    const failureMessage = sentMessages.at(-1);
+    assert.match(failureMessage?.text ?? "", /PDF text extraction is required for agent postprocess/);
+    assert.match(JSON.stringify(failureMessage?.reply_markup), /retry:tg_300_21/);
+  } finally {
+    restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce sanitizes extracted PDF text before appending it to DOCX output", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "documents/chinese-food-law.pdf", "%PDF-1.4\n");
+  const toolRoot = path.join(fixture.root, "tools");
+  const fakePdftotext = writeExecutable(toolRoot, "pdftotext", [
+    "#!/bin/sh",
+    "printf 'Chinese food law A\\001B <tag> & value requires Korean translation.\\n'",
+  ].join("\n"));
+  const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const agentInputs: AgentPostprocessInput[] = [];
+  try {
+    process.env.PDFTOTEXT_BIN = fakePdftotext;
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest project:sales", "documents/chinese-food-law.pdf"),
+      ),
+      agent: {
+        async postprocess(input): Promise<AgentPostprocessResult> {
+          agentInputs.push(input);
+          writeMinimalDocx(input.outputDir, "translated.docx", "번역 결과");
+          return {
+            command: "custom-agent",
+            args: ["--prompt", "prompt.md"],
+            promptPath: path.join(input.outputDir, "..", ".agent-work", "prompt.md"),
+            outputDir: input.outputDir,
+            stdout: "ok",
+            stderr: "",
+          };
+        },
+      },
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsProcessed, 1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    assert.equal(agentInputs.length, 1);
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.fileName, "chinese-food-law_translated.docx");
+    const documentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.doesNotMatch(documentXml, /\u0001/);
+    assert.match(documentXml, /Chinese food law AB &lt;tag&gt; &amp; value requires Korean translation/);
+  } finally {
+    restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce treats file uploads without captions as ingest jobs", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "documents/upload-only.txt", "upload only");
@@ -991,6 +1161,56 @@ function buildZip(entries: Record<string, string>): Buffer {
   return Buffer.concat([...localParts, centralDirectory, endOfCentralDirectory]);
 }
 
+function extractZipEntry(zip: Buffer, entryName: string): Buffer | null {
+  const eocdOffset = findEndOfCentralDirectory(zip);
+  let centralOffset = zip.readUInt32LE(eocdOffset + 16);
+  const centralEnd = centralOffset + zip.readUInt32LE(eocdOffset + 12);
+  while (centralOffset < centralEnd) {
+    if (zip.readUInt32LE(centralOffset) !== 0x02014b50) {
+      throw new Error("Invalid ZIP: central directory header not found");
+    }
+    const compressionMethod = zip.readUInt16LE(centralOffset + 10);
+    const compressedSize = zip.readUInt32LE(centralOffset + 20);
+    const fileNameLength = zip.readUInt16LE(centralOffset + 28);
+    const extraFieldLength = zip.readUInt16LE(centralOffset + 30);
+    const fileCommentLength = zip.readUInt16LE(centralOffset + 32);
+    const localHeaderOffset = zip.readUInt32LE(centralOffset + 42);
+    const name = zip.subarray(centralOffset + 46, centralOffset + 46 + fileNameLength).toString("utf8").replaceAll("\\", "/");
+    if (name === entryName) {
+      return inflateZipEntry(zip, localHeaderOffset, compressedSize, compressionMethod);
+    }
+    centralOffset += 46 + fileNameLength + extraFieldLength + fileCommentLength;
+  }
+  return null;
+}
+
+function findEndOfCentralDirectory(zip: Buffer): number {
+  const minOffset = Math.max(0, zip.length - 65_557);
+  for (let offset = zip.length - 22; offset >= minOffset; offset -= 1) {
+    if (zip.readUInt32LE(offset) === 0x06054b50) {
+      return offset;
+    }
+  }
+  throw new Error("Invalid ZIP: end of central directory not found");
+}
+
+function inflateZipEntry(zip: Buffer, localHeaderOffset: number, compressedSize: number, compressionMethod: number): Buffer {
+  if (zip.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+    throw new Error("Invalid ZIP: local file header not found");
+  }
+  const fileNameLength = zip.readUInt16LE(localHeaderOffset + 26);
+  const extraFieldLength = zip.readUInt16LE(localHeaderOffset + 28);
+  const dataOffset = localHeaderOffset + 30 + fileNameLength + extraFieldLength;
+  const compressed = zip.subarray(dataOffset, dataOffset + compressedSize);
+  if (compressionMethod === 0) {
+    return compressed;
+  }
+  if (compressionMethod === 8) {
+    return zlib.inflateRawSync(compressed);
+  }
+  throw new Error(`Unsupported ZIP compression method: ${compressionMethod}`);
+}
+
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
     delete process.env[name];
@@ -1063,9 +1283,14 @@ function mockTelegramFetch(
 }
 
 function mimeTypeForFixture(filePath: string): string {
-  return path.extname(filePath).toLowerCase() === ".docx"
-    ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    : "text/plain";
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case ".pdf":
+      return "application/pdf";
+    default:
+      return "text/plain";
+  }
 }
 
 function mockAudioPresetFetch(

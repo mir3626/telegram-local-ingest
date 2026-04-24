@@ -53,17 +53,18 @@ This creates a temporary fixture under `runtime/agent-smoke/`, invokes Codex thr
 
 The Telegram completion message lists the real expiry timestamp in KST, and the download button includes the same deadline in compact form. Runtime download files are valid for 24 hours.
 
-For DOCX/HWP-family uploads, the worker does not force PDF delivery. If the agent creates DOCX/HWP/HWPX output, that document is sent directly with the uploaded source stem plus `_translated` as the download filename. If the agent returns Markdown, the worker uses `pandoc` to create `<source-stem>_translated.docx`; DOCX sources use `--reference-doc <source.docx>` so more source styling can carry over. HWP/HWPX sources are delivered as DOCX unless a native HWP/HWPX file is created by the agent. When the original text is included after the translation, it must be labeled `[원문]`, not appendix/`부록`.
+For DOCX/PDF/HWP-family uploads, the editable delivery baseline is DOCX. If the agent creates DOCX/HWP/HWPX output, that document is sent directly with the uploaded source stem plus `_translated` as the download filename. If the agent returns Markdown, the worker uses `pandoc` to create `<source-stem>_translated.docx`; DOCX sources use `--reference-doc <source.docx>` so more source styling can carry over, and PDF/HWP/HWPX sources fall back to DOCX. Current local skill inventory includes `doc`/`docx` but no HWP/HWPX editing skill, so HWP/HWPX should be treated as native only when an agent explicitly produces a valid HWP/HWPX file. When the original text is included after the translation, it must be labeled `[원문]`, not appendix/`부록`.
 
-For non-DOCX/HWP uploads, the worker converts the agent's translated Markdown/text result plus the preprocessed original text into one mobile-friendly `<source-stem>_translated.pdf`. For Korean/CJK PDF text, WSL normally auto-detects the Windows Malgun Gothic font at `/mnt/c/Windows/Fonts/malgun.ttf`. Set `PDF_FONT_PATH` when running on a host with a different font location.
+For non-document uploads, the worker converts the agent's translated Markdown/text result plus the preprocessed original text into one mobile-friendly `<source-stem>_translated.pdf`. For Korean/CJK PDF rendering, WSL normally auto-detects the Windows Malgun Gothic font at `/mnt/c/Windows/Fonts/malgun.ttf`. Set `PDF_FONT_PATH` when running on a host with a different font location. PDF source uploads also require `pdftotext` from poppler-utils so the worker can extract source text before translation.
 
 Optional tool overrides:
 
 ```env
 PANDOC_BIN=/usr/bin/pandoc
+PDFTOTEXT_BIN=/usr/bin/pdftotext
 ```
 
-WSL one-time install, if `pandoc` is missing:
+WSL one-time install, if `pandoc` or `pdftotext` is missing:
 
 ```bash
 npm run setup:docx-rendering

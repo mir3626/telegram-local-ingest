@@ -75,6 +75,11 @@ Primary metric = **dogfood friction incident count per sprint** + **delivered pr
 - 최근 session-log entries 안에 `[decision][phase3-utility-opt-in]` 가 있으면 위 두 entry 는 skip 한다.
 - `docs/context/harness-gaps.md` 의 `status=open` 개수를 집계해 findings 에 반영한다.
   - open gap 이 0이 아니면 최소 1개 finding 에 ledger 상태를 근거로 연결한다.
+- `wiringDriftFindings.length > 0` 이면 각 entry 당 `🔴 Blocker` finding 을 auto-seed 한다.
+  - `id: review-wiring-drift-<artifact basename>`
+  - `proposal: '<artifactPath>' 가 생성됐지만 runtime reference 또는 sync manifest wiring 이 누락됨`
+  - `estimated_loc: 20`
+  - `proposed_sprint: 'backlog'`
 
 ### Adapter-health blind-spot (🔴 Blocker)
 

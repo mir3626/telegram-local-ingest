@@ -235,63 +235,77 @@ CRITICAL 블록도 업데이트:
 
 선택한 Sprint 역할 구성을 반영합니다. 커스텀 provider는 `providers` 맵에 추가합니다.
 
-##### OS 감지 + platform-native 경로 자동 기입 (CRITICAL — Windows 지원)
+##### OS 경계 + provider command 표준 (CRITICAL — Windows / WSL 지원)
 
-`config.local.json`을 작성하기 전 Orchestrator가 OS와 설치된 CLI 경로를 탐색하여
-`providers.*.command` 를 플랫폼 적합한 형식으로 기입합니다. 이 단계를 건너뛰면 Windows
-Git Bash 환경에서 `node` 의 기본 쉘이 cmd.exe로 fallback되어 `./scripts/run-codex.sh`
-같은 POSIX 경로가 `vibe-preflight` 의 provider health check에서 실패합니다 (dogfood5
-재현 사례).
+`config.local.json`을 작성할 때 Codex provider는 기본적으로 모든 OS에서
+`./scripts/run-codex.sh`를 유지합니다. 이 wrapper가 UTF-8 locale, common rules,
+retry, session-start를 담당하므로 Windows에서도 raw `codex.cmd exec`를 표준 경로로
+기입하지 않습니다.
 
-**탐색 절차**:
+**표준 원칙**:
 
-1. Node / bash 로 OS 감지:
-   - Windows: `node -e "console.log(process.platform)"` → `win32`
-2. `codex` CLI 절대 경로 탐색:
-   - Windows: `cmd //c "where codex"` → 첫 번째 `.cmd` 라인 추출 (예: `C:\Users\{user}\AppData\Roaming\npm\codex.cmd`)
-   - POSIX: `which codex` → 그대로 사용
-3. `claude` CLI 절대 경로 탐색 (동일 방식)
-4. 탐색 결과를 `.vibe/config.local.json` 의 `providers.*.command` 로 기입:
-
-   **Windows 결과 예시**:
+1. Codex provider command:
    ```json
-   "providers": {
-     "claude-opus": {
-       "command": "C:\\Users\\{user}\\.local\\bin\\claude.exe",
-       "args": ["-p", "{prompt}"],
-       "env": {}
-     },
-     "codex": {
-       "command": "C:\\Users\\{user}\\AppData\\Roaming\\npm\\codex.cmd",
-       "args": ["exec", "--json", "{prompt}"],
-       "env": {}
-     }
+   "codex": {
+     "command": "./scripts/run-codex.sh",
+     "args": ["{prompt}"],
+     "env": {}
    }
    ```
+2. Windows 네이티브 PowerShell/cmd에서 `vibe:run-agent`가 `.sh` wrapper를 실행할 때는
+   harness가 Git Bash 실행 파일을 직접 탐색합니다. bare `bash`는 사용하지 않습니다.
+   - `where bash`가 `C:\Users\<user>\AppData\Local\Microsoft\WindowsApps\bash.exe`를
+     반환하면 WSL launcher입니다. Windows Codex wrapper 실행 경로로 사용하지 않습니다.
+   - Git Bash 기본 경로는 `C:\Program Files\Git\bin\bash.exe`입니다.
+   - 특수 설치 경로는 `VIBE_GIT_BASH` 환경변수로 지정할 수 있습니다.
+3. `scripts/run-codex.cmd`는 Windows-native health/debug wrapper입니다.
+   `node scripts/vibe-preflight.mjs`는 Windows에서 이 `.cmd` wrapper의 `--health`를
+   우선 사용합니다. Generator 실행 표준은 여전히 `run-codex.sh`입니다.
+4. WSL에서 Codex를 실행하려면 WSL 내부에 Linux용 `node`와 `codex`를 별도로 설치합니다.
+   `/mnt/c/.../npm/codex` 같은 Windows npm shim은 WSL 실행 경로로 사용하지 않습니다.
+5. `CODEX_*`/`VIBE_*`를 Windows에서 WSL로 넘기는 워크플로우는 `WSLENV`에 명시 등록해야
+   합니다. 기본 템플릿은 Windows와 WSL의 env 공유를 전제로 하지 않습니다.
+6. Claude/custom provider처럼 wrapper가 없는 일반 CLI는 OS별 native command를 사용할 수
+   있습니다. 예: Windows `C:\Users\{user}\.local\bin\claude.exe`, POSIX `claude`.
 
-   **POSIX (macOS/Linux) 결과 예시**:
-   ```json
-   "providers": {
-     "claude-opus": {
-       "command": "claude",
-       "args": ["-p", "{prompt}"],
-       "env": {}
-     },
-     "codex": {
-       "command": "./scripts/run-codex.sh",
-       "args": ["{prompt}"],
-       "env": {}
-     }
-   }
-   ```
+**Windows 결과 예시**:
+```json
+"providers": {
+  "claude-opus": {
+    "command": "C:\\Users\\{user}\\.local\\bin\\claude.exe",
+    "args": ["-p", "{prompt}"],
+    "env": {}
+  },
+  "codex": {
+    "command": "./scripts/run-codex.sh",
+    "args": ["{prompt}"],
+    "env": {}
+  }
+}
+```
 
-5. 탐색 실패 시: 해당 CLI가 미설치 상태로 간주하고 Phase 2의 "CLI 미설치" 흐름으로 분기.
-   config.local.json에는 기본 POSIX 경로(`./scripts/run-codex.sh` 등)를 임시로 두고,
-   사용자에게 "Windows 환경이면 codex 설치 후 `where codex` 결과를 config.local.json
-   에 반영해주세요" 1줄 경고 출력.
+**POSIX (macOS/Linux/WSL) 결과 예시**:
+```json
+"providers": {
+  "claude-opus": {
+    "command": "claude",
+    "args": ["-p", "{prompt}"],
+    "env": {}
+  },
+  "codex": {
+    "command": "./scripts/run-codex.sh",
+    "args": ["{prompt}"],
+    "env": {}
+  }
+}
+```
 
-> Generator 호출 자체는 Orchestrator가 항상 `run-codex.sh` 를 통해 UTF-8 wrapping을 받도록 하지만, `vibe-preflight` 의 `provider.* --version` health check는 config.local.json의 `command` 를 cmd.exe/sh 를 통해 직접 실행하므로 플랫폼 적합한 경로가 필수입니다.
+탐색 실패 시 해당 CLI가 미설치 상태로 간주하고 Phase 2의 "CLI 미설치" 흐름으로
+분기합니다. Windows에서 Git Bash가 없으면 Git for Windows 설치 또는 `VIBE_GIT_BASH`
+지정을 안내합니다.
 
+> 로컬에서 의도적으로 wrapper를 우회해야 하는 실험이 아니라면 `config.local.json`에
+> `codex.cmd exec`를 직접 기입하지 않습니다.
 ##### 커스텀 generator provider 예시
 
 예시 (generator를 deepseek로 선택한 경우):

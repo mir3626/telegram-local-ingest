@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,8 @@ import {
 
 const tempDirs: string[] = [];
 const resolverScriptPath = path.resolve('scripts', 'vibe-resolve-model.mjs');
+const registryCheckScriptPath = path.resolve('scripts', 'vibe-model-registry-check.mjs');
+const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
 
 afterEach(async () => {
   while (tempDirs.length > 0) {
@@ -32,6 +34,11 @@ async function makeTempDir(prefix: string): Promise<string> {
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function runGit(root: string, args: string[]): void {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
 }
 
 function makeRegistry(schemaVersion: 1 = 1): ModelRegistry {
@@ -163,5 +170,30 @@ describe('model-registry', () => {
       JSON.stringify(JSON.parse(stdout)),
       JSON.stringify(expected),
     );
+  });
+
+  it('model registry check accepts caret upstream refs as version ranges', { skip: !gitAvailable }, async () => {
+    const root = await makeTempDir('model-registry-caret-ref-');
+    runGit(root, ['init']);
+    await writeJson(path.join(root, '.vibe', 'model-registry.json'), {
+      ...makeRegistry(),
+      schemaVersion: 2,
+    });
+    runGit(root, ['add', '.']);
+    runGit(root, ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-m', 'upstream registry']);
+    runGit(root, ['tag', 'v1.0.0']);
+
+    await writeJson(path.join(root, '.vibe', 'model-registry.json'), makeRegistry());
+    await writeJson(path.join(root, '.vibe', 'config.json.upstream'), {
+      upstream: { type: 'git', ref: '^v1.0.0' },
+    });
+
+    const result = spawnSync(process.execPath, [registryCheckScriptPath], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /model-registry update available/);
   });
 });

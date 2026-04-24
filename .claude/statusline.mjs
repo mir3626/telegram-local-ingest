@@ -26,6 +26,31 @@ function getString(value) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function isTemplateProjectStatus(root, status) {
+  const projectName = getString(status?.project?.name);
+  if (projectName !== 'vibe-doctor') {
+    return false;
+  }
+
+  return path.basename(root).toLowerCase() !== 'vibe-doctor';
+}
+
+function normalizeStatusForDisplay(root, status) {
+  if (!isTemplateProjectStatus(root, status)) {
+    return status;
+  }
+
+  return {
+    ...status,
+    handoff: {
+      ...(status && typeof status === 'object' && !Array.isArray(status) ? status.handoff : undefined),
+      currentSprintId: 'idle',
+    },
+    sprints: [],
+    pendingRisks: [],
+  };
+}
+
 function parseStatuslineInput(raw) {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
@@ -140,6 +165,10 @@ function compareVersions(left, right) {
   return 0;
 }
 
+function isExactVersionRef(value) {
+  return typeof value === 'string' && /^v?\d+\.\d+\.\d+$/.test(value.trim());
+}
+
 function getVersionSuffix(root) {
   const config = readJsonOptional(path.join(root, '.vibe', 'config.json'));
   const installedRaw = getString(config?.harnessVersionInstalled) ?? getString(config?.harnessVersion);
@@ -153,6 +182,9 @@ function getVersionSuffix(root) {
   const latestRaw = getString(syncCache?.latestVersion);
   const latestParts = latestRaw ? toVersionParts(latestRaw) : undefined;
   if (latestRaw && latestParts && compareVersions(installedParts, latestParts) < 0) {
+    if (isExactVersionRef(config?.upstream?.ref)) {
+      return `v${installedVersion} pinned`;
+    }
     return `v${installedVersion} \u26A0 v${normalizeVersion(latestRaw)} (/vibe-sync)`;
   }
 
@@ -166,7 +198,7 @@ async function main() {
     process.exit(0);
   }
 
-  const status = readJson(statusPath);
+  const status = normalizeStatusForDisplay(root, readJson(statusPath));
   const statuslineInput = await readStatuslineInput();
   const claudeTokens = getClaudeTokens(statuslineInput);
   const sprints = Array.isArray(status.sprints) ? status.sprints : [];

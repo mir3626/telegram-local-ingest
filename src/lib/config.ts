@@ -40,6 +40,12 @@ export interface BrowserSmokeConfig {
   dist?: string;
 }
 
+export interface AuditConfig {
+  everyN?: number;
+  projectRoots?: string[];
+  prototypeLocThreshold?: number;
+}
+
 export interface VibeConfig {
   orchestrator: string;
   harnessVersion?: string;
@@ -59,10 +65,11 @@ export interface VibeConfig {
   };
   bundle?: BundleConfig;
   browserSmoke?: BrowserSmokeConfig;
+  audit?: AuditConfig;
 }
 
 export type VibeConfigOverride = Partial<
-  Omit<VibeConfig, 'sprintRoles' | 'sprint' | 'providers' | 'qa' | 'bundle' | 'browserSmoke'>
+  Omit<VibeConfig, 'sprintRoles' | 'sprint' | 'providers' | 'qa' | 'bundle' | 'browserSmoke' | 'audit'>
 > & {
   sprintRoles?: Partial<SprintRoles>;
   sprint?: Partial<SprintConfig>;
@@ -70,6 +77,7 @@ export type VibeConfigOverride = Partial<
   qa?: Partial<NonNullable<VibeConfig['qa']>>;
   bundle?: Partial<BundleConfig>;
   browserSmoke?: Partial<BrowserSmokeConfig>;
+  audit?: Partial<AuditConfig>;
 };
 
 function resolveBundleConfig(
@@ -106,6 +114,7 @@ function mergeConfig(base: VibeConfig, override: VibeConfigOverride): VibeConfig
     qa,
     bundle,
     browserSmoke,
+    audit,
     ...overrideRest
   } = override;
   const merged: VibeConfig = {
@@ -135,6 +144,13 @@ function mergeConfig(base: VibeConfig, override: VibeConfigOverride): VibeConfig
 
   if (base.browserSmoke || browserSmoke) {
     merged.browserSmoke = resolveBrowserSmokeConfig(base.browserSmoke, browserSmoke);
+  }
+
+  if (base.audit || audit) {
+    merged.audit = {
+      ...(base.audit ?? {}),
+      ...(audit ?? {}),
+    };
   }
 
   return merged;

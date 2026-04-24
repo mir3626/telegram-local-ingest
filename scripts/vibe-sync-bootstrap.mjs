@@ -7,6 +7,16 @@ import path, { dirname, resolve } from 'node:path';
 
 const DEFAULT_UPSTREAM_URL = 'https://github.com/mir3626/vibe-doctor.git';
 
+function renderInitRequiredMessage() {
+  return [
+    'vibe sync bootstrap requires an initialized vibe-doctor project.',
+    '',
+    'Run /vibe-init first, then retry /vibe-sync or npm run vibe:sync.',
+    'Bootstrap is blocked before initialization so template sprint history and reports are not treated as project state.',
+    '',
+  ].join('\n');
+}
+
 function parseJson(filePath, fallback) {
   try {
     return JSON.parse(readFileSync(filePath, 'utf8'));
@@ -18,6 +28,47 @@ function parseJson(filePath, fallback) {
 function writeJson(filePath, value) {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function hasTemplateProjectState(productMd, sprintStatus, rootBasename) {
+  if (rootBasename.toLowerCase() === 'vibe-doctor') {
+    return false;
+  }
+
+  const statusProjectName =
+    sprintStatus &&
+    typeof sprintStatus === 'object' &&
+    !Array.isArray(sprintStatus) &&
+    sprintStatus.project &&
+    typeof sprintStatus.project === 'object' &&
+    !Array.isArray(sprintStatus.project) &&
+    typeof sprintStatus.project.name === 'string'
+      ? sprintStatus.project.name
+      : '';
+
+  return statusProjectName === 'vibe-doctor' || /\*\*vibe-doctor\*\*|^#\s+vibe-doctor\b/im.test(productMd);
+}
+
+function hasVibeInitArtifacts(root) {
+  const productPath = resolve(root, 'docs/context/product.md');
+  const statusPath = resolve(root, '.vibe/agent/sprint-status.json');
+  if (!existsSync(productPath) || !existsSync(statusPath)) {
+    return false;
+  }
+
+  try {
+    const productMd = readFileSync(productPath, 'utf8');
+    if (productMd.trim().length === 0) {
+      return false;
+    }
+    return !hasTemplateProjectState(
+      productMd,
+      parseJson(statusPath, {}),
+      path.basename(root),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function copyWithBackup(root, relativePath, backupRoot, upstreamRoot) {
@@ -74,6 +125,12 @@ function mergePackageJson(localJson, upstreamJson) {
 function main() {
   const root = process.cwd();
   const configPath = resolve(root, '.vibe/config.json');
+
+  if (!hasVibeInitArtifacts(root)) {
+    process.stderr.write(renderInitRequiredMessage());
+    process.exitCode = 1;
+    return;
+  }
 
   const arg = process.argv[2];
   const sourcePath = arg && existsSync(resolve(arg)) ? resolve(arg) : null;

@@ -32,3 +32,6 @@ scripts/tmp-*.mjs
 .vibe/agent/attention.jsonl
 # run-codex.sh unavailable signal (runtime artifact, auto-cleared on next success)
 .vibe/agent/codex-unavailable.flag
+
+test-results/
+playwright-report/

@@ -83,6 +83,38 @@ function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isTemplateProjectStatus(root, status) {
+  return (
+    isRecord(status) &&
+    isRecord(status.project) &&
+    status.project.name === 'vibe-doctor' &&
+    path.basename(root).toLowerCase() !== 'vibe-doctor'
+  );
+}
+
+function emptyIteration() {
+  return {
+    currentIteration: null,
+    iterations: [],
+  };
+}
+
+function normalizeSprintStatusForDisplay(root, status) {
+  if (!isTemplateProjectStatus(root, status)) {
+    return status;
+  }
+
+  return {
+    ...status,
+    handoff: {
+      ...(isRecord(status.handoff) ? status.handoff : {}),
+      currentSprintId: 'idle',
+    },
+    sprints: [],
+    pendingRisks: [],
+  };
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -315,25 +347,28 @@ function summarizeEvent(event) {
 
 async function buildState(root) {
   const [
-    sprintStatus,
+    rawSprintStatus,
     handoffMd,
-    iteration,
+    rawIteration,
     tokens,
-    roadmapMd,
-    productMd,
+    rawRoadmapMd,
+    rawProductMd,
     todayEventsResult,
   ] = await Promise.all([
     readOptionalJson(path.join(agentDir(root), 'sprint-status.json'), {}),
     readOptionalText(path.join(agentDir(root), 'handoff.md'), ''),
-    readOptionalJson(path.join(agentDir(root), 'iteration-history.json'), {
-      currentIteration: null,
-      iterations: [],
-    }),
+    readOptionalJson(path.join(agentDir(root), 'iteration-history.json'), emptyIteration()),
     readOptionalJson(path.join(agentDir(root), 'tokens.json'), {}),
     readOptionalText(path.join(root, 'docs', 'plans', 'sprint-roadmap.md'), ''),
     readOptionalText(path.join(root, 'docs', 'context', 'product.md'), ''),
     readDaily(root, utcDate(), 50).catch(() => ({ date: utcDate(), events: [], truncated: false })),
   ]);
+  const templateState = isTemplateProjectStatus(root, rawSprintStatus);
+  const sprintStatus = normalizeSprintStatusForDisplay(root, rawSprintStatus);
+  const roadmapMd = templateState ? '' : rawRoadmapMd;
+  const iteration = templateState ? emptyIteration() : rawIteration;
+  const handoffText = templateState ? '' : handoffMd;
+  const productMd = templateState ? '' : rawProductMd;
   const currentSprint =
     sprintStatus?.handoff?.currentSprintId ??
     parseRoadmapPointer(roadmapMd) ??
@@ -355,7 +390,7 @@ async function buildState(root) {
   return {
     roadmap: {
       current: currentSprint,
-      phases: parsePhases(productMd, handoffMd),
+      phases: parsePhases(productMd, handoffText),
       sprints: sprintNodes,
     },
     currentSprint: {

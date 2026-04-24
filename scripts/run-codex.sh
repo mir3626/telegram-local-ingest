@@ -26,6 +26,7 @@
 # ENV OVERRIDES
 # -------------
 #   CODEX_MODEL=gpt-5-codex        -> pass `-m <name>` to codex
+#   CODEX_BIN=/path/to/codex       -> explicit codex executable path
 #   CODEX_RETRY=3                  -> max retry attempts (default 3)
 #   CODEX_SANDBOX=workspace-write  -> sandbox mode
 #   CODEX_EXTRA_CONFIG="-c k=v"    -> extra `-c` overrides
@@ -47,11 +48,50 @@ Usage:
 EOF
 }
 
+is_wsl_host() {
+  if [[ -n "${WSL_DISTRO_NAME:-}" || -n "${WSL_INTEROP:-}" ]]; then
+    return 0
+  fi
+
+  grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null
+}
+
+reject_windows_codex_shim_in_wsl() {
+  local codex_path="$1"
+
+  if ! is_wsl_host; then
+    return 0
+  fi
+
+  case "$codex_path" in
+    /mnt/[a-zA-Z]/*|/c/*)
+      echo "run-codex: WSL resolved codex to a Windows npm shim: $codex_path" >&2
+      echo "run-codex: install node/codex inside WSL, or run the Windows wrapper scripts\\run-codex.cmd from PowerShell/cmd." >&2
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+resolve_codex_path() {
+  if [[ -n "${CODEX_BIN:-}" ]]; then
+    printf '%s' "$CODEX_BIN"
+    return 0
+  fi
+
+  command -v codex 2>/dev/null || true
+}
+
 run_health_check() {
-  if ! command -v codex >/dev/null 2>&1; then
+  local codex_path
+
+  codex_path="$(resolve_codex_path)"
+  if [[ -z "$codex_path" ]]; then
     echo "run-codex: codex CLI not found in PATH" >&2
     return 1
   fi
+  reject_windows_codex_shim_in_wsl "$codex_path" || return 1
 
   local tmp_stdout tmp_stderr rc pid watchdog v stderr_tail
 
@@ -61,11 +101,11 @@ run_health_check() {
 
   if command -v timeout >/dev/null 2>&1; then
     set +e
-    timeout 5 codex --version >"$tmp_stdout" 2>"$tmp_stderr"
+    timeout 5 "$codex_path" --version >"$tmp_stdout" 2>"$tmp_stderr"
     rc=$?
     set -e
   else
-    codex --version >"$tmp_stdout" 2>"$tmp_stderr" &
+    "$codex_path" --version >"$tmp_stdout" 2>"$tmp_stderr" &
     pid=$!
     (
       sleep 5
@@ -266,6 +306,30 @@ agent_session_start() {
   node "$script_path" >&2 || true
 }
 
+attention_event() {
+  if [[ "${VIBE_DISABLE_ATTENTION:-}" == "1" ]]; then
+    return 0
+  fi
+
+  local severity title detail script_dir script_path
+  severity="$1"
+  title="$2"
+  detail="$3"
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+  script_path="$script_dir/vibe-attention.mjs"
+
+  if [[ ! -f "$script_path" ]] || ! command -v node >/dev/null 2>&1; then
+    return 0
+  fi
+
+  node "$script_path" \
+    --severity "$severity" \
+    --title "$title" \
+    --detail "$detail" \
+    --source "codex-wrapper" \
+    --provider "codex" >/dev/null 2>&1 || true
+}
+
 resolve_utf8_locale() {
   local available candidate
 
@@ -422,6 +486,13 @@ if command -v chcp.com >/dev/null 2>&1; then
 fi
 
 # ---------- 3. Build codex argv ----------
+codex_path="$(resolve_codex_path)"
+if [[ -z "$codex_path" ]]; then
+  echo "run-codex: codex CLI not found in PATH" >&2
+  exit 1
+fi
+reject_windows_codex_shim_in_wsl "$codex_path" || exit 1
+
 sandbox="${CODEX_SANDBOX:-workspace-write}"
 
 codex_args=(
@@ -482,9 +553,9 @@ while [[ $attempt -lt $retries ]]; do
 
   set +e
   if [[ -n "$stdin_buf" ]]; then
-    printf '%s' "$stdin_buf" | codex "${codex_args[@]}" "$@" 2>"$attempt_stderr" | tee "$attempt_output"
+    printf '%s' "$stdin_buf" | "$codex_path" "${codex_args[@]}" "$@" 2>"$attempt_stderr" | tee "$attempt_output"
   else
-    codex "${codex_args[@]}" "$@" 2>"$attempt_stderr" | tee "$attempt_output"
+    "$codex_path" "${codex_args[@]}" "$@" 2>"$attempt_stderr" | tee "$attempt_output"
   fi
   rc=$?
   set -e
@@ -498,6 +569,7 @@ while [[ $attempt -lt $retries ]]; do
     elapsed=$(( $(date +%s) - start_ts ))
     echo "[run-codex] total attempts=$attempt elapsed=${elapsed}s$(token_suffix)" >&2
     status_tick_after_success
+    attention_event "info" "Codex run completed" "Codex exec completed after ${attempt} attempt(s), elapsed ${elapsed}s."
     rm -f .vibe/agent/codex-unavailable.flag
     exit 0
   fi
@@ -515,6 +587,7 @@ while [[ $attempt -lt $retries ]]; do
     esac
     mkdir -p .vibe/agent
     printf '%s\nlast_exit=%s\nreason_hint=%s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$rc" "$reason_hint" > .vibe/agent/codex-unavailable.flag
+    attention_event "urgent" "Codex run failed" "Codex exec failed after ${attempt} attempt(s), elapsed ${elapsed}s, reason=${reason_hint}."
     cat >&2 <<EOF
 [run-codex] CODEX_UNAVAILABLE — 3 retries exhausted (last exit=$rc, $reason_hint).
                   Orchestrator 는 아래 중 하나 선택:

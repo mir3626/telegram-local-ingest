@@ -53,6 +53,27 @@ test('empty stdin still produces a minimal event', async () => {
   assert.equal(event.detail, 'Permission prompt');
 });
 
+test('idle notification is recorded as a non-urgent Claude attention event', async () => {
+  const rootDir = await tempRoot();
+  const result = await runNotify(
+    rootDir,
+    JSON.stringify({
+      notification_type: 'idle_prompt',
+      title: 'Claude is ready',
+      message: 'Claude is waiting for your next prompt',
+    }),
+  );
+  assert.equal(result.exit, 0);
+
+  const event = await readFirstAttention(rootDir);
+  assert.equal(event.severity, 'info');
+  assert.equal(event.source, 'claude-code-notification');
+  assert.equal(event.provider, 'claude');
+  assert.equal(event.title, 'Claude is ready');
+  assert.equal(event.detail, 'Claude is waiting for your next prompt');
+  assert.equal((event.payload as Record<string, unknown>).notificationType, 'idle_prompt');
+});
+
 test('write failure exits 0', async () => {
   const rootFile = path.join(await tempRoot(), 'not-a-dir');
   await writeFile(rootFile, 'file', 'utf8');

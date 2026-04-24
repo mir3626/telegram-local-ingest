@@ -6,9 +6,15 @@
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-1`
 - **current sprint**: `sprint-12-utility-cleanup-polish`
-- **harnessVersion**: `1.5.15`
+- **harnessVersion**: `1.6.11`
 
 ## Status
+
+### Harness Adoption Repair — 2026-04-24
+
+This existing downstream repository has now been adopted into the `/vibe-init` state without rewriting product code. The agent-safe bootstrap command `npm run vibe:init -- --from-agent-skill` was run in this workspace and created `.vibe/config.local.json` with the default local provider role settings. `.vibe/config.json` now carries explicit project identity for `telegram-local-ingest`; `.vibe/agent/sprint-status.json`, this handoff, `session-log.md`, and `docs/context/product.md` are project-owned downstream state rather than copied `vibe-doctor` template state.
+
+The adoption pass intentionally avoided product runtime fixes. Product review items to keep visible for separate product work or validation are PDF `pdftotext` readiness/setup/docs, PDF/DOCX output policy alignment, and DOCX XML sanitizing for extracted text. The current working tree already contained product changes around those areas before this adoption pass; keep them separated from harness adoption when reviewing or committing.
 
 The repository has been created from `vibe-doctor`. Sprint 0 through Sprint 8 are complete. The project context now targets a Telegram Local Bot API Server based local ingest worker, and the code has config loading, Telegram Bot API baseline, startup health checks, SQLite-backed operational state, Telegram capture-to-job creation, controlled Telegram file import into runtime staging/archive, immutable Obsidian raw bundle writing, RTZR STT client/helpers, a protected wiki ingest adapter boundary, Telegram operator command primitives, and an integrated worker dispatch loop.
 
@@ -93,6 +99,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 
 ## Latest Verification
 
+- Latest verification after harness adoption repair: `npm run vibe:init -- --from-agent-skill` created `.vibe/config.local.json`; `npm run vibe:sync -- --force` completed against `v1.6.11` with backup `.vibe/sync-backup/2026-04-24T08-04-00-862Z`; `npm run typecheck` passed; `npm test` passed (`425` passed, `1` skipped); `npm run vibe:sync -- --dry-run` completed without init/template-state refusal; `node scripts/vibe-project-report.mjs --no-open --output /tmp/telegram-local-ingest-report.html` wrote a project report; `node .claude/statusline.mjs` showed `sprint-12-utility-cleanup-polish`; dashboard detach/start-stop worked on port `58175`; `npm run vibe:checkpoint` passed.
 - `npm run typecheck`: passed after harness sync and readiness checker
 - `npm run build`: passed after harness sync and readiness checker
 - App-focused tests passed: `47` passed, including `test/live-smoke-readiness.test.ts`

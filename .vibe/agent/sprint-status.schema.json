@@ -236,6 +236,20 @@
               "text": {
                 "type": "string"
               },
+              "level": {
+                "type": "string",
+                "enum": [
+                  "INFO",
+                  "WARN",
+                  "ERROR"
+                ]
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
               "status": {
                 "type": "string",
                 "enum": [

@@ -90,6 +90,14 @@ Short markdown으로 아래 섹션을 순서대로 포함:
 ## Files modified
 - path — 한 줄 설명
 
+## AC (lower bound)
+- [x] mechanical or inspection acceptance item — evidence 한 줄
+
+## Creative bets
+- 무엇: AC/test 없이도 제품 고유성을 높이기 위해 추가한 것
+- 왜: 유사 제품/기본 구현 대비 차별화되는 지점
+- AC 없이도 필요한가: 예/아니오 + 근거
+
 ## Verification
 | command | exit |
 |---|---|
@@ -284,11 +292,24 @@ Planner prompt 가 명시적으로 unit test 파일 생성을 요구하지 **않
 이 규칙은 프로토타입/MVP 가 명시적으로 smoke + type check 만으로 충분하다고 선언한
 conventions.md 의 테스트 섹션을 Generator 레벨로 hoist 한 것이다. 해제는 Planner 가
 "Tests to add: [...]" 섹션을 Sprint prompt 에 명시했을 때만.
-## Section 16 Provider-neutral context persistence
+
+## §16 Creative completion standard (universal)
+
+§1~§15 의 규칙과 Sprint acceptance criteria 는 작업의 **하한선** 이다. Generator 는
+허용된 파일·scope 안에서 최소 1개의 creative bet 을 구현하거나, scope 밖이라면 Final
+report 에 제안으로 남긴다. Creative bet 의 판별 기준: 이걸 빼도 AC·test 는 통과하는가?
+통과한다면 agent-initiated bet 이고, 통과하지 못한다면 AC 충족 구현이다.
+
+기계 검증만 통과하는 최소 구현은 본 harness 의 암묵적 실패 신호로 간주한다. Final
+report 의 `## AC (lower bound)` 와 `## Creative bets` 는 섞지 않는다.
+
+## §17 Provider-neutral context persistence
 
 This harness can be driven by Claude, Codex, Gemini, or another CLI provider. Provider-specific hooks are not equally available, so every agent must treat `.vibe/agent/handoff.md`, `.vibe/agent/session-log.md`, and `.vibe/agent/sprint-status.json` as the durable state boundary.
 
 - At session start, use `node scripts/vibe-agent-session-start.mjs` when available. It performs session-start logging, harness version checks, and model registry checks without relying on Claude-only hooks.
-- Before context compaction, handoff, or final response after meaningful work, update `handoff.md` and append a concise `session-log.md` entry. Then run `node scripts/vibe-checkpoint.mjs` when available.
+- Sprint Generator agents normally do not need token-threshold checkpoint automation because they are invoked per Sprint and return state through a completion report.
+- Codex used as the main Orchestrator runs in Orchestrator maintenance mode and has no native PreCompact or context-threshold hook. For that mode, run the `maintain-context` workflow after meaningful decisions, releases, pushes, long reviews, or before final handoff.
+- Before context compaction, handoff, or final response after meaningful Orchestrator work, update `handoff.md` and append a concise `session-log.md` entry. Then run `npm run vibe:checkpoint` when available, or `node scripts/vibe-checkpoint.mjs`.
 - If the provider has no PreCompact hook, this rule is mandatory process discipline. Do not assume chat history survives; preserve restart instructions in the files above.
 - If a compact/checkpoint cannot be completed, state the reason in the final report and leave the repo in a state that can be resumed by reading `handoff.md` and `session-log.md`.

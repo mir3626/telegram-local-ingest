@@ -6,6 +6,7 @@ import path, { resolve } from 'node:path';
 
 const DEFAULT_UPSTREAM_URL = 'https://github.com/mir3626/vibe-doctor.git';
 const ENSURE_ONLY = process.argv.includes('--ensure-upstream-only');
+const FORCE_REFRESH = process.argv.includes('--force') || process.argv.includes('--refresh');
 
 function parseJson(filePath, fallback) {
   try {
@@ -87,6 +88,10 @@ function normalizeVersion(version) {
   return version.startsWith('v') ? version.slice(1) : version;
 }
 
+function isExactVersionRef(value) {
+  return typeof value === 'string' && /^v?\d+\.\d+\.\d+$/.test(value.trim());
+}
+
 function compareVersions(left, right) {
   const leftParts = normalizeVersion(left)?.split('.').map(Number) ?? [];
   const rightParts = normalizeVersion(right)?.split('.').map(Number) ?? [];
@@ -102,14 +107,19 @@ function compareVersions(left, right) {
   return 0;
 }
 
-function latestTag(output) {
-  return output
-    .split('\n')
-    .map((line) => line.trim().split(/\s+/).at(-1) ?? '')
-    .map((ref) => ref.replace('refs/tags/', '').replace(/\^\{\}$/, ''))
-    .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
-    .sort(compareVersions)
-    .at(-1) ?? null;
+function versionTags(output) {
+  return Array.from(
+    new Set(
+      output
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/).at(-1) ?? '')
+        .map((ref) => ref.replace('refs/tags/', '').replace(/\^\{\}$/, ''))
+        .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
+        .map((tag) => normalizeVersion(tag))
+        .filter(Boolean),
+    ),
+  )
+    .sort(compareVersions);
 }
 
 try {
@@ -135,7 +145,7 @@ try {
   const cachePath = resolve(root, '.vibe/sync-cache.json');
   const cache = parseJson(cachePath, {});
   const lastCheckedAt = typeof cache.lastCheckedAt === 'string' ? Date.parse(cache.lastCheckedAt) : Number.NaN;
-  if (!Number.isNaN(lastCheckedAt) && Date.now() - lastCheckedAt < 24 * 60 * 60 * 1000) {
+  if (!FORCE_REFRESH && !Number.isNaN(lastCheckedAt) && Date.now() - lastCheckedAt < 24 * 60 * 60 * 1000) {
     process.exit(0);
   }
 
@@ -144,22 +154,24 @@ try {
     encoding: 'utf8',
   });
 
-  const latest = latestTag(output);
+  const versions = versionTags(output);
+  const latest = versions.at(-1) ?? null;
   if (!latest) {
-    writeJson(cachePath, { lastCheckedAt: new Date().toISOString(), latestVersion: null });
+    writeJson(cachePath, { lastCheckedAt: new Date().toISOString(), latestVersion: null, versions: [] });
     process.exit(0);
   }
 
   const installed = normalizeVersion(config.harnessVersionInstalled);
   const available = normalizeVersion(latest);
+  const exactPinned = isExactVersionRef(config.upstream?.ref);
 
-  if (installed && available && compareVersions(installed, available) < 0) {
+  if (installed && available && compareVersions(installed, available) < 0 && !exactPinned) {
     process.stdout.write(
       `[vibe-sync] Harness update available: v${installed} -> v${available}. Run \`/vibe-sync\` or \`npm run vibe:sync\`.\n`,
     );
   }
 
-  writeJson(cachePath, { lastCheckedAt: new Date().toISOString(), latestVersion: available });
+  writeJson(cachePath, { lastCheckedAt: new Date().toISOString(), latestVersion: available, versions });
 } catch {
   process.exit(0);
 }

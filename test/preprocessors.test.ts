@@ -78,6 +78,76 @@ test("collectPreprocessedTextArtifacts extracts DOCX text into runtime artifacts
   assert.match(fs.readFileSync(result.artifacts[0]?.sourcePath ?? "", "utf8"), /vendor update requires Korean translation/);
 });
 
+test("collectPreprocessedTextArtifacts extracts PDF text into runtime artifacts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "preprocessors-pdf-"));
+  const originalPath = writeFile(root, "runtime/archive/originals/chinese-food-law.pdf", "%PDF-1.4\n");
+  const toolRoot = path.join(root, "tools");
+  const fakePdftotext = writeExecutable(toolRoot, "pdftotext", [
+    "#!/bin/sh",
+    "printf 'Chinese food law requires Korean translation.\\nArticle 1.\\n'",
+  ].join("\n"));
+  const previousPdftotext = process.env.PDFTOTEXT_BIN;
+  const artifactRoot = path.join(root, "runtime/extracted/job-pdf/preprocess");
+
+  try {
+    process.env.PDFTOTEXT_BIN = fakePdftotext;
+    const result = await collectPreprocessedTextArtifacts({
+      job: jobFixture("job-pdf"),
+      files: [
+        fileFixture({
+          id: "file-pdf",
+          originalName: "chinese-food-law.pdf",
+          mimeType: "application/pdf",
+          archivePath: originalPath,
+        }),
+      ],
+      sourceBundle: bundleFixture(root, "job-pdf"),
+      artifactRoot,
+    });
+
+    assert.equal(result.jobId, "job-pdf");
+    assert.equal(result.skippedFiles.length, 0);
+    assert.equal(result.artifacts.length, 1);
+    assert.equal(result.artifacts[0]?.kind, "pdf_text");
+    assert.match(result.artifacts[0]?.text ?? "", /Chinese food law requires Korean translation/);
+    assert.match(result.artifacts[0]?.sourcePath ?? "", /runtime\/extracted\/job-pdf\/preprocess\/file-pdf\/chinese-food-law\.txt$/);
+  } finally {
+    restoreEnv("PDFTOTEXT_BIN", previousPdftotext);
+  }
+});
+
+test("collectPreprocessedTextArtifacts reports missing PDF text extractor", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "preprocessors-pdf-missing-tool-"));
+  const originalPath = writeFile(root, "runtime/archive/originals/source.pdf", "%PDF-1.4\n");
+  const previousPdftotext = process.env.PDFTOTEXT_BIN;
+
+  try {
+    process.env.PDFTOTEXT_BIN = path.join(root, "tools", "missing-pdftotext");
+    const result = await collectPreprocessedTextArtifacts({
+      job: jobFixture("job-pdf-missing-tool"),
+      files: [
+        fileFixture({
+          id: "file-pdf",
+          originalName: "source.pdf",
+          mimeType: "application/pdf",
+          archivePath: originalPath,
+        }),
+      ],
+      sourceBundle: bundleFixture(root, "job-pdf-missing-tool"),
+      artifactRoot: path.join(root, "runtime/extracted/job-pdf-missing-tool/preprocess"),
+    });
+
+    assert.equal(result.artifacts.length, 0);
+    assert.deepEqual(result.skippedFiles, [{
+      fileId: "file-pdf",
+      fileName: "source.pdf",
+      reason: "pdf_tool_missing",
+    }]);
+  } finally {
+    restoreEnv("PDFTOTEXT_BIN", previousPdftotext);
+  }
+});
+
 test("collectPreprocessedTextArtifacts marks large text previews as truncated", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "preprocessors-truncate-"));
   const originalPath = writeFile(root, "runtime/archive/originals/large.txt", "a".repeat(128));
@@ -124,6 +194,13 @@ function writeMinimalDocx(root: string, relativePath: string, textContent: strin
   const filePath = path.join(root, relativePath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, buildZip({ "word/document.xml": documentXml }));
+  return filePath;
+}
+
+function writeExecutable(root: string, name: string, content: string): string {
+  const filePath = path.join(root, name);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, { encoding: "utf8", mode: 0o755 });
   return filePath;
 }
 
@@ -206,4 +283,12 @@ function bundleFixture(root: string, id: string): StoredSourceBundle {
     finalizedAt: "2026-04-23T00:00:00.000Z",
     createdAt: "2026-04-23T00:00:00.000Z",
   };
+}
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
 }

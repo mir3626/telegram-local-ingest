@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, it } from 'node:test';
+import { resolveGitBashPath } from '../src/lib/shell.js';
 
 const execFile = promisify(execFileCallback);
 const tempDirs: string[] = [];
@@ -24,14 +25,21 @@ afterEach(async () => {
 
 function detectWorkingBash(): string | null {
   try {
-    execFileSync('bash', ['--version'], { stdio: 'ignore' });
     if (process.platform === 'win32') {
-      const uname = execFileSync('bash', ['-lc', 'uname -s'], { encoding: 'utf8' }).trim();
+      const gitBash = resolveGitBashPath();
+      if (!gitBash) {
+        return null;
+      }
+      execFileSync(gitBash, ['--version'], { stdio: 'ignore' });
+      const uname = execFileSync(gitBash, ['-lc', 'uname -s'], { encoding: 'utf8' }).trim();
       if (!/^(MINGW|MSYS|CYGWIN)/.test(uname)) {
         return null;
       }
+      return gitBash;
     }
-    return 'bash';
+
+    execFileSync('bash', ['--version'], { stdio: 'ignore' });
+    return execFileSync('which', ['bash'], { encoding: 'utf8' }).trim();
   } catch {
     return null;
   }
@@ -219,6 +227,7 @@ function shellEnv(binDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.Process
     LANGUAGE: '',
     ...extraEnv,
     VIBE_SKIP_AGENT_SESSION_START: extra.VIBE_SKIP_AGENT_SESSION_START ?? '1',
+    VIBE_DISABLE_ATTENTION: extra.VIBE_DISABLE_ATTENTION ?? '1',
     PATH: basePath ? `${binDir}${path.delimiter}${basePath}` : binDir,
   };
 }
@@ -248,6 +257,7 @@ describe('run-codex.sh wrapper', { skip: bashCommand === null }, () => {
   it('returns rc=1 when codex is missing', async () => {
     const binDir = await makeTempDir('run-codex-empty-bin-');
     const bashExecutable =
+      bashCommand ??
       execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', ['bash'], {
         encoding: 'utf8',
       })
@@ -269,6 +279,21 @@ describe('run-codex.sh wrapper', { skip: bashCommand === null }, () => {
 
     assert.equal(child.status, 1);
     assert.match(child.stderr, /not found/i);
+  });
+
+  it('rejects Windows npm shim paths when running under WSL', async () => {
+    const binDir = await makeTempDir('run-codex-wsl-shim-');
+    const child = spawnSync(bashCommand ?? 'bash', [bashScriptPath, '--health'], {
+      env: shellEnv(binDir, {
+        CODEX_BIN: '/mnt/c/Users/Tony/AppData/Roaming/npm/codex',
+        OS: '',
+        WSL_DISTRO_NAME: 'Ubuntu',
+      }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(child.status, 1);
+    assert.match(child.stderr, /Windows npm shim/);
   });
 
   it('returns rc=2 when auth is missing', async () => {
@@ -380,6 +405,27 @@ describe('run-codex.sh wrapper', { skip: bashCommand === null }, () => {
     assert.match(child.stdout, /## §15 Scope discipline/);
   });
 
+  it('emits a dashboard attention event after successful Codex execution when enabled', async () => {
+    const binDir = await createShellStubBin('ok');
+    const cwd = await makeTempDir('run-codex-attention-');
+    const child = spawnSync(bashCommand ?? 'bash', [bashScriptPath, 'prompt text'], {
+      cwd,
+      env: shellEnv(binDir, { CODEX_RETRY: '1', VIBE_DISABLE_ATTENTION: '0' }),
+      input: '',
+      encoding: 'utf8',
+    });
+
+    assert.equal(child.status, 0, child.stderr);
+
+    const raw = await readFile(path.join(cwd, '.vibe', 'agent', 'attention.jsonl'), 'utf8');
+    const event = JSON.parse(raw.trim().split(/\r?\n/)[0] ?? '{}') as Record<string, unknown>;
+    assert.equal(event.type, 'attention-needed');
+    assert.equal(event.severity, 'info');
+    assert.equal(event.source, 'codex-wrapper');
+    assert.equal(event.provider, 'codex');
+    assert.equal(event.title, 'Codex run completed');
+  });
+
   it('prepends the Windows sandbox limitation header on Windows hosts', async () => {
     const binDir = await createShellStubBin('stdin');
     await writeUnameStub(binDir, 'MINGW64_NT-10.0');
@@ -401,7 +447,7 @@ describe('run-codex.sh wrapper', { skip: bashCommand === null }, () => {
     assert.ok(promptIndex > commonRulesIndex);
   });
 
-  it('does not prepend the Windows sandbox limitation header on non-Windows hosts', async () => {
+  it('does not prepend the Windows sandbox limitation header on non-Windows hosts', { skip: process.platform === 'win32' }, async () => {
     const binDir = await createShellStubBin('stdin');
     await writeUnameStub(binDir, 'Linux');
     const child = spawnSync(bashCommand ?? 'bash', [bashScriptPath, '-'], {
@@ -504,8 +550,7 @@ describe('run-codex.sh wrapper', { skip: bashCommand === null }, () => {
 });
 
 describe('run-codex.cmd wrapper', { skip: process.platform !== 'win32' }, () => {
-  // TODO(M10): cmd health output empty - investigate where/set /p behavior on Git Bash-spawned cmd.exe
-  it.skip('returns normalized version output for healthy codex', async () => {
+  it('returns normalized version output for healthy codex', async () => {
     const binDir = await createCmdStubBin('ok');
     const { stdout } = await execFile(shellPath, ['/d', '/c', cmdScriptPath, '--health'], {
       env: shellEnv(binDir),

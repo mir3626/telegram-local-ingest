@@ -112,7 +112,7 @@ async function main(): Promise<void> {
 
   runAgentSessionStart(cwd);
 
-  const exists = await commandExists(plan.command);
+  const exists = await commandExists(plan.command, { cwd, env: plan.env });
   if (!exists) {
     throw new Error(`Provider command not found: ${plan.command}`);
   }

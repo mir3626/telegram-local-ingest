@@ -41,11 +41,24 @@ async function writeBootstrapFixture(root: string, config: Record<string, unknow
   });
 }
 
+async function writeInitArtifacts(root: string): Promise<void> {
+  await mkdir(path.join(root, 'docs', 'context'), { recursive: true });
+  await writeFile(path.join(root, 'docs', 'context', 'product.md'), '# Product\n\nDemo project\n', 'utf8');
+  await writeJson(path.join(root, '.vibe', 'agent', 'sprint-status.json'), {
+    schemaVersion: '0.1',
+    project: { name: 'demo', createdAt: '2026-04-01T00:00:00.000Z' },
+    sprints: [],
+    verificationCommands: [],
+    sprintsSinceLastAudit: 0,
+  });
+}
+
 describe('vibe-sync-bootstrap', () => {
   it('preserves an existing upstream.ref as a real pin', async () => {
     const localRoot = await makeTempDir('vibe-bootstrap-local-pin-');
     const upstreamRoot = await makeTempDir('vibe-bootstrap-upstream-pin-');
     await writeBootstrapFixture(upstreamRoot, { harnessVersion: '1.5.12' });
+    await writeInitArtifacts(localRoot);
     await writeJson(path.join(localRoot, '.vibe', 'config.json'), {
       harnessVersion: '1.4.3',
       harnessVersionInstalled: '1.4.3',
@@ -69,6 +82,7 @@ describe('vibe-sync-bootstrap', () => {
     const localRoot = await makeTempDir('vibe-bootstrap-local-unpinned-');
     const upstreamRoot = await makeTempDir('vibe-bootstrap-upstream-unpinned-');
     await writeBootstrapFixture(upstreamRoot, { harnessVersion: '1.5.12' });
+    await writeInitArtifacts(localRoot);
     await writeJson(path.join(localRoot, '.vibe', 'config.json'), {
       harnessVersion: '1.4.3',
       harnessVersionInstalled: '1.4.3',
@@ -92,6 +106,7 @@ describe('vibe-sync-bootstrap', () => {
     const localRoot = await makeTempDir('vibe-bootstrap-local-missing-config-');
     const upstreamRoot = await makeTempDir('vibe-bootstrap-upstream-missing-config-');
     await writeBootstrapFixture(upstreamRoot, { harnessVersion: '1.5.12' });
+    await writeInitArtifacts(localRoot);
 
     const result = spawnSync(process.execPath, [scriptPath, upstreamRoot], {
       cwd: localRoot,
@@ -107,5 +122,20 @@ describe('vibe-sync-bootstrap', () => {
       type: 'local',
       url: upstreamRoot,
     });
+  });
+
+  it('refuses bootstrap before /vibe-init creates project state', async () => {
+    const localRoot = await makeTempDir('vibe-bootstrap-local-uninitialized-');
+    const upstreamRoot = await makeTempDir('vibe-bootstrap-upstream-uninitialized-');
+    await writeBootstrapFixture(upstreamRoot, { harnessVersion: '1.5.12' });
+
+    const result = spawnSync(process.execPath, [scriptPath, upstreamRoot], {
+      cwd: localRoot,
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requires an initialized vibe-doctor project/);
+    assert.match(result.stderr, /Run \/vibe-init first/);
   });
 });

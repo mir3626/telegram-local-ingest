@@ -61,3 +61,27 @@ test('mergeConfig copies mode override as a top-level field', () => {
 
   assert.equal(merged.mode, 'agent');
 });
+
+test('mergeConfig deep-merges audit config', () => {
+  const merged = mergeConfig(
+    {
+      ...base,
+      audit: {
+        everyN: 5,
+        projectRoots: ['src'],
+        prototypeLocThreshold: 2000,
+      },
+    },
+    {
+      audit: {
+        projectRoots: ['app', 'components'],
+      },
+    },
+  );
+
+  assert.deepEqual(merged.audit, {
+    everyN: 5,
+    projectRoots: ['app', 'components'],
+    prototypeLocThreshold: 2000,
+  });
+});

@@ -135,6 +135,50 @@ test('server boots and /api/state returns expected shape', async () => {
   }
 });
 
+test('/api/state hides copied template sprint state before vibe-init', async () => {
+  const root = await tempRoot();
+  await writeFile(
+    path.join(root, '.vibe', 'agent', 'sprint-status.json'),
+    JSON.stringify({
+      project: { name: 'vibe-doctor' },
+      handoff: { currentSprintId: 'idle' },
+      sprints: [
+        { id: 'sprint-template-a', status: 'passed' },
+        { id: 'sprint-template-b', status: 'passed' },
+      ],
+      pendingRisks: [{ id: 'risk-template-a', status: 'open' }],
+    }),
+    'utf8',
+  );
+  await writeFile(
+    path.join(root, '.vibe', 'agent', 'iteration-history.json'),
+    JSON.stringify({
+      currentIteration: 'iter-template',
+      iterations: [{ id: 'iter-template', plannedSprints: ['sprint-template-a'], completedSprints: [] }],
+    }),
+    'utf8',
+  );
+  await writeFile(path.join(root, 'docs', 'plans', 'sprint-roadmap.md'), '- **id**: `sprint-template-a`\n', 'utf8');
+  const port = await freePort();
+  const { child, url } = await startDashboard(root, port);
+  try {
+    const state = await getJson<{
+      roadmap: { sprints: unknown[] };
+      currentSprint: { id: string; status: string };
+      iteration: { currentIteration: string | null };
+      risks: unknown[];
+    }>(`${url}/api/state`);
+
+    assert.equal(state.currentSprint.id, 'idle');
+    assert.equal(state.currentSprint.status, 'idle');
+    assert.equal(state.roadmap.sprints.length, 0);
+    assert.equal(state.risks.length, 0);
+    assert.equal(state.iteration.currentIteration, null);
+  } finally {
+    child.kill('SIGTERM');
+  }
+});
+
 test('/api/daily rejects traversal and invalid dates', async () => {
   const root = await tempRoot();
   const port = await freePort();

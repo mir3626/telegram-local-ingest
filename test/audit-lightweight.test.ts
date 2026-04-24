@@ -82,6 +82,13 @@ async function pendingRiskCount(root: string): Promise<number> {
   return status.pendingRisks?.length ?? 0;
 }
 
+async function pendingRisks(root: string): Promise<Array<Record<string, unknown>>> {
+  const status = JSON.parse(
+    await readFile(path.join(root, '.vibe', 'agent', 'sprint-status.json'), 'utf8'),
+  ) as { pendingRisks?: Array<Record<string, unknown>> };
+  return status.pendingRisks ?? [];
+}
+
 describe('vibe-audit-lightweight', () => {
   it('emits zero flags for a normal non-src diff', async () => {
     const root = await makeTempDir('audit-light-normal-');
@@ -123,5 +130,35 @@ describe('vibe-audit-lightweight', () => {
     assert.equal(output.flags.some((flag) => flag.id === 'missing-src-test'), true);
     assert.equal(output.risksInjected, true);
     assert.equal(await pendingRiskCount(root), 1);
+  });
+
+  it('flags app LOC above the prototype threshold and annotates the pendingRisk', async () => {
+    const root = await makeTempDir('audit-light-loc-');
+    await scaffoldRepo(root);
+    await writeJson(path.join(root, '.vibe', 'config.json'), {
+      audit: {
+        projectRoots: ['app'],
+        prototypeLocThreshold: 3,
+      },
+    });
+    await commitFile(root, 'app/foo.ts', 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\nexport const d = 4;\n');
+
+    const result = runAudit(root);
+    const output = JSON.parse(result.stdout) as {
+      appLoc: { total: number; prototypeLocThreshold: number };
+      flags: Array<{ id: string; code?: string }>;
+      risksInjected: boolean;
+    };
+    const risks = await pendingRisks(root);
+
+    assert.equal(result.status, 0);
+    assert.deepEqual(output.appLoc, { projectRoots: ['app'], prototypeLocThreshold: 3, files: 1, total: 4 });
+    assert.equal(output.flags.some((flag) => flag.id === 'app-loc-threshold'), true);
+    assert.equal(output.flags.some((flag) => flag.code === 'LOC_THRESHOLD_BREACH'), true);
+    assert.equal(output.risksInjected, true);
+    assert.equal(risks.length, 1);
+    assert.equal(risks[0]?.level, 'INFO');
+    assert.equal(risks[0]?.code, 'LOC_THRESHOLD_BREACH');
+    assert.match(String(risks[0]?.message), /app LOC 4 > 3/);
   });
 });

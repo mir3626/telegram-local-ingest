@@ -17,6 +17,8 @@ function parseArgs(argv) {
     title: 'User attention required',
     detail: 'Attention requested',
     source: 'orchestrator',
+    provider: undefined,
+    payload: undefined,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -38,9 +40,28 @@ function parseArgs(argv) {
     if (token === '--source') {
       flags.source = argv[index + 1] ?? flags.source;
       index += 1;
+      continue;
+    }
+    if (token === '--provider') {
+      flags.provider = argv[index + 1] ?? flags.provider;
+      index += 1;
+      continue;
+    }
+    if (token === '--payload') {
+      const rawPayload = argv[index + 1] ?? '';
+      try {
+        flags.payload = JSON.parse(rawPayload);
+      } catch {
+        flags.payload = rawPayload;
+      }
+      index += 1;
     }
   }
   return flags;
+}
+
+function normalizeSeverity(value) {
+  return value === 'info' || value === 'all' ? value : 'urgent';
 }
 
 export async function appendAttentionEvent(input, root = rootDir()) {
@@ -48,10 +69,12 @@ export async function appendAttentionEvent(input, root = rootDir()) {
     ts: new Date().toISOString(),
     id: crypto.randomUUID(),
     type: 'attention-needed',
-    severity: input.severity === 'all' ? 'all' : 'urgent',
+    severity: normalizeSeverity(input.severity),
     source: input.source || 'orchestrator',
     title: input.title || 'User attention required',
     detail: input.detail || 'Attention requested',
+    ...(input.provider ? { provider: input.provider } : {}),
+    ...(input.payload !== undefined ? { payload: input.payload } : {}),
   };
   const attentionPath = path.join(root, '.vibe', 'agent', 'attention.jsonl');
   await mkdir(path.dirname(attentionPath), { recursive: true });

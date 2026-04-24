@@ -15,9 +15,11 @@ import {
   type SyncManifest,
 } from '../src/lib/sync.js';
 import {
+  hasVibeInitArtifacts,
   resolveMissingUpstream,
-  resolvePinnedRefUpdateCandidate,
+  resolveFloatingRefUpdateCandidate,
   resolvePostSyncTypecheckArgs,
+  renderSyncInitGuardMessage,
   resolveUpstreamRef,
 } from '../src/commands/sync.js';
 import type { VibeConfig } from '../src/lib/config.js';
@@ -58,12 +60,19 @@ function minimalConfig(overrides: Partial<VibeConfig> = {}): VibeConfig {
 }
 
 describe('resolveUpstreamRef', () => {
-  it('keeps a semver upstream ref pinned by default', () => {
+  it('preserves exact semver upstream refs as hard pins', () => {
     assert.equal(resolveUpstreamRef(minimalConfig(), undefined, { latestVersion: 'v1.5.9' }), 'v1.4.3');
   });
 
-  it('uses cached latestVersion for a pinned ref only after an explicit update decision', () => {
-    assert.equal(resolveUpstreamRef(minimalConfig(), undefined, { latestVersion: 'v1.5.9' }, 'update'), 'v1.5.9');
+  it('floats caret upstream refs to the latest compatible cached version', () => {
+    const config = minimalConfig({
+      upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: '^v1.4.3' },
+    });
+
+    assert.equal(
+      resolveUpstreamRef(config, undefined, { latestVersion: 'v2.0.0', versions: ['1.4.3', '1.5.9', '2.0.0'] }),
+      'v1.5.9',
+    );
   });
 
   it('uses cached latestVersion for unpinned default sync when the project is behind', () => {
@@ -90,18 +99,76 @@ describe('resolveUpstreamRef', () => {
     assert.equal(resolveUpstreamRef(minimalConfig(), undefined, { latestVersion: 'v1.4.3' }), 'v1.4.3');
   });
 
-  it('reports an update candidate only when a pinned semver ref is behind latestVersion', () => {
-    assert.deepEqual(resolvePinnedRefUpdateCandidate(minimalConfig(), { latestVersion: 'v1.5.9' }), {
-      pinnedRef: 'v1.4.3',
-      latestRef: 'v1.5.9',
-    });
-    assert.equal(resolvePinnedRefUpdateCandidate(minimalConfig(), { latestVersion: 'v1.4.3' }), undefined);
+  it('reports an update candidate only when a caret range has a compatible newer version', () => {
+    assert.deepEqual(
+      resolveFloatingRefUpdateCandidate(
+        minimalConfig({ upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: '^v1.4.3' } }),
+        { latestVersion: 'v2.0.0', versions: ['1.4.3', '1.5.9', '2.0.0'] },
+      ),
+      {
+        rangeRef: '^v1.4.3',
+        baseRef: 'v1.4.3',
+        latestRef: 'v1.5.9',
+      },
+    );
+    assert.equal(resolveFloatingRefUpdateCandidate(minimalConfig(), { latestVersion: 'v1.5.9' }), undefined);
     assert.equal(
-      resolvePinnedRefUpdateCandidate(
+      resolveFloatingRefUpdateCandidate(
+        minimalConfig({ upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: '^v1.4.3' } }),
+        { latestVersion: 'v2.0.0', versions: ['2.0.0'] },
+      ),
+      undefined,
+    );
+    assert.deepEqual(
+      resolveFloatingRefUpdateCandidate(
+        minimalConfig({ upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: '^1.4.3' } }),
+        { latestVersion: 'v1.5.9' },
+      ),
+      {
+        rangeRef: '^1.4.3',
+        baseRef: 'v1.4.3',
+        latestRef: 'v1.5.9',
+      },
+    );
+    assert.equal(
+      resolveFloatingRefUpdateCandidate(
         minimalConfig({ upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: 'main' } }),
         { latestVersion: 'v1.5.9' },
       ),
       undefined,
+    );
+  });
+
+  it('does not let zero-major caret ranges cross their semver boundary', () => {
+    assert.equal(
+      resolveUpstreamRef(
+        minimalConfig({ upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: '^v0.5.0' } }),
+        undefined,
+        { latestVersion: 'v0.6.0', versions: ['0.5.0', '0.5.4', '0.6.0'] },
+      ),
+      'v0.5.4',
+    );
+    assert.equal(
+      resolveUpstreamRef(
+        minimalConfig({ upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: '^v0.0.3' } }),
+        undefined,
+        { latestVersion: 'v0.0.4', versions: ['0.0.3', '0.0.4'] },
+      ),
+      'v0.0.3',
+    );
+  });
+
+  it('tracks latestVersion for caret ranges when the cache has no version list yet', () => {
+    assert.deepEqual(
+      resolveFloatingRefUpdateCandidate(
+        minimalConfig({ upstream: { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', ref: '^v1.4.3' } }),
+        { latestVersion: 'v1.5.9' },
+      ),
+      {
+        rangeRef: '^v1.4.3',
+        baseRef: 'v1.4.3',
+        latestRef: 'v1.5.9',
+      },
     );
   });
 });
@@ -147,6 +214,48 @@ describe('resolveMissingUpstream', () => {
       resolveMissingUpstream({}, 'https://github.com/mir3626/vibe-doctor.git', 'vibe-doctor'),
       { type: 'git', url: 'https://github.com/mir3626/vibe-doctor.git', self: true },
     );
+  });
+});
+
+describe('vibe init artifact guard', () => {
+  it('explains that sync requires /vibe-init first', () => {
+    assert.match(renderSyncInitGuardMessage(), /requires an initialized vibe-doctor project/);
+    assert.match(renderSyncInitGuardMessage(), /Run \/vibe-init first/);
+  });
+
+  it('rejects missing init artifacts', async () => {
+    const root = await makeTempDir('sync-uninitialized-');
+
+    assert.equal(await hasVibeInitArtifacts(root), false);
+  });
+
+  it('rejects template sprint state copied into a non-template project', async () => {
+    const root = await makeTempDir('sync-template-state-');
+    await mkdir(path.join(root, 'docs', 'context'), { recursive: true });
+    await writeFile(path.join(root, 'docs', 'context', 'product.md'), '# Product\n\nvibe-doctor template\n', 'utf8');
+    await writeJson(path.join(root, '.vibe', 'agent', 'sprint-status.json'), {
+      schemaVersion: '0.1',
+      project: { name: 'vibe-doctor', createdAt: '2026-04-01T00:00:00.000Z' },
+      sprints: [{ id: 'sprint-old', name: 'sprint-old', status: 'passed' }],
+      verificationCommands: [],
+    });
+
+    assert.equal(await hasVibeInitArtifacts(root), false);
+  });
+
+  it('accepts initialized project state with an empty sprint history', async () => {
+    const root = await makeTempDir('sync-initialized-');
+    await mkdir(path.join(root, 'docs', 'context'), { recursive: true });
+    await writeFile(path.join(root, 'docs', 'context', 'product.md'), '# Product\n\nDemo app\n', 'utf8');
+    await writeJson(path.join(root, '.vibe', 'agent', 'sprint-status.json'), {
+      schemaVersion: '0.1',
+      project: { name: 'demo', createdAt: '2026-04-01T00:00:00.000Z' },
+      sprints: [],
+      verificationCommands: [],
+      sprintsSinceLastAudit: 0,
+    });
+
+    assert.equal(await hasVibeInitArtifacts(root), true);
   });
 });
 
@@ -263,6 +372,33 @@ describe('jsonDeepMerge', () => {
         'vibe:doctor': 'new',
         'vibe:qa': 'qa',
         start: 'next start',
+      },
+    });
+  });
+
+  it('supports exact package script ownership without replacing project scripts', () => {
+    const merged = jsonDeepMerge(
+      {
+        scripts: {
+          test: 'vitest',
+          'test:ui': 'old-ui',
+        },
+      },
+      {
+        scripts: {
+          'test:ui': 'playwright test',
+        },
+      },
+      {
+        strategy: 'json-deep-merge',
+        harnessKeys: ['scripts.test:ui'],
+      },
+    );
+
+    assert.deepEqual(merged, {
+      scripts: {
+        test: 'vitest',
+        'test:ui': 'playwright test',
       },
     });
   });
@@ -658,6 +794,8 @@ describe('sync manifest', () => {
     assert.equal(manifest.files.harness.includes('.claude/skills/lint-patterns/**'), true);
     assert.equal(manifest.files.harness.includes('scripts/vibe-phase0-seal.mjs'), true);
     assert.equal(manifest.files.harness.includes('scripts/vibe-browser-smoke.mjs'), true);
+    assert.equal(manifest.files.harness.includes('playwright.config.ts'), true);
+    assert.equal(manifest.files.harness.includes('test/playwright/**'), true);
     assert.equal(manifest.files.harness.includes('src/commands/bundle-size.ts'), true);
     assert.equal(manifest.files.harness.includes('.claude/skills/vibe-init/templates/readme-skeleton.md'), true);
     assert.equal(manifest.files.harness.includes('docs/release/v1.5.5.md'), true);
@@ -671,7 +809,11 @@ describe('sync manifest', () => {
     assert.equal(manifest.files.harness.includes('docs/release/v1.5.13.md'), true);
     assert.equal(manifest.files.harness.includes('docs/release/v1.5.14.md'), true);
     assert.equal(manifest.files.harness.includes('docs/release/v1.5.15.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.5.16.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.6.3.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.6.4.md'), true);
     assert.equal(manifest.files.harness.includes('.codex/skills/**'), true);
+    assert.equal(manifest.files.harness.includes('test/checkpoint.test.ts'), true);
     assert.equal(manifest.files.harness.includes('test/init-guard.test.ts'), true);
     assert.equal(manifest.files.harness.includes('test/codex-skills.test.ts'), true);
     assert.equal(manifest.files.harness.includes('test/upstream-bootstrap.test.ts'), true);
@@ -695,7 +837,15 @@ describe('sync manifest', () => {
     assert.equal(manifest.files.hybrid['.gitattributes']?.strategy, 'line-union');
     assert.equal(manifest.files.hybrid['AGENTS.md']?.strategy, 'section-merge');
     assert.equal(manifest.files.hybrid['GEMINI.md']?.strategy, 'section-merge');
+    assert.equal(manifest.files.hybrid['.vibe/config.json']?.projectKeys?.includes('audit'), true);
     assert.equal(manifest.files.harness.includes('test/bundle-size.test.ts'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.6.6.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.6.7.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.6.8.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.6.9.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.6.10.md'), true);
+    assert.equal(manifest.files.harness.includes('docs/release/v1.6.11.md'), true);
+    assert.equal(manifest.files.hybrid['package.json']?.harnessKeys?.includes('scripts.test:ui'), true);
     assert.equal(manifest.files.harness.includes('test/phase0-seal.test.ts'), true);
     assert.equal(manifest.files.harness.includes('test/browser-smoke-contract.test.ts'), true);
     assert.equal(manifest.files.project.includes('.vibe/agent/project-map.json'), true);
