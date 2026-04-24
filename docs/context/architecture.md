@@ -110,6 +110,10 @@ Sprint 12 starts output lifecycle separation. Hidden callback interfaces exist f
 
 Raw bundles are append-only/finalized artifacts. The wiki ingest adapter may read `raw/**/source.md` and modify `wiki/**`, but must not rewrite `raw/**`.
 
+Deletion is a separate lifecycle concern from mutation. While present, finalized raw bundles remain immutable. If a source package is no longer valuable, the preferred path is a managed delete command that resolves the job/source bundle from SQLite, removes or tombstones related runtime outputs, delegates wiki note cleanup to the configured LLMwiki/wiki tool, and records a deletion event in SQLite. Manual filesystem deletion is supported only as drift to be detected by a deterministic reconcile command.
+
+The reconcile boundary is worker/CLI-owned, not LLM-owned. It should compare `source_bundles.bundle_path`, `manifest_path`, `source_markdown_path`, `.finalized`, `job_outputs.file_path`, and vault raw/wiki references against the filesystem. LLMwiki lint can validate wiki graph consistency, but it must not be the authority that mutates SQLite state. SQLite tombstones and drift records need a repository migration in a later sprint.
+
 ## Telegram Local Bot API Server Contract
 
 - The worker uses `TELEGRAM_BOT_API_BASE_URL`, normally `http://127.0.0.1:8081`.
@@ -163,6 +167,8 @@ Sprint 7 adds the wiki ingest adapter boundary through `packages/wiki-adapter`: 
 Sprint 8 adds Telegram operator commands through `packages/operator`: `/status` summary/detail responses, failed-job retry back to `QUEUED`, active-job cancellation, concise completion/failure messages, and a daily failed-job report text builder.
 
 Post-MVP utility work adds `job_outputs` and `packages/output-store`. Output records point to generated files under `runtime/outputs`, include an expiry timestamp, and are resolved by Telegram download callbacks. This keeps the future utility-bot delivery behavior separate from wiki/raw bundle semantics.
+
+Vault reconcile work should extend the DB boundary with tombstone/drift metadata for `source_bundles` and possibly a dedicated reconcile findings table. Missing finalized bundles should make retry/status paths explain that the source package is missing or deleted rather than attempting to rebuild raw evidence implicitly.
 
 ## Security Boundaries
 

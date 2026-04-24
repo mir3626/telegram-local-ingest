@@ -40,6 +40,14 @@ The worker now keeps Telegram polling/callback handling responsive while a bound
 
 Regenerate and discard output actions have hidden callback interfaces for future utility-bot UX. Discard is functional for runtime cache cleanup; regenerate currently records an intent event only. Exposing these controls as user-facing Telegram buttons is a low-priority follow-up goal after the upload, post-processing, and download path is stable.
 
+## Retention And Reconcile Policy
+
+Raw bundles and wiki notes can become stale or valueless over time, but deletion must remain explicit because SQLite is the operational source of job state. The preferred deletion path is a managed delete command that starts from a job/source bundle identity, removes or tombstones related runtime outputs, asks the wiki/LLMwiki layer to remove linked wiki material, and records the deletion in SQLite as an event/tombstone instead of silently dropping history.
+
+Manual deletion from Obsidian, `raw/**`, or `wiki/**` is treated as drift, not as the canonical deletion workflow. A deterministic vault reconcile command should scan SQLite records against the filesystem, report missing bundles, orphan raw folders, missing wiki references, and missing output files, then apply tombstones only when the operator explicitly chooses an apply mode. The command must not recreate deleted raw bundles automatically.
+
+LLMwiki lint is useful for wiki graph health, such as broken links, missing source references, or orphan wiki notes. It is not sufficient for SQLite synchronization. SQLite reconciliation must be owned by the worker/CLI because it must update `source_bundles`, `job_outputs`, and job events consistently.
+
 ## Adoption Review Follow-Ups
 
 These product review items should stay visible as separate product work or validation, not as harness adoption scope:
@@ -81,3 +89,4 @@ These product review items should stay visible as separate product work or valid
 - RTZR STT output is copied into the raw bundle immediately because remote STT results are temporary.
 - The initial package manager is npm workspaces to stay compatible with the `vibe-doctor` harness.
 - Generated user-download outputs are operational artifacts under `runtime/outputs`, not source-of-truth vault content.
+- Managed delete and deterministic reconcile are required before treating manual vault/raw/wiki deletion as a supported maintenance workflow.

@@ -3,7 +3,7 @@
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
 > **Current**: sprint-12-utility-cleanup-polish
 > **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess
-> **Pending**:
+> **Pending**: sprint-13-vault-reconcile-retention
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -242,3 +242,22 @@ Telegram mobile/desktop
   - Expired output cleanup is repeatable after worker restart.
   - Public/multi-user service constraints are documented.
 - **status**: in progress. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent. User-facing regenerate/discard controls are deliberately parked as low-priority follow-up work.
+
+## Sprint 13 — Vault Reconcile And Retention
+
+- **id**: `sprint-13-vault-reconcile-retention`
+- **goal**: Make raw/wiki/output deletion safe by separating managed delete, manual drift detection, LLMwiki graph lint, and SQLite tombstone state.
+- **tasks**:
+  - Add SQLite retention metadata for source bundle tombstones and drift status, plus a job event trail for managed/manual deletion outcomes.
+  - Add a deterministic `vault:reconcile` dry-run command that compares `source_bundles`, `job_outputs`, raw bundle files, and wiki references against the filesystem.
+  - Integrate configured LLMwiki lint as a wiki graph check only; it may report broken links/orphans but must not directly mutate SQLite.
+  - Add an explicit apply mode for reconcile findings that can mark missing/deleted bundles and outputs without recreating raw evidence.
+  - Define a managed delete command path for future Telegram/CLI UX that removes related runtime outputs, delegates wiki cleanup, and tombstones SQLite state.
+  - Update `/status`, retry, and download behavior so missing/deleted source bundles or outputs produce clear operator messages.
+- **acceptance criteria**:
+  - Manual deletion of `raw/**` or `wiki/**` produces a deterministic drift report instead of silent desync.
+  - Dry-run reconcile performs no writes; apply mode requires an explicit operator flag.
+  - SQLite can distinguish present, missing, intentionally deleted, and orphaned source/output state.
+  - LLMwiki lint findings are linked into the report without being treated as DB authority.
+  - Retries never recreate missing raw evidence implicitly; they require restore, reimport, or delete-confirm.
+- **status**: planned after Sprint 12 live validation.
