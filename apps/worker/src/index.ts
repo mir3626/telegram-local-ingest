@@ -1261,24 +1261,39 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
   const artifacts = readPreprocessedArtifacts(events);
   const originalSections = await readOriginalPdfSections(artifacts);
   const agent = context.agent ?? { postprocess: (input: AgentPostprocessInput) => runAgentPostprocess(input) };
-  const result = await agent.postprocess({
-    command: context.config.agent.command,
-    jobId: job.id,
-    bundlePath: bundle.bundlePath,
-    rawRoot: path.resolve(context.config.vault.obsidianVaultPath, context.config.vault.rawRoot),
-    outputDir,
-    projectRoot: process.env.INIT_CWD ?? process.cwd(),
-    targetLanguage: context.config.translation.targetLanguage,
-    defaultRelation: context.config.translation.defaultRelation,
-    language,
-    artifacts,
-    ...(job.instructions ? { instructions: job.instructions } : {}),
-    timeoutMs: context.config.agent.timeoutMs,
-  });
+  let result: AgentPostprocessResult;
+  try {
+    result = await agent.postprocess({
+      command: context.config.agent.command,
+      jobId: job.id,
+      bundlePath: bundle.bundlePath,
+      rawRoot: path.resolve(context.config.vault.obsidianVaultPath, context.config.vault.rawRoot),
+      outputDir,
+      projectRoot: process.env.INIT_CWD ?? process.cwd(),
+      targetLanguage: context.config.translation.targetLanguage,
+      defaultRelation: context.config.translation.defaultRelation,
+      language,
+      artifacts,
+      ...(job.instructions ? { instructions: job.instructions } : {}),
+      timeoutMs: context.config.agent.timeoutMs,
+    });
+  } catch (error) {
+    appendAgentPostprocessFailedEvent(context, job, {
+      error: errorMessage(error),
+      reason: "agent_command_failed",
+    });
+    throw error;
+  }
 
   const generatedFiles = await listGeneratedFiles(result.outputDir);
   if (generatedFiles.length === 0) {
-    throw new Error(`Agent postprocess did not create any output files: ${result.outputDir}`);
+    const error = `Agent postprocess did not create any output files: ${result.outputDir}`;
+    appendAgentPostprocessFailedEvent(context, job, {
+      result,
+      error,
+      reason: "no_output_files",
+    });
+    throw new Error(error);
   }
 
   const files = listJobFiles(context.db, job.id);
@@ -1322,6 +1337,32 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
   });
   logWorker(`agent outputs registered job=${job.id} count=${outputs.length}`, "info", "OUTPUT");
   return outputs;
+}
+
+function appendAgentPostprocessFailedEvent(
+  context: WorkerContext,
+  job: StoredJob,
+  input: {
+    error: string;
+    reason: string;
+    result?: AgentPostprocessResult;
+  },
+): void {
+  appendJobEvent(context.db, job.id, "agent.postprocess.failed", "Agent postprocess failed", {
+    provider: context.config.agent.provider,
+    reason: input.reason,
+    error: input.error,
+    ...(input.result
+      ? {
+          command: input.result.command,
+          args: input.result.args,
+          promptPath: input.result.promptPath,
+          outputDir: input.result.outputDir,
+          stdout: input.result.stdout,
+          stderr: input.result.stderr,
+        }
+      : {}),
+  });
 }
 
 function shouldUseAgentSemaphore(context: WorkerContext, job: StoredJob): boolean {

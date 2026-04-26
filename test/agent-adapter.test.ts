@@ -65,7 +65,10 @@ test("buildAgentPrompt asks for block translations when DOCX structure is availa
   assert.match(prompt, /structure path:/);
   assert.match(prompt, /also create `translations\.json`/);
   assert.match(prompt, /exact block ids/);
-  assert.match(prompt, /Create `translated\.md` for human review and `translations\.json`/);
+  assert.match(prompt, /Create text output files only: `translated\.md` and `translations\.json`/);
+  assert.match(prompt, /both `translated\.md` and `translations\.json` exist directly in the output directory/);
+  assert.match(prompt, /Create exactly these two text files directly in the output directory/);
+  assert.doesNotMatch(prompt, /Create Markdown only/);
 });
 
 test("buildAgentCommand replaces placeholders and detects prompt file usage", () => {
@@ -102,6 +105,50 @@ test("runAgentPostprocess writes a prompt, runs the command, and preserves raw f
   assert.equal(calls[0]?.stdin, "");
   assert.equal(calls[0]?.cwd.includes(".agent-work"), true);
   assert.equal(fs.readFileSync(path.join(fixture.rawRoot, "job-1", "source.md"), "utf8"), "source");
+});
+
+test("runAgentPostprocess stages prepared artifacts into the agent workspace", async () => {
+  const fixture = createFixture();
+  const extractedDir = path.join(fixture.root, "runtime", "extracted", "job-1", "preprocess");
+  fs.mkdirSync(extractedDir, { recursive: true });
+  const textPath = path.join(extractedDir, "vendor-template.txt");
+  const structurePath = path.join(extractedDir, "vendor-template.blocks.json");
+  fs.writeFileSync(textPath, "Source text outside the allowed agent root", "utf8");
+  fs.writeFileSync(structurePath, JSON.stringify({
+    schemaVersion: 1,
+    blocks: [{ id: "b0001", text: "Source text outside the allowed agent root" }],
+  }), "utf8");
+  let prompt = "";
+  const runner: CommandRunner = async (_command, args) => {
+    const promptIndex = args.indexOf("--prompt");
+    assert.notEqual(promptIndex, -1);
+    prompt = fs.readFileSync(String(args[promptIndex + 1]), "utf8");
+    fs.writeFileSync(path.join(fixture.outputDir, "translated.md"), "번역 결과", "utf8");
+    fs.writeFileSync(path.join(fixture.outputDir, "translations.json"), JSON.stringify({
+      schemaVersion: 1,
+      blocks: [{ id: "b0001", text: "번역 결과" }],
+    }), "utf8");
+    return { exitCode: 0, stdout: "done", stderr: "" };
+  };
+
+  await runAgentPostprocess({
+    ...inputFixture(fixture),
+    artifacts: [{
+      id: "artifact-docx",
+      kind: "docx_text",
+      fileName: "vendor-template.docx.txt",
+      sourcePath: textPath,
+      structurePath,
+      charCount: 42,
+      truncated: false,
+    }],
+  }, runner);
+
+  assert.doesNotMatch(prompt, new RegExp(escapeRegExp(textPath)));
+  assert.doesNotMatch(prompt, new RegExp(escapeRegExp(structurePath)));
+  assert.match(prompt, /\.agent-work\/job-1\/artifacts\/001-artifact-docx\/vendor-template\.txt/);
+  assert.match(prompt, /\.agent-work\/job-1\/artifacts\/001-artifact-docx\/vendor-template\.blocks\.json/);
+  assert.equal(fs.readFileSync(path.join(fixture.outputDir, "..", ".agent-work", "job-1", "artifacts", "001-artifact-docx", "vendor-template.txt"), "utf8"), "Source text outside the allowed agent root");
 });
 
 test("runAgentPostprocess sends prompt on stdin when command has no prompt placeholder", async () => {
@@ -155,6 +202,10 @@ function createFixture(): { root: string; rawRoot: string; bundlePath: string; o
   const transcriptPath = path.join(bundlePath, "extracted", "meeting.transcript.md");
   fs.writeFileSync(transcriptPath, "회의 내용", "utf8");
   return { root, rawRoot, bundlePath, outputDir, transcriptPath };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function inputFixture(fixture: ReturnType<typeof createFixture>) {

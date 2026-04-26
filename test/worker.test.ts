@@ -143,6 +143,67 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
   }
 });
 
+test("runWorkerOnce records agent diagnostics when command exits without outputs", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "documents/vendor-note.txt", "This vendor note needs Korean translation.\n");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest project:sales", "documents/vendor-note.txt"),
+      ),
+      agent: {
+        async postprocess(input): Promise<AgentPostprocessResult> {
+          fs.mkdirSync(input.outputDir, { recursive: true });
+          return {
+            command: "custom-agent",
+            args: ["--prompt", "prompt.md", "--output", input.outputDir],
+            promptPath: path.join(input.outputDir, "..", ".agent-work", "prompt.md"),
+            outputDir: input.outputDir,
+            stdout: "agent completed without writing files",
+            stderr: "no tool error",
+          };
+        },
+      },
+    };
+
+    await assert.rejects(
+      () => runWorkerOnce(context),
+      /Agent postprocess did not create any output files/,
+    );
+
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "FAILED");
+    const failed = listJobEvents(dbHandle.db, "tg_300_21").find((event) => event.type === "agent.postprocess.failed");
+    assert.ok(failed);
+    const data = failed.data as {
+      reason?: string;
+      stdout?: string;
+      stderr?: string;
+      outputDir?: string;
+      command?: string;
+    };
+    assert.equal(data.reason, "no_output_files");
+    assert.equal(data.command, "custom-agent");
+    assert.equal(data.stdout, "agent completed without writing files");
+    assert.equal(data.stderr, "no tool error");
+    assert.match(data.outputDir ?? "", /agent-postprocess\/tg_300_21\/outputs$/);
+    assert.match(sentMessages.at(-1)?.text ?? "", /Agent postprocess did not create any output files/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce preserves DOCX templates by replacing structured text blocks", async () => {
   const fixture = createFixture();
   writeMinimalDocx(

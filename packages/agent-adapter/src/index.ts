@@ -74,9 +74,10 @@ export async function runAgentPostprocess(
 ): Promise<AgentPostprocessResult> {
   validateAgentPaths(input);
   await fs.mkdir(input.outputDir, { recursive: true });
-  const workDir = path.join(path.dirname(path.resolve(input.outputDir)), ".agent-work", path.basename(input.outputDir));
+  const workDir = path.join(path.dirname(path.resolve(input.outputDir)), ".agent-work", safePathSegment(input.jobId));
   await fs.mkdir(workDir, { recursive: true });
-  const prompt = buildAgentPrompt(input);
+  const promptInput = await stageAgentArtifacts(input, workDir);
+  const prompt = buildAgentPrompt(promptInput);
   const promptPath = path.join(workDir, "prompt.md");
   await fs.writeFile(promptPath, prompt, "utf8");
 
@@ -149,7 +150,9 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "",
     "Use the fixed business document translation preset below whenever translation is needed.",
     "Run the translator/reviewer methodology internally; do not write separate draft files unless they are needed for the final deliverable.",
-    "Create Markdown only. Do not use DOCX/PDF/HWP/HWPX/ZIP/binary document generation tools or skills.",
+    hasStructuredDocx
+      ? "Create text output files only: `translated.md` and `translations.json`. Do not use DOCX/PDF/HWP/HWPX/ZIP/binary document generation tools or skills."
+      : "Create Markdown only. Do not use DOCX/PDF/HWP/HWPX/ZIP/binary document generation tools or skills.",
     "Use Markdown headings, numbering, tables, and lists to preserve the source structure clearly for the worker renderer.",
     "Do not flatten paragraphs, tables, numbered clauses, or lists into one pasted block.",
     ...(hasStructuredDocx
@@ -157,6 +160,7 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
           "For artifacts with a structure path, also create `translations.json` using the exact block ids from that structure file.",
           "The JSON schema is: `{ \"schemaVersion\": 1, \"blocks\": [{ \"id\": \"b0001\", \"text\": \"translated block text\" }] }`.",
           "Do not omit, rename, merge, split, or reorder block ids in `translations.json`; leave uncertain blocks translated as faithfully as possible.",
+          "The job is incomplete unless both `translated.md` and `translations.json` exist directly in the output directory.",
         ]
       : []),
     "Do not append the original/source section yourself unless the operator explicitly asks for agent-side source reproduction. The worker composes the final deliverable and appends the source section separately.",
@@ -169,7 +173,7 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "## Required Output",
     "",
     hasStructuredDocx
-      ? "- Create `translated.md` for human review and `translations.json` for worker-owned DOCX template replacement."
+      ? "- Create exactly these two text files directly in the output directory: `translated.md` for human review and `translations.json` for worker-owned DOCX template replacement."
       : "- Create exactly one final translated Markdown file named `translated.md` in the output directory.",
     "- Do not create `.docx`, `.pdf`, `.hwp`, `.hwpx`, `.zip`, or any other binary document file.",
     "- Put translation metadata, glossary, translated document, and translator notes into `translated.md`. Put only block id translations in `translations.json` when that file is required. Do not append a duplicate original/source section unless explicitly requested, because the worker may append `[원문]` itself.",
@@ -178,6 +182,43 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     buildBusinessDocumentTranslationPreset(input, outputFormat),
     "",
   ].join("\n");
+}
+
+async function stageAgentArtifacts(input: AgentPostprocessInput, workDir: string): Promise<AgentPostprocessInput> {
+  if (input.artifacts.length === 0) {
+    return input;
+  }
+  const artifactsDir = path.join(workDir, "artifacts");
+  await fs.rm(artifactsDir, { recursive: true, force: true });
+  await fs.mkdir(artifactsDir, { recursive: true });
+  const artifacts = await Promise.all(input.artifacts.map(async (artifact, index) => {
+    const artifactDir = path.join(
+      artifactsDir,
+      `${String(index + 1).padStart(3, "0")}-${safePathSegment(artifact.id || artifact.fileName)}`,
+    );
+    await fs.mkdir(artifactDir, { recursive: true });
+    const stagedSourcePath = path.join(artifactDir, path.basename(artifact.sourcePath));
+    await fs.copyFile(artifact.sourcePath, stagedSourcePath);
+    let stagedStructurePath: string | undefined;
+    if (artifact.structurePath) {
+      stagedStructurePath = path.join(artifactDir, path.basename(artifact.structurePath));
+      await fs.copyFile(artifact.structurePath, stagedStructurePath);
+    }
+    return {
+      ...artifact,
+      sourcePath: stagedSourcePath,
+      ...(stagedStructurePath ? { structurePath: stagedStructurePath } : {}),
+    };
+  }));
+  return {
+    ...input,
+    artifacts,
+  };
+}
+
+function safePathSegment(value: string): string {
+  const sanitized = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return sanitized.length > 0 ? sanitized.slice(0, 80) : "artifact";
 }
 
 function buildBusinessDocumentTranslationPreset(input: AgentPostprocessInput, outputFormat: ".md"): string {
