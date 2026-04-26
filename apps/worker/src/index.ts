@@ -1360,6 +1360,7 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
       fileId: artifact.fileId,
       fileName: artifact.fileName,
       sourcePath: artifact.sourcePath,
+      structurePath: artifact.structurePath,
       charCount: artifact.charCount,
       truncated: artifact.truncated,
     })),
@@ -1723,14 +1724,18 @@ function readPreprocessedArtifacts(events: StoredJobEvent[]): AgentPostprocessIn
     if (!isRecord(artifact) || typeof artifact.id !== "string" || typeof artifact.sourcePath !== "string") {
       return [];
     }
-    return [{
+    const result: AgentPostprocessInput["artifacts"][number] = {
       id: artifact.id,
       kind: typeof artifact.kind === "string" ? artifact.kind : "unknown",
       fileName: typeof artifact.fileName === "string" ? artifact.fileName : artifact.id,
       sourcePath: artifact.sourcePath,
       charCount: typeof artifact.charCount === "number" ? artifact.charCount : 0,
       truncated: typeof artifact.truncated === "boolean" ? artifact.truncated : false,
-    }];
+    };
+    if (typeof artifact.structurePath === "string") {
+      result.structurePath = artifact.structurePath;
+    }
+    return [result];
   });
 }
 
@@ -1904,6 +1909,33 @@ async function createDocumentTranslationDocx(input: {
     throw new Error(`Agent postprocess did not create translated markdown/text output in ${input.outputDir}`);
   }
 
+  const workDir = path.join(path.dirname(input.outputDir), ".render-work");
+  const translationMarkdownPath = path.join(workDir, "translation.md");
+  const fallbackMarkdownPath = path.join(workDir, "original-and-translated.md");
+  const docxName = buildTranslatedOutputFileName(input.documentSource.fileName, ".docx");
+  const docxPath = path.join(input.outputDir, docxName);
+  const translatedOnlyDocxPath = path.join(workDir, docxName);
+  await fs.mkdir(workDir, { recursive: true });
+  const translationsFile = findDocxTranslationsFile(input.generatedFiles);
+  if (input.documentSource.kind === "docx" && translationsFile) {
+    try {
+      await createTemplatePreservedDocx({
+        originalDocxPath: input.documentSource.path,
+        translationsPath: translationsFile.path,
+        workDir,
+        outputPath: docxPath,
+      });
+      await validateDocxOutput(docxPath);
+      logWorker(`template-preserved docx render complete job=${input.job.id} source=${input.documentSource.fileName}`, "info", "OUTPUT");
+      return {
+        path: docxPath,
+        relativePath: docxName,
+      };
+    } catch (error) {
+      logWorker(`template-preserved docx render failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
+    }
+  }
+
   const pandocBin = await findExecutable(process.env.PANDOC_BIN, "pandoc");
   if (!pandocBin) {
     logWorker(
@@ -1919,13 +1951,6 @@ async function createDocumentTranslationDocx(input: {
   }
 
   const translationText = await fs.readFile(translationFile.path, "utf8");
-  const workDir = path.join(path.dirname(input.outputDir), ".render-work");
-  const translationMarkdownPath = path.join(workDir, "translation.md");
-  const fallbackMarkdownPath = path.join(workDir, "original-and-translated.md");
-  const docxName = buildTranslatedOutputFileName(input.documentSource.fileName, ".docx");
-  const docxPath = path.join(input.outputDir, docxName);
-  const translatedOnlyDocxPath = path.join(workDir, docxName);
-  await fs.mkdir(workDir, { recursive: true });
   await fs.writeFile(translationMarkdownPath, renderTranslationOnlyMarkdown({
     job: input.job,
     translation: {
@@ -2021,6 +2046,31 @@ async function renderCombinedMarkdownDocx(input: {
   });
 }
 
+async function createTemplatePreservedDocx(input: {
+  originalDocxPath: string;
+  translationsPath: string;
+  workDir: string;
+  outputPath: string;
+}): Promise<void> {
+  const [entries, translations] = await Promise.all([
+    readZipEntries(input.originalDocxPath),
+    readDocxBlockTranslations(input.translationsPath),
+  ]);
+  const originalDocument = entries.get("word/document.xml");
+  if (!originalDocument) {
+    throw new Error("DOCX document.xml is missing");
+  }
+  const translatedXml = applyBlockTranslationsToWordDocumentXml(originalDocument.toString("utf8"), translations);
+  entries.set("word/document.xml", Buffer.from(translatedXml, "utf8"));
+  const translatedOnlyPath = path.join(input.workDir, "template-preserved-translated.docx");
+  await writeZipEntries(translatedOnlyPath, entries);
+  await appendOriginalDocxSection({
+    translatedDocxPath: translatedOnlyPath,
+    originalDocxPath: input.originalDocxPath,
+    outputPath: input.outputPath,
+  });
+}
+
 async function validateDocxOutput(filePath: string): Promise<void> {
   const entries = await readZipEntries(filePath);
   if (!entries.has("[Content_Types].xml") || !entries.has("word/document.xml")) {
@@ -2037,6 +2087,11 @@ async function copyGeneratedFileWithTranslatedName(sourcePath: string, outputDir
     path: destinationPath,
     relativePath: fileName,
   };
+}
+
+function findDocxTranslationsFile(files: GeneratedFile[]): GeneratedFile | null {
+  const sorted = [...files].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return sorted.find((file) => file.relativePath.toLowerCase() === "translations.json") ?? null;
 }
 
 function renderTranslationOnlyMarkdown(input: {
@@ -2153,6 +2208,117 @@ function appendOriginalDocumentXml(translatedXml: string, originalXml: string): 
   ].join("");
 }
 
+function applyBlockTranslationsToWordDocumentXml(xml: string, translations: Map<string, string>): string {
+  const blocks = extractTranslatableWordParagraphBlocks(xml);
+  if (blocks.length === 0) {
+    throw new Error("DOCX has no translatable text blocks");
+  }
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (const block of blocks) {
+    const translation = translations.get(block.id);
+    if (translation === undefined || translation.trim().length === 0) {
+      throw new Error(`translations.json is missing translated text for block ${block.id}`);
+    }
+    chunks.push(xml.slice(cursor, block.start));
+    chunks.push(replaceParagraphText(block.xml, translation));
+    cursor = block.end;
+  }
+  chunks.push(xml.slice(cursor));
+  return chunks.join("");
+}
+
+interface WordParagraphBlock {
+  id: string;
+  text: string;
+  xml: string;
+  start: number;
+  end: number;
+}
+
+function extractTranslatableWordParagraphBlocks(xml: string): WordParagraphBlock[] {
+  const blocks: WordParagraphBlock[] = [];
+  for (const match of xml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)) {
+    const paragraph = match[0];
+    const start = match.index ?? 0;
+    const text = extractWordParagraphText(paragraph).trim();
+    if (text.length === 0) {
+      continue;
+    }
+    blocks.push({
+      id: `b${String(blocks.length + 1).padStart(4, "0")}`,
+      text,
+      xml: paragraph,
+      start,
+      end: start + paragraph.length,
+    });
+  }
+  return blocks;
+}
+
+function extractWordParagraphText(paragraphXml: string): string {
+  const normalized = paragraphXml
+    .replace(/<w:tab\b[^>]*\/>/g, "\t")
+    .replace(/<w:br\b[^>]*\/>/g, "\n");
+  return [...normalized.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)]
+    .map((match) => decodeXmlText(match[1] ?? ""))
+    .join("");
+}
+
+function replaceParagraphText(paragraphXml: string, text: string): string {
+  let replaced = "";
+  let cursor = 0;
+  let wroteTranslation = false;
+  for (const match of paragraphXml.matchAll(/<w:t\b[^>]*>[\s\S]*?<\/w:t>/g)) {
+    const token = match[0];
+    const start = match.index ?? 0;
+    const openEnd = token.indexOf(">");
+    if (openEnd < 0) {
+      continue;
+    }
+    let openTag = token.slice(0, openEnd + 1);
+    const replacement = wroteTranslation ? "" : renderWordTextContent(text);
+    if (!wroteTranslation && needsPreserveSpace(text) && !/\bxml:space=/.test(openTag)) {
+      openTag = openTag.replace("<w:t", '<w:t xml:space="preserve"');
+    }
+    replaced += paragraphXml.slice(cursor, start);
+    replaced += `${openTag}${replacement}</w:t>`;
+    cursor = start + token.length;
+    wroteTranslation = true;
+  }
+  if (!wroteTranslation) {
+    return paragraphXml;
+  }
+  return `${replaced}${paragraphXml.slice(cursor)}`;
+}
+
+function renderWordTextContent(text: string): string {
+  return sanitizeXmlText(text)
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => escapeWordXmlText(line))
+    .join('</w:t><w:br/><w:t xml:space="preserve">');
+}
+
+function needsPreserveSpace(text: string): boolean {
+  return /^\s|\s$/.test(text);
+}
+
+async function readDocxBlockTranslations(filePath: string): Promise<Map<string, string>> {
+  const parsed: unknown = JSON.parse(await fs.readFile(filePath, "utf8"));
+  if (!isRecord(parsed) || !Array.isArray(parsed.blocks)) {
+    throw new Error("translations.json must contain a blocks array");
+  }
+  const translations = new Map<string, string>();
+  for (const block of parsed.blocks) {
+    if (!isRecord(block) || typeof block.id !== "string" || typeof block.text !== "string") {
+      throw new Error("translations.json blocks must contain string id and text");
+    }
+    translations.set(block.id, block.text);
+  }
+  return translations;
+}
+
 function appendOriginalTextSectionsDocumentXml(translatedXml: string, originalSections: PdfTextSection[]): string {
   const translatedBody = splitWordBodyXml(translatedXml);
   const headingXml = [
@@ -2198,6 +2364,15 @@ function escapeWordXmlText(value: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function decodeXmlText(text: string): string {
+  return text
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 function sanitizeXmlText(value: string): string {

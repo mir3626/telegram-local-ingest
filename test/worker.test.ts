@@ -143,7 +143,7 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
   }
 });
 
-test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is available", async () => {
+test("runWorkerOnce preserves DOCX templates by replacing structured text blocks", async () => {
   const fixture = createFixture();
   writeMinimalDocx(
     fixture.botRoot,
@@ -151,13 +151,17 @@ test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is av
     "This vendor agreement needs translation and business formatting.",
   );
   const toolRoot = path.join(fixture.root, "tools");
-  const fakePandoc = writeFakePandoc(toolRoot);
+  const failingPandoc = writeExecutable(toolRoot, "pandoc", [
+    "#!/bin/sh",
+    "echo 'pandoc should not run for template-preserved DOCX' >&2",
+    "exit 99",
+  ].join("\n"));
   const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const agentInputs: AgentPostprocessInput[] = [];
   try {
-    process.env.PANDOC_BIN = fakePandoc;
+    process.env.PANDOC_BIN = failingPandoc;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.agent = {
@@ -179,17 +183,20 @@ test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is av
 
     assert.equal(result.jobsProcessed, 1);
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    assert.ok(agentInputs[0]?.artifacts.some((artifact) => artifact.structurePath?.endsWith("vendor-template.blocks.json")));
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.fileName, "vendor-template_translated.docx");
     assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     const documentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
     assert.match(documentXml, /번역 결과/);
+    assert.match(documentXml, /w:pStyle w:val="TemplateBody"/);
     assert.match(documentXml, /\[원문\]/);
     assert.match(documentXml, /This vendor agreement needs translation/);
     const renderedDocx = path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "vendor-template_translated.docx");
     assert.ok(extractZipEntry(fs.readFileSync(renderedDocx), "word/document.xml"));
     assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translated.md")), false);
+    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translations.json")), false);
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
   } finally {
     restoreEnv("PANDOC_BIN", oldPandoc);
@@ -1379,7 +1386,7 @@ function writeMinimalDocx(root: string, relativePath: string, textContent: strin
   const documentXml = [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
-    "<w:body><w:p><w:r><w:t>",
+    '<w:body><w:p><w:pPr><w:pStyle w:val="TemplateBody"/></w:pPr><w:r><w:t>',
     escaped,
     "</w:t></w:r></w:p></w:body></w:document>",
   ].join("");
@@ -1842,6 +1849,19 @@ function mockAgentPostprocessor(calls: AgentPostprocessInput[]): AgentPostproces
       calls.push(input);
       fs.mkdirSync(input.outputDir, { recursive: true });
       fs.writeFileSync(path.join(input.outputDir, "translated.md"), "번역 결과\n", "utf8");
+      const structuredArtifact = input.artifacts.find((artifact) => artifact.structurePath);
+      if (structuredArtifact?.structurePath) {
+        const structure = JSON.parse(fs.readFileSync(structuredArtifact.structurePath, "utf8")) as {
+          blocks?: Array<{ id: string; text: string }>;
+        };
+        fs.writeFileSync(path.join(input.outputDir, "translations.json"), `${JSON.stringify({
+          schemaVersion: 1,
+          blocks: (structure.blocks ?? []).map((block) => ({
+            id: block.id,
+            text: block.id === "b0001" ? "번역 결과" : `번역 결과 ${block.id}`,
+          })),
+        }, null, 2)}\n`, "utf8");
+      }
       return {
         command: "custom-agent",
         args: ["--prompt", "prompt.md"],

@@ -75,7 +75,15 @@ test("collectPreprocessedTextArtifacts extracts DOCX text into runtime artifacts
   assert.equal(result.artifacts[0]?.kind, "docx_text");
   assert.match(result.artifacts[0]?.text ?? "", /vendor update requires Korean translation & formatting/);
   assert.match(result.artifacts[0]?.sourcePath ?? "", /runtime\/extracted\/job-docx\/preprocess\/file-docx\/vendor-update\.txt$/);
+  assert.match(result.artifacts[0]?.structurePath ?? "", /runtime\/extracted\/job-docx\/preprocess\/file-docx\/vendor-update\.blocks\.json$/);
   assert.match(fs.readFileSync(result.artifacts[0]?.sourcePath ?? "", "utf8"), /vendor update requires Korean translation/);
+  const blocks = JSON.parse(fs.readFileSync(result.artifacts[0]?.structurePath ?? "", "utf8")) as {
+    blocks: Array<{ id: string; text: string }>;
+  };
+  assert.deepEqual(blocks.blocks, [{
+    id: "b0001",
+    text: "This vendor update requires Korean translation & formatting.",
+  }]);
 });
 
 test("collectPreprocessedTextArtifacts extracts EML message text into runtime artifacts", async () => {

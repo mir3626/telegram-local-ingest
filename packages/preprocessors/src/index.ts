@@ -30,9 +30,15 @@ export interface PreprocessedTextArtifact {
   fileId?: string;
   fileName: string;
   sourcePath: string;
+  structurePath?: string;
   text: string;
   charCount: number;
   truncated: boolean;
+}
+
+export interface DocxTextBlock {
+  id: string;
+  text: string;
 }
 
 export interface SkippedPreprocessFile {
@@ -252,12 +258,14 @@ export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput
       continue;
     }
     const extractedPath = await writeExtractedTextArtifact(input.artifactRoot, file, sourcePath, preview.text);
+    const structurePath = await writeDocxStructureArtifact(extractedPath, file, sourcePath, preview.blocks);
     artifacts.push({
       id: `${file.id}:docx_text`,
       kind: "docx_text",
       fileId: file.id,
       fileName: `${file.originalName ?? path.basename(sourcePath)}.txt`,
       sourcePath: extractedPath,
+      structurePath,
       text: preview.text,
       charCount: preview.text.length,
       truncated: preview.truncated,
@@ -358,13 +366,15 @@ async function readUtf8Preview(filePath: string, maxBytes: number): Promise<{ te
   }
 }
 
-async function readDocxTextPreview(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+async function readDocxTextPreview(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean; blocks: DocxTextBlock[] }> {
   const buffer = await fs.readFile(filePath);
   const documentXml = extractZipEntry(buffer, "word/document.xml");
   if (!documentXml) {
     throw new Error(`DOCX document XML not found: ${filePath}`);
   }
-  return truncateUtf8(extractTextFromWordDocumentXml(documentXml.toString("utf8")), maxBytes);
+  const blocks = extractTextBlocksFromWordDocumentXml(documentXml.toString("utf8"));
+  const preview = truncateUtf8(blocks.map((block) => block.text).join("\n"), maxBytes);
+  return { ...preview, blocks };
 }
 
 async function readEmlTextPreview(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
@@ -509,6 +519,24 @@ async function writeExtractedTextArtifact(
   return outputPath;
 }
 
+async function writeDocxStructureArtifact(
+  extractedPath: string,
+  file: StoredJobFile,
+  sourcePath: string,
+  blocks: DocxTextBlock[],
+): Promise<string> {
+  const outputPath = path.join(
+    path.dirname(extractedPath),
+    `${artifactStem(file.originalName ?? path.basename(sourcePath))}.blocks.json`,
+  );
+  await fs.writeFile(outputPath, `${JSON.stringify({
+    schemaVersion: 1,
+    sourceFileName: file.originalName ?? path.basename(sourcePath),
+    blocks,
+  }, null, 2)}\n`, "utf8");
+  return outputPath;
+}
+
 function extractZipEntry(zip: Buffer, entryName: string): Buffer | null {
   const eocdOffset = findEndOfCentralDirectory(zip);
   if (eocdOffset < 0) {
@@ -566,19 +594,30 @@ function inflateZipEntry(zip: Buffer, localHeaderOffset: number, compressedSize:
 }
 
 function extractTextFromWordDocumentXml(xml: string): string {
+  return extractTextBlocksFromWordDocumentXml(xml).map((block) => block.text).join("\n");
+}
+
+function extractTextBlocksFromWordDocumentXml(xml: string): DocxTextBlock[] {
   const paragraphs = xml.match(/<w:p\b[\s\S]*?<\/w:p>/g) ?? [xml];
-  return paragraphs
-    .map((paragraph) => {
+  const blocks: DocxTextBlock[] = [];
+  for (const paragraph of paragraphs) {
+    const text = (() => {
       const normalized = paragraph
         .replace(/<w:tab\b[^>]*\/>/g, "\t")
         .replace(/<w:br\b[^>]*\/>/g, "\n");
       return [...normalized.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)]
         .map((match) => decodeXmlText(match[1] ?? ""))
         .join("");
-    })
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .join("\n");
+    })().trim();
+    if (text.length === 0) {
+      continue;
+    }
+    blocks.push({
+      id: `b${String(blocks.length + 1).padStart(4, "0")}`,
+      text,
+    });
+  }
+  return blocks;
 }
 
 type MimeHeaders = Map<string, string>;

@@ -47,6 +47,27 @@ test("buildAgentPrompt requires Markdown output for document-derived artifacts",
   assert.match(prompt, /OUTPUT_FORMAT: \.md \(worker-rendered to the final Telegram document format\)/);
 });
 
+test("buildAgentPrompt asks for block translations when DOCX structure is available", () => {
+  const fixture = createFixture();
+  const prompt = buildAgentPrompt({
+    ...inputFixture(fixture),
+    artifacts: [{
+      id: "artifact-docx",
+      kind: "docx_text",
+      fileName: "vendor-template.docx.txt",
+      sourcePath: fixture.transcriptPath,
+      structurePath: path.join(fixture.root, "vendor-template.blocks.json"),
+      charCount: 128,
+      truncated: false,
+    }],
+  });
+
+  assert.match(prompt, /structure path:/);
+  assert.match(prompt, /also create `translations\.json`/);
+  assert.match(prompt, /exact block ids/);
+  assert.match(prompt, /Create `translated\.md` for human review and `translations\.json`/);
+});
+
 test("buildAgentCommand replaces placeholders and detects prompt file usage", () => {
   const command = buildAgentCommand("{projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}", {
     bundlePath: "/raw/job",

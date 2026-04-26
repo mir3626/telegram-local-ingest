@@ -16,6 +16,7 @@ export interface AgentTextArtifact {
   kind: string;
   fileName: string;
   sourcePath: string;
+  structurePath?: string;
   charCount: number;
   truncated: boolean;
 }
@@ -113,12 +114,14 @@ export async function runAgentPostprocess(
 
 export function buildAgentPrompt(input: AgentPostprocessInput): string {
   const outputFormat = ".md" as const;
+  const hasStructuredDocx = input.artifacts.some((artifact) => artifact.structurePath);
   const artifactLines = input.artifacts.length === 0
     ? ["- None"]
     : input.artifacts.map((artifact) => [
         `- ${artifact.fileName}`,
         `  - kind: ${artifact.kind}`,
         `  - path: ${artifact.sourcePath}`,
+        ...(artifact.structurePath ? [`  - structure path: ${artifact.structurePath}`] : []),
         `  - chars: ${artifact.charCount}${artifact.truncated ? " (truncated preview)" : ""}`,
       ].join("\n"));
 
@@ -149,6 +152,13 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "Create Markdown only. Do not use DOCX/PDF/HWP/HWPX/ZIP/binary document generation tools or skills.",
     "Use Markdown headings, numbering, tables, and lists to preserve the source structure clearly for the worker renderer.",
     "Do not flatten paragraphs, tables, numbered clauses, or lists into one pasted block.",
+    ...(hasStructuredDocx
+      ? [
+          "For artifacts with a structure path, also create `translations.json` using the exact block ids from that structure file.",
+          "The JSON schema is: `{ \"schemaVersion\": 1, \"blocks\": [{ \"id\": \"b0001\", \"text\": \"translated block text\" }] }`.",
+          "Do not omit, rename, merge, split, or reorder block ids in `translations.json`; leave uncertain blocks translated as faithfully as possible.",
+        ]
+      : []),
     "Do not append the original/source section yourself unless the operator explicitly asks for agent-side source reproduction. The worker composes the final deliverable and appends the source section separately.",
     "Do not create DOCX, PDF, HWP, HWPX, ZIP, or other binary output yourself. The worker renders and validates the final Telegram-deliverable file.",
     "",
@@ -158,9 +168,11 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "",
     "## Required Output",
     "",
-    "- Create exactly one final translated Markdown file named `translated.md` in the output directory.",
+    hasStructuredDocx
+      ? "- Create `translated.md` for human review and `translations.json` for worker-owned DOCX template replacement."
+      : "- Create exactly one final translated Markdown file named `translated.md` in the output directory.",
     "- Do not create `.docx`, `.pdf`, `.hwp`, `.hwpx`, `.zip`, or any other binary document file.",
-    "- Put translation metadata, glossary, translated document, and translator notes into `translated.md`. Do not append a duplicate original/source section unless explicitly requested, because the worker may append `[원문]` itself.",
+    "- Put translation metadata, glossary, translated document, and translator notes into `translated.md`. Put only block id translations in `translations.json` when that file is required. Do not append a duplicate original/source section unless explicitly requested, because the worker may append `[원문]` itself.",
     "- Keep any temporary reasoning or scratch files out of the output directory.",
     "",
     buildBusinessDocumentTranslationPreset(input, outputFormat),
