@@ -299,6 +299,11 @@ test("runWorkerOnce preserves DOCX templates by replacing structured text blocks
     assert.match(documentXml, /Translation metadata block/);
     assert.match(documentXml, /Glossary/);
     assert.match(documentXml, /vendor agreement/);
+    assert.match(documentXml, /<w:tbl>/);
+    assert.match(documentXml, /<w:tblBorders>/);
+    assert.match(documentXml, /<w:shd w:val="clear" w:fill="D9EAF7"\/>/);
+    assert.match(documentXml, /<w:t xml:space="preserve">SOURCE term<\/w:t>/);
+    assert.doesNotMatch(documentXml, /SOURCE term\tTARGET term/);
     assert.match(documentXml, /번역 결과/);
     assert.match(documentXml, /Translator's notes/);
     assert.ok(documentXml.indexOf("Glossary") < documentXml.indexOf("번역 결과"));

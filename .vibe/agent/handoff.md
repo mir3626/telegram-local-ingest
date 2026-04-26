@@ -72,6 +72,8 @@ Claude Code live post-processing exposed a permission mismatch in job `tg_598574
 
 Template-preserved DOCX output now keeps the agent's support material. `translations.json` remains the source for replacing original DOCX body blocks inside the uploaded package/template, while `translated.md` is parsed for translation metadata, glossary/terminology sections, and translator notes. Those support sections are inserted around the preserved DOCX body before the worker appends `[원문]`, so the final document keeps both the source template and the review-friendly translation context.
 
+Support-section Markdown tables now render as actual Word tables in template-preserved DOCX output. The worker converts glossary/terminology tables from `translated.md` into `<w:tbl>` with borders, column grid, cell margins, and shaded bold header cells rather than flattening table rows into tab-separated paragraphs.
+
 ## Durable Decisions
 
 - Use Telegram as the single capture, command, and notify channel.
@@ -113,6 +115,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 
 ## Latest Verification
 
+- Latest verification after support-section DOCX table formatting: `npm run typecheck` passed; focused `test/worker.test.ts` passed (`24`); `npm run build` passed; full `npm test` passed (`438` passed, `1` skipped); `git diff --check` passed; UTF-8/mojibake checks passed; `npm run vibe:checkpoint` passed; `npm run ops:restart` passed and readiness reported jobs=10/stt=10/agent=10, RTZR, Claude postprocess, pandoc, PDF tools, and OCR tools ready.
 - Latest verification after template-preserved DOCX metadata/glossary restoration: `npm run typecheck` passed; focused `test/agent-adapter.test.ts` and `test/worker.test.ts` passed (`33`); `npm run build` passed; full `npm test` passed (`438` passed, `1` skipped); `git diff --check` passed; UTF-8/mojibake checks passed; `npm run vibe:checkpoint` passed; `npm run ops:restart` passed and readiness reported jobs=10/stt=10/agent=10, RTZR, Claude postprocess, pandoc, PDF tools, and OCR tools ready.
 - Latest verification after Claude prepared-artifact staging fix: `npm run typecheck` passed; focused `test/agent-adapter.test.ts` and `test/worker.test.ts` passed (`33`); `npm run build` passed; full `npm test` passed (`438` passed, `1` skipped); `git diff --check` passed; UTF-8/mojibake checks passed; `npm run vibe:checkpoint` passed; `npm run ops:restart` passed and readiness reported jobs=10/stt=10/agent=10, RTZR, Claude postprocess, pandoc, PDF tools, and OCR tools ready. Failed live job `tg_5985744318_161` was not automatically retried.
 - Latest verification after DOCX template-preserved block replacement: `npm run typecheck` passed; focused `test/preprocessors.test.ts`, `test/agent-adapter.test.ts`, and `test/worker.test.ts` passed (`40`); `npm run build` passed; full `npm test` passed (`436` passed, `1` skipped); `git diff --check` passed; UTF-8/mojibake checks passed; `npm run ops:restart` passed and readiness reported jobs=10/stt=10/agent=10, RTZR, Claude postprocess, pandoc, PDF tools, and OCR tools ready; `npm run vibe:checkpoint` passed.

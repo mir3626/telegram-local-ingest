@@ -2350,10 +2350,23 @@ function insertTemplateSupportSections(xml: string, support: TemplateSupportSect
 }
 
 function renderSupportMarkdownWordXml(markdown: string): string {
-  return cleanSupportMarkdown(markdown)
-    .split("\n")
-    .map((line) => renderSupportMarkdownLineWordXml(line))
-    .join("");
+  const lines = cleanSupportMarkdown(markdown).split("\n");
+  const chunks: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (isMarkdownTableStart(lines, index)) {
+      const rows = [parseMarkdownTableRow(lines[index] ?? "")];
+      index += 2;
+      while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
+        rows.push(parseMarkdownTableRow(lines[index] ?? ""));
+        index += 1;
+      }
+      chunks.push(renderSupportMarkdownTableWordXml(rows));
+      index -= 1;
+      continue;
+    }
+    chunks.push(renderSupportMarkdownLineWordXml(lines[index] ?? ""));
+  }
+  return chunks.join("");
 }
 
 function renderSupportMarkdownLineWordXml(line: string): string {
@@ -2366,13 +2379,71 @@ function renderSupportMarkdownLineWordXml(line: string): string {
   if (line.trim().length === 0) {
     return "<w:p/>";
   }
-  if (/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)) {
-    return "";
-  }
-  const text = line.includes("|")
-    ? line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((cell) => cell.trim()).join("\t")
-    : line;
-  return `<w:p><w:r><w:t xml:space="preserve">${escapeWordXmlText(text)}</w:t></w:r></w:p>`;
+  return `<w:p><w:r><w:t xml:space="preserve">${escapeWordXmlText(line)}</w:t></w:r></w:p>`;
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  return isMarkdownTableRow(lines[index] ?? "") && isMarkdownTableSeparator(lines[index + 1] ?? "");
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && !isMarkdownTableSeparator(trimmed);
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function parseMarkdownTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function renderSupportMarkdownTableWordXml(rows: string[][]): string {
+  const columnCount = Math.max(1, ...rows.map((row) => row.length));
+  const tableWidth = 9360;
+  const columnWidth = Math.floor(tableWidth / columnCount);
+  const gridXml = Array.from({ length: columnCount }, () => `<w:gridCol w:w="${columnWidth}"/>`).join("");
+  const rowXml = rows.map((row, index) => renderSupportMarkdownTableRowWordXml(row, columnCount, columnWidth, index === 0)).join("");
+  return [
+    "<w:tbl>",
+    "<w:tblPr>",
+    `<w:tblW w:w="${tableWidth}" w:type="dxa"/>`,
+    '<w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:left w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:right w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/></w:tblBorders>',
+    '<w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar>',
+    "</w:tblPr>",
+    `<w:tblGrid>${gridXml}</w:tblGrid>`,
+    rowXml,
+    "</w:tbl>",
+  ].join("");
+}
+
+function renderSupportMarkdownTableRowWordXml(row: string[], columnCount: number, columnWidth: number, isHeader: boolean): string {
+  const cells = Array.from({ length: columnCount }, (_, index) => row[index] ?? "");
+  return `<w:tr>${cells.map((cell) => renderSupportMarkdownTableCellWordXml(cell, columnWidth, isHeader)).join("")}</w:tr>`;
+}
+
+function renderSupportMarkdownTableCellWordXml(cell: string, columnWidth: number, isHeader: boolean): string {
+  const shading = isHeader ? '<w:shd w:val="clear" w:fill="D9EAF7"/>' : "";
+  const boldStart = isHeader ? "<w:rPr><w:b/></w:rPr>" : "";
+  return [
+    "<w:tc>",
+    `<w:tcPr><w:tcW w:w="${columnWidth}" w:type="dxa"/>${shading}</w:tcPr>`,
+    `<w:p><w:r>${boldStart}<w:t xml:space="preserve">${escapeWordXmlText(stripInlineMarkdown(cell))}</w:t></w:r></w:p>`,
+    "</w:tc>",
+  ].join("");
+}
+
+function stripInlineMarkdown(value: string): string {
+  return value
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1");
 }
 
 function renderWordPageBreak(): string {
