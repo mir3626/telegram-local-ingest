@@ -228,7 +228,11 @@ test("collectPreprocessedTextArtifacts extracts image OCR text into runtime arti
   const originalPath = writeFile(root, "runtime/archive/originals/photo.png", "not really png");
   const fakeTesseract = writeExecutable(path.join(root, "tools"), "tesseract", [
     "#!/bin/sh",
-    "printf 'Image OCR text requiring Korean translation.\\n'",
+    "printf 'level\\tpage_num\\tblock_num\\tpar_num\\tline_num\\tword_num\\tleft\\ttop\\twidth\\theight\\tconf\\ttext\\n'",
+    "printf '5\\t1\\t1\\t1\\t1\\t1\\t10\\t20\\t40\\t12\\t92\\tImage\\n'",
+    "printf '5\\t1\\t1\\t1\\t1\\t2\\t55\\t20\\t30\\t12\\t89\\tOCR\\n'",
+    "printf '5\\t1\\t1\\t1\\t1\\t3\\t90\\t20\\t30\\t12\\t90\\ttext\\n'",
+    "printf '5\\t1\\t1\\t1\\t2\\t1\\t10\\t40\\t160\\t12\\t88\\trequiring Korean translation.\\n'",
   ].join("\n"));
   const previousTesseract = process.env.TESSERACT_BIN;
 
@@ -253,6 +257,24 @@ test("collectPreprocessedTextArtifacts extracts image OCR text into runtime arti
     assert.equal(result.artifacts[0]?.kind, "image_ocr_text");
     assert.match(result.artifacts[0]?.text ?? "", /Image OCR text/);
     assert.match(result.artifacts[0]?.sourcePath ?? "", /runtime\/extracted\/job-image-ocr\/preprocess\/file-image\/photo\.txt$/);
+    assert.match(result.artifacts[0]?.structurePath ?? "", /runtime\/extracted\/job-image-ocr\/preprocess\/file-image\/photo\.blocks\.json$/);
+    const structure = JSON.parse(fs.readFileSync(result.artifacts[0]?.structurePath ?? "", "utf8")) as {
+      sourceType?: string;
+      blocks?: Array<{ id: string; text: string; bbox: { x: number; y: number; width: number; height: number } }>;
+    };
+    assert.equal(structure.sourceType, "image_ocr");
+    assert.equal(structure.blocks?.length, 2);
+    assert.deepEqual(structure.blocks?.[0], {
+      id: "b0001",
+      text: "Image OCR text",
+      bbox: {
+        x: 10,
+        y: 20,
+        width: 110,
+        height: 12,
+      },
+      confidence: 90,
+    });
   } finally {
     restoreEnv("TESSERACT_BIN", previousTesseract);
   }

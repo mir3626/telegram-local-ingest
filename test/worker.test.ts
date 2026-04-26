@@ -108,7 +108,41 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
         { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
         mockTelegramFetch(sentMessages),
       ),
-      agent: mockAgentPostprocessor(agentInputs),
+      agent: {
+        async postprocess(input): Promise<AgentPostprocessResult> {
+          agentInputs.push(input);
+          fs.mkdirSync(input.outputDir, { recursive: true });
+          fs.writeFileSync(path.join(input.outputDir, "translated.md"), [
+            "# Translation metadata block",
+            "",
+            "Document: Vendor agreement",
+            "Source -> Target: English -> Korean",
+            "",
+            "# Glossary",
+            "",
+            "| SOURCE term | TARGET term | Notes |",
+            "| --- | --- | --- |",
+            "| vendor agreement | 공급업체 계약 | keep consistent |",
+            "",
+            "# Translated document",
+            "",
+            "번역 결과",
+            "",
+            "# Translator's notes",
+            "",
+            "- Formal business register applied.",
+            "",
+          ].join("\n"), "utf8");
+          return {
+            command: "custom-agent",
+            args: ["--prompt", "prompt.md"],
+            promptPath: path.join(input.outputDir, "..", ".agent-work", "prompt.md"),
+            outputDir: input.outputDir,
+            stdout: "ok",
+            stderr: "",
+          };
+        },
+      },
     };
 
     const result = await runWorkerOnce(context);
@@ -296,6 +330,9 @@ test("runWorkerOnce preserves DOCX templates by replacing structured text blocks
     assert.equal(outputs[0]?.fileName, "vendor-template_translated.docx");
     assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     const documentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(documentXml, /Job: tg_300_21 \(\d{4}-\d{2}-\d{2} \d{2}:\d{2} KST\)/);
+    assert.match(documentXml, /<w:sz w:val="16"\/>/);
+    assert.doesNotMatch(documentXml, /Generated:/);
     assert.match(documentXml, /Translation metadata block/);
     assert.match(documentXml, /Glossary/);
     assert.match(documentXml, /vendor agreement/);
@@ -326,19 +363,27 @@ test("runWorkerOnce renders PDF uploads as DOCX downloads when extracted text ne
   const fixture = createFixture();
   writeFile(fixture.botRoot, "documents/chinese-food-law.pdf", "%PDF-1.4\n");
   const toolRoot = path.join(fixture.root, "tools");
-  const fakePandoc = writeFakePandoc(toolRoot);
+  const fakePandoc = writeFakePandoc(toolRoot, "번역 결과", {
+    tableRows: [
+      ["SOURCE term", "TARGET term", "Notes"],
+      ["Article", "조항", "keep consistent"],
+    ],
+  });
   const fakePdftotext = writeExecutable(toolRoot, "pdftotext", [
     "#!/bin/sh",
     "printf 'Chinese food law requires Korean translation.\\nArticle 1. Scope\\n'",
   ].join("\n"));
+  const fakePdftoppm = writeFakePdftoppm(toolRoot);
   const oldPandoc = process.env.PANDOC_BIN;
   const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const oldPdftoppm = process.env.PDFTOPPM_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const agentInputs: AgentPostprocessInput[] = [];
   try {
     process.env.PANDOC_BIN = fakePandoc;
     process.env.PDFTOTEXT_BIN = fakePdftotext;
+    process.env.PDFTOPPM_BIN = fakePdftoppm;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.agent = {
@@ -366,13 +411,32 @@ test("runWorkerOnce renders PDF uploads as DOCX downloads when extracted text ne
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.fileName, "chinese-food-law_translated.docx");
     assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    const documentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    const translationMarkdown = fs.readFileSync(
+      path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", ".render-work", "translation.md"),
+      "utf8",
+    );
+    assert.match(translationMarkdown.split("\n")[0] ?? "", /^Job: tg_300_21 \(\d{4}-\d{2}-\d{2} \d{2}:\d{2} KST\)$/);
+    assert.doesNotMatch(translationMarkdown, /^% 번역문$/m);
+    assert.doesNotMatch(translationMarkdown, /^% Job:/m);
+    assert.doesNotMatch(translationMarkdown, /^% Generated:/m);
+    assert.doesNotMatch(translationMarkdown, /^# 번역문$/m);
+    assert.doesNotMatch(translationMarkdown, /^## translated\.md$/m);
+    const outputBuffer = fs.readFileSync(outputs[0]?.filePath ?? "");
+    const documentXml = extractZipEntry(outputBuffer, "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(documentXml, /<w:tblBorders>/);
+    assert.match(documentXml, /<w:shd w:val="clear" w:fill="D9EAF7"\/>/);
+    assert.match(documentXml, /SOURCE term/);
     assert.match(documentXml, /\[원문\]/);
-    assert.match(documentXml, /Chinese food law requires Korean translation/);
+    assert.match(documentXml, /<w:drawing>/);
+    assert.doesNotMatch(documentXml, /Chinese food law requires Korean translation/);
+    const relationshipsXml = extractZipEntry(outputBuffer, "word/_rels/document.xml.rels")?.toString("utf8") ?? "";
+    assert.match(relationshipsXml, /original-pdf-page-1\.png/);
+    assert.ok(extractZipEntry(outputBuffer, "word/media/original-pdf-page-1.png"));
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
   } finally {
     restoreEnv("PANDOC_BIN", oldPandoc);
     restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    restoreEnv("PDFTOPPM_BIN", oldPdftoppm);
     dbHandle.close();
   }
 });
@@ -386,13 +450,16 @@ test("runWorkerOnce ignores agent-created DOCX and renders document output from 
     "#!/bin/sh",
     "printf 'Vendor policy requires Korean translation.\\n'",
   ].join("\n"));
+  const fakePdftoppm = writeFakePdftoppm(toolRoot);
   const oldPandoc = process.env.PANDOC_BIN;
   const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const oldPdftoppm = process.env.PDFTOPPM_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   try {
     process.env.PANDOC_BIN = fakePandoc;
     process.env.PDFTOTEXT_BIN = fakePdftotext;
+    process.env.PDFTOPPM_BIN = fakePdftoppm;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.agent = {
@@ -432,12 +499,14 @@ test("runWorkerOnce ignores agent-created DOCX and renders document output from 
     assert.equal(outputs[0]?.fileName, "vendor-policy_translated.docx");
     const outputXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
     assert.match(outputXml, /정상 번역 결과/);
-    assert.match(outputXml, /Vendor policy requires Korean translation/);
+    assert.match(outputXml, /<w:drawing>/);
+    assert.doesNotMatch(outputXml, /Vendor policy requires Korean translation/);
     assert.doesNotMatch(outputXml, /sandbox blocked arbitrary binary ZIP creation/);
     assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translated.docx")), false);
   } finally {
     restoreEnv("PANDOC_BIN", oldPandoc);
     restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    restoreEnv("PDFTOPPM_BIN", oldPdftoppm);
     dbHandle.close();
   }
 });
@@ -547,7 +616,7 @@ test("runWorkerOnce fails PDF agent jobs when text extraction and OCR are unavai
   }
 });
 
-test("runWorkerOnce sanitizes extracted PDF text before appending it to DOCX output", async () => {
+test("runWorkerOnce renders PDF original pages as DOCX images instead of extracted text", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "documents/chinese-food-law.pdf", "%PDF-1.4\n");
   const toolRoot = path.join(fixture.root, "tools");
@@ -555,14 +624,17 @@ test("runWorkerOnce sanitizes extracted PDF text before appending it to DOCX out
     "#!/bin/sh",
     "printf 'Chinese food law A\\001B <tag> & value requires Korean translation.\\n'",
   ].join("\n"));
+  const fakePdftoppm = writeFakePdftoppm(toolRoot);
   const fakePandoc = writeFakePandoc(toolRoot);
   const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const oldPdftoppm = process.env.PDFTOPPM_BIN;
   const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const agentInputs: AgentPostprocessInput[] = [];
   try {
     process.env.PDFTOTEXT_BIN = fakePdftotext;
+    process.env.PDFTOPPM_BIN = fakePdftoppm;
     process.env.PANDOC_BIN = fakePandoc;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
@@ -603,12 +675,81 @@ test("runWorkerOnce sanitizes extracted PDF text before appending it to DOCX out
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.fileName, "chinese-food-law_translated.docx");
-    const documentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    const outputBuffer = fs.readFileSync(outputs[0]?.filePath ?? "");
+    const documentXml = extractZipEntry(outputBuffer, "word/document.xml")?.toString("utf8") ?? "";
     assert.doesNotMatch(documentXml, /\u0001/);
-    assert.match(documentXml, /Chinese food law AB &lt;tag&gt; &amp; value requires Korean translation/);
+    assert.doesNotMatch(documentXml, /Chinese food law AB &lt;tag&gt; &amp; value requires Korean translation/);
+    assert.match(documentXml, /<w:drawing>/);
+    assert.ok(extractZipEntry(outputBuffer, "word/media/original-pdf-page-1.png"));
   } finally {
     restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    restoreEnv("PDFTOPPM_BIN", oldPdftoppm);
     restoreEnv("PANDOC_BIN", oldPandoc);
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce renders image uploads as translated overlay PDFs with original image source pages", async () => {
+  const fixture = createFixture();
+  writeBinaryFile(fixture.botRoot, "documents/menu.png", tinyPngBuffer());
+  const fakeTesseract = writeExecutable(path.join(fixture.root, "tools"), "tesseract", [
+    "#!/bin/sh",
+    "printf 'level\\tpage_num\\tblock_num\\tpar_num\\tline_num\\tword_num\\tleft\\ttop\\twidth\\theight\\tconf\\ttext\\n'",
+    "printf '5\\t1\\t1\\t1\\t1\\t1\\t10\\t10\\t50\\t10\\t91\\tImage source requires Korean translation.\\n'",
+    "printf '5\\t1\\t1\\t1\\t2\\t1\\t12\\t14\\t52\\t10\\t90\\tSecond overlapping OCR line also needs translation.\\n'",
+  ].join("\n"));
+  const oldTesseract = process.env.TESSERACT_BIN;
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const agentInputs: AgentPostprocessInput[] = [];
+  try {
+    process.env.TESSERACT_BIN = fakeTesseract;
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest project:sales", "documents/menu.png"),
+      ),
+      agent: mockAgentPostprocessor(agentInputs),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsProcessed, 1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    assert.equal(agentInputs.length, 1);
+    assert.equal(agentInputs[0]?.artifacts[0]?.kind, "image_ocr_text");
+    assert.match(agentInputs[0]?.artifacts[0]?.structurePath ?? "", /menu\.blocks\.json$/);
+    const promptStructure = JSON.parse(fs.readFileSync(agentInputs[0]?.artifacts[0]?.structurePath ?? "", "utf8")) as {
+      blocks?: Array<{ id: string; bbox: { x: number; y: number; width: number; height: number } }>;
+    };
+    assert.equal(promptStructure.blocks?.length, 2);
+    assert.deepEqual(promptStructure.blocks?.[0], {
+      id: "b0001",
+      text: "Image source requires Korean translation.",
+      bbox: { x: 10, y: 10, width: 50, height: 10 },
+      confidence: 91,
+    });
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.fileName, "menu_translated.pdf");
+    assert.equal(outputs[0]?.mimeType, "application/pdf");
+    const pdf = fs.readFileSync(outputs[0]?.filePath ?? "");
+    assert.equal(pdf.subarray(0, 4).toString("utf8"), "%PDF");
+    assert.match(pdf.toString("latin1"), /\/Subtype\s*\/Image/);
+    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translated.md")), false);
+    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translations.json")), false);
+    assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /PDF 다운로드/);
+  } finally {
+    restoreEnv("TESSERACT_BIN", oldTesseract);
     dbHandle.close();
   }
 });
@@ -1473,6 +1614,69 @@ function writeFile(root: string, relativePath: string, content: string): string 
   return filePath;
 }
 
+function writeBinaryFile(root: string, relativePath: string, content: Buffer): string {
+  const filePath = path.join(root, relativePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content);
+  return filePath;
+}
+
+function tinyPngBuffer(): Buffer {
+  return solidPngBuffer(100, 100);
+}
+
+function solidPngBuffer(width: number, height: number): Buffer {
+  const rows: Buffer[] = [];
+  for (let y = 0; y < height; y += 1) {
+    const row = Buffer.alloc(1 + width * 4, 0xff);
+    row[0] = 0;
+    rows.push(row);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib.deflateSync(Buffer.concat(rows))),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(testCrc32(Buffer.concat([typeBuffer, data])), 0);
+  return Buffer.concat([length, typeBuffer, data, crc]);
+}
+
+function testCrc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc = TEST_CRC32_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const TEST_CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
 function writeExecutable(root: string, fileName: string, content: string): string {
   const filePath = path.join(root, fileName);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -1481,8 +1685,10 @@ function writeExecutable(root: string, fileName: string, content: string): strin
   return filePath;
 }
 
-function writeFakePandoc(root: string, translatedText = "번역 결과"): string {
-  const templatePath = writeMinimalDocx(root, "pandoc-template.docx", translatedText);
+function writeFakePandoc(root: string, translatedText = "번역 결과", options?: { tableRows?: string[][] }): string {
+  const templatePath = options?.tableRows
+    ? writeMinimalDocxWithTable(root, "pandoc-template.docx", translatedText, options.tableRows)
+    : writeMinimalDocx(root, "pandoc-template.docx", translatedText);
   return writeExecutable(root, "pandoc", [
     "#!/bin/sh",
     "out=\"\"",
@@ -1496,17 +1702,45 @@ function writeFakePandoc(root: string, translatedText = "번역 결과"): string
   ].join("\n"));
 }
 
+function writeFakePdftoppm(root: string): string {
+  const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  return writeExecutable(root, "pdftoppm", [
+    "#!/usr/bin/env node",
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "const args = process.argv.slice(2);",
+    "const prefix = args.at(-1);",
+    "if (!prefix) process.exit(2);",
+    "fs.mkdirSync(path.dirname(prefix), { recursive: true });",
+    `fs.writeFileSync(\`${"${prefix}"}-1.png\`, Buffer.from(${JSON.stringify(pngBase64)}, "base64"));`,
+  ].join("\n"));
+}
+
+function writeMinimalDocxWithTable(root: string, relativePath: string, textContent: string, tableRows: string[][]): string {
+  const paragraphXml = `<w:p><w:pPr><w:pStyle w:val="TemplateBody"/></w:pPr><w:r><w:t>${escapeTestXml(textContent)}</w:t></w:r></w:p>`;
+  const tableXml = [
+    "<w:tbl>",
+    ...tableRows.map((row) =>
+      `<w:tr>${row.map((cell) => `<w:tc><w:p><w:r><w:t>${escapeTestXml(cell)}</w:t></w:r></w:p></w:tc>`).join("")}</w:tr>`),
+    "</w:tbl>",
+  ].join("");
+  return writeDocxPackage(root, relativePath, `${paragraphXml}${tableXml}`);
+}
+
 function writeMinimalDocx(root: string, relativePath: string, textContent: string): string {
-  const escaped = textContent
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  const bodyXml = [
+    '<w:p><w:pPr><w:pStyle w:val="TemplateBody"/></w:pPr><w:r><w:t>',
+    escapeTestXml(textContent),
+    "</w:t></w:r></w:p>",
+  ].join("");
+  return writeDocxPackage(root, relativePath, bodyXml);
+}
+
+function writeDocxPackage(root: string, relativePath: string, bodyXml: string): string {
   const documentXml = [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
-    '<w:body><w:p><w:pPr><w:pStyle w:val="TemplateBody"/></w:pPr><w:r><w:t>',
-    escaped,
-    "</w:t></w:r></w:p></w:body></w:document>",
+    `<w:body>${bodyXml}</w:body></w:document>`,
   ].join("");
   const filePath = path.join(root, relativePath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -1521,6 +1755,13 @@ function writeMinimalDocx(root: string, relativePath: string, textContent: strin
     "word/document.xml": documentXml,
   }));
   return filePath;
+}
+
+function escapeTestXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function buildZip(entries: Record<string, string>): Buffer {
@@ -1721,6 +1962,11 @@ function mimeTypeForFixture(filePath: string): string {
       return "message/rfc822";
     case ".pdf":
       return "application/pdf";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
     default:
       return "text/plain";
   }

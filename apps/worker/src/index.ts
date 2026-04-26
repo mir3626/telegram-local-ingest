@@ -89,6 +89,8 @@ import { runWikiIngestAdapter } from "@telegram-local-ingest/wiki-adapter";
 const execFileAsync = promisify(execFile);
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const EML_MIME_TYPES = new Set(["application/eml", "message/rfc822"]);
+const IMAGE_EXTENSIONS = new Set([".jpeg", ".jpg", ".png"]);
+const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
 export interface WorkerContext {
@@ -1798,6 +1800,47 @@ interface DocumentSourceFile {
   fileName: string;
 }
 
+interface ImageSourceFile {
+  path: string;
+  fileName: string;
+}
+
+interface ImageOcrBlock {
+  id: string;
+  text: string;
+  bbox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  confidence?: number;
+}
+
+interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+interface PdfRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface ImageOverlayBox {
+  rect: PdfRect;
+  text: string;
+  padding: number;
+  fontSize: number;
+  lineHeight: number;
+}
+
+const WORD_TABLE_BORDERS_XML = '<w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:left w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:right w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/></w:tblBorders>';
+const WORD_TABLE_CELL_MARGINS_XML = '<w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar>';
+const WORD_TABLE_HEADER_SHADING_XML = '<w:shd w:val="clear" w:fill="D9EAF7"/>';
+
 function listActiveJobOutputs(db: DatabaseSync, jobId: string): StoredJobOutput[] {
   const now = new Date().toISOString();
   return listJobOutputs(db, jobId).filter((output) => !output.deletedAt && output.expiresAt > now);
@@ -1843,6 +1886,22 @@ async function createDownloadableAgentFile(input: {
     });
     if (documentOutput) {
       downloadableFile = documentOutput;
+      await removeIntermediateGeneratedFiles(input.outputDir, input.generatedFiles, downloadableFile.path);
+      return downloadableFile;
+    }
+  }
+
+  const imageSource = findImageSourceFile(input.files);
+  if (imageSource) {
+    const imageOutput = await createImageOverlayTranslationPdf({
+      job: input.job,
+      artifacts: input.artifacts,
+      generatedFiles: input.generatedFiles,
+      outputDir: input.outputDir,
+      imageSource,
+    });
+    if (imageOutput) {
+      downloadableFile = imageOutput;
       await removeIntermediateGeneratedFiles(input.outputDir, input.generatedFiles, downloadableFile.path);
       return downloadableFile;
     }
@@ -1896,6 +1955,53 @@ async function createOriginalAndTranslationPdf(input: {
   };
 }
 
+async function createImageOverlayTranslationPdf(input: {
+  job: StoredJob;
+  artifacts: AgentPostprocessInput["artifacts"];
+  generatedFiles: GeneratedFile[];
+  outputDir: string;
+  imageSource: ImageSourceFile;
+}): Promise<GeneratedFile | null> {
+  const translationFile = findTranslationFile(input.generatedFiles);
+  const translationsFile = findDocxTranslationsFile(input.generatedFiles);
+  const structureArtifact = input.artifacts.find((artifact) =>
+    artifact.kind === "image_ocr_text" && typeof artifact.structurePath === "string");
+  if (!translationFile || !translationsFile || !structureArtifact?.structurePath) {
+    return null;
+  }
+
+  const pdfName = buildTranslatedOutputFileName(input.imageSource.fileName, ".pdf");
+  const pdfPath = path.join(input.outputDir, pdfName);
+  try {
+    const [supportSections, translations, blocks, fontPath] = await Promise.all([
+      readTemplatePreservedSupportSections(translationFile.path),
+      readDocxBlockTranslations(translationsFile.path),
+      readImageOcrBlocks(structureArtifact.structurePath),
+      findPdfFontPath(),
+    ]);
+    if (blocks.length === 0 || translations.size === 0) {
+      return null;
+    }
+    await writeImageOverlayPdf({
+      pdfPath,
+      job: input.job,
+      imageSource: input.imageSource,
+      blocks,
+      translations,
+      supportSections,
+      fontPath,
+    });
+    logWorker(`image overlay render complete job=${input.job.id} source=${input.imageSource.fileName}`, "info", "OUTPUT");
+    return {
+      path: pdfPath,
+      relativePath: pdfName,
+    };
+  } catch (error) {
+    logWorker(`image overlay render failed job=${input.job.id} source=${input.imageSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
+    return null;
+  }
+}
+
 function findDocumentSourceFile(files: StoredJobFile[]): DocumentSourceFile | null {
   for (const file of files) {
     const candidatePath = file.archivePath ?? file.localPath;
@@ -1937,6 +2043,25 @@ function findDocumentSourceFile(files: StoredJobFile[]): DocumentSourceFile | nu
   return null;
 }
 
+function findImageSourceFile(files: StoredJobFile[]): ImageSourceFile | null {
+  for (const file of files) {
+    const candidatePath = file.archivePath ?? file.localPath;
+    if (!candidatePath) {
+      continue;
+    }
+    const fileName = file.originalName ?? path.basename(candidatePath);
+    const extension = path.extname(fileName).toLowerCase();
+    const mimeType = file.mimeType?.toLowerCase();
+    if (IMAGE_EXTENSIONS.has(extension) || (mimeType !== undefined && IMAGE_MIME_TYPES.has(mimeType))) {
+      return {
+        path: candidatePath,
+        fileName,
+      };
+    }
+  }
+  return null;
+}
+
 async function createDocumentTranslationDocx(input: {
   job: StoredJob;
   artifacts: AgentPostprocessInput["artifacts"];
@@ -1961,6 +2086,7 @@ async function createDocumentTranslationDocx(input: {
   if (input.documentSource.kind === "docx" && translationsFile) {
     try {
       await createTemplatePreservedDocx({
+        job: input.job,
         originalDocxPath: input.documentSource.path,
         translationsPath: translationsFile.path,
         supportMarkdownPath: translationFile.path,
@@ -2025,11 +2151,19 @@ async function createDocumentTranslationDocx(input: {
       timeout: COMMAND_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
     });
+    await normalizeDocxOutputFormatting(translatedOnlyDocxPath);
     try {
       if (input.documentSource.kind === "docx") {
         await appendOriginalDocxSection({
           translatedDocxPath: translatedOnlyDocxPath,
           originalDocxPath: input.documentSource.path,
+          outputPath: docxPath,
+        });
+      } else if (input.documentSource.kind === "pdf") {
+        await appendOriginalPdfPageImagesDocxSection({
+          translatedDocxPath: translatedOnlyDocxPath,
+          pdfPath: input.documentSource.path,
+          workDir,
           outputPath: docxPath,
         });
       } else {
@@ -2047,6 +2181,7 @@ async function createDocumentTranslationDocx(input: {
         outputPath: docxPath,
         documentSource: input.documentSource,
       });
+      await normalizeDocxOutputFormatting(docxPath);
     }
     await validateDocxOutput(docxPath);
     logWorker(`document render complete job=${input.job.id} source=${input.documentSource.fileName}`, "info", "OUTPUT");
@@ -2089,6 +2224,7 @@ async function renderCombinedMarkdownDocx(input: {
 }
 
 async function createTemplatePreservedDocx(input: {
+  job: StoredJob;
   originalDocxPath: string;
   translationsPath: string;
   supportMarkdownPath: string;
@@ -2107,6 +2243,7 @@ async function createTemplatePreservedDocx(input: {
   const translatedXml = insertTemplateSupportSections(
     applyBlockTranslationsToWordDocumentXml(originalDocument.toString("utf8"), translations),
     supportSections,
+    formatOutputJobMetadata(input.job),
   );
   entries.set("word/document.xml", Buffer.from(translatedXml, "utf8"));
   const translatedOnlyPath = path.join(input.workDir, "template-preserved-translated.docx");
@@ -2123,6 +2260,77 @@ async function validateDocxOutput(filePath: string): Promise<void> {
   if (!entries.has("[Content_Types].xml") || !entries.has("word/document.xml")) {
     throw new Error("Rendered DOCX is missing required package entries");
   }
+}
+
+async function normalizeDocxOutputFormatting(filePath: string): Promise<void> {
+  const entries = await readZipEntries(filePath);
+  const documentXml = entries.get("word/document.xml");
+  if (!documentXml) {
+    throw new Error("Rendered DOCX is missing word/document.xml");
+  }
+  const xml = documentXml.toString("utf8");
+  const normalized = normalizeWordOutputFormatting(xml);
+  if (normalized === xml) {
+    return;
+  }
+  entries.set("word/document.xml", Buffer.from(normalized, "utf8"));
+  await writeZipEntries(filePath, entries);
+}
+
+function normalizeWordOutputFormatting(xml: string): string {
+  return normalizeWordJobMetadataFormatting(normalizeWordTableFormatting(xml));
+}
+
+function normalizeWordTableFormatting(xml: string): string {
+  return xml.replace(/<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/g, (tableXml) =>
+    shadeFirstWordTableRow(ensureWordTableProperties(tableXml)));
+}
+
+function normalizeWordJobMetadataFormatting(xml: string): string {
+  return xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+    const text = extractWordParagraphText(paragraphXml).trim();
+    return isOutputJobMetadataLine(text) ? renderJobMetadataWordXml(text) : paragraphXml;
+  });
+}
+
+function ensureWordTableProperties(tableXml: string): string {
+  const tableProperties = [
+    '<w:tblW w:w="9360" w:type="dxa"/>',
+    WORD_TABLE_BORDERS_XML,
+    WORD_TABLE_CELL_MARGINS_XML,
+  ].join("");
+  if (!/<w:tblPr\b/.test(tableXml)) {
+    return tableXml.replace(/(<w:tbl\b[^>]*>)/, `$1<w:tblPr>${tableProperties}</w:tblPr>`);
+  }
+  return tableXml.replace(/<w:tblPr\b[^>]*>[\s\S]*?<\/w:tblPr>/, (tblPr) => {
+    let normalized = tblPr;
+    if (!/<w:tblW\b/.test(normalized)) {
+      normalized = normalized.replace(/(<w:tblPr\b[^>]*>)/, '$1<w:tblW w:w="9360" w:type="dxa"/>');
+    }
+    if (!/<w:tblBorders\b/.test(normalized)) {
+      normalized = normalized.replace("</w:tblPr>", `${WORD_TABLE_BORDERS_XML}</w:tblPr>`);
+    }
+    if (!/<w:tblCellMar\b/.test(normalized)) {
+      normalized = normalized.replace("</w:tblPr>", `${WORD_TABLE_CELL_MARGINS_XML}</w:tblPr>`);
+    }
+    return normalized;
+  });
+}
+
+function shadeFirstWordTableRow(tableXml: string): string {
+  return tableXml.replace(/<w:tr\b[^>]*>[\s\S]*?<\/w:tr>/, (rowXml) =>
+    rowXml.replace(/<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g, shadeWordTableHeaderCell));
+}
+
+function shadeWordTableHeaderCell(cellXml: string): string {
+  if (/<w:shd\b/.test(cellXml)) {
+    return cellXml;
+  }
+  if (/<w:tcPr\b/.test(cellXml)) {
+    return cellXml.replace(/<w:tcPr\b[^>]*>[\s\S]*?<\/w:tcPr>/, (tcPr) =>
+      tcPr.replace("</w:tcPr>", `${WORD_TABLE_HEADER_SHADING_XML}</w:tcPr>`));
+  }
+  return cellXml.replace(/(<w:tc\b[^>]*>)/, `$1<w:tcPr>${WORD_TABLE_HEADER_SHADING_XML}</w:tcPr>`);
 }
 
 async function copyGeneratedFileWithTranslatedName(sourcePath: string, outputDir: string, fileName: string): Promise<GeneratedFile> {
@@ -2146,13 +2354,7 @@ function renderTranslationOnlyMarkdown(input: {
   translation: PdfTextSection;
 }): string {
   return [
-    "% 번역문",
-    `% Job: ${input.job.id}`,
-    `% Generated: ${formatKstDateTime(new Date().toISOString())}`,
-    "",
-    "# 번역문",
-    "",
-    `## ${input.translation.title}`,
+    formatOutputJobMetadata(input.job),
     "",
     normalizeMarkdownText(input.translation.text),
     "",
@@ -2165,13 +2367,7 @@ function renderOriginalAndTranslationMarkdown(input: {
   translation: PdfTextSection;
 }): string {
   const lines = [
-    "% 번역본 + 원문",
-    `% Job: ${input.job.id}`,
-    `% Generated: ${formatKstDateTime(new Date().toISOString())}`,
-    "",
-    "# 번역문",
-    "",
-    `## ${input.translation.title}`,
+    formatOutputJobMetadata(input.job),
     "",
     normalizeMarkdownText(input.translation.text),
     "",
@@ -2184,6 +2380,10 @@ function renderOriginalAndTranslationMarkdown(input: {
     lines.push(`## ${section.title}`, "", preserveOriginalText(section.text), "");
   }
   return lines.join("\n");
+}
+
+function formatOutputJobMetadata(job: Pick<StoredJob, "id">, iso = new Date().toISOString()): string {
+  return `Job: ${job.id} (${formatKstDateTime(iso)})`;
 }
 
 function normalizeMarkdownText(value: string): string {
@@ -2236,6 +2436,280 @@ async function appendOriginalTextDocxSection(input: {
     ),
   );
   await writeZipEntries(input.outputPath, translatedEntries);
+}
+
+async function appendOriginalPdfPageImagesDocxSection(input: {
+  translatedDocxPath: string;
+  pdfPath: string;
+  workDir: string;
+  outputPath: string;
+}): Promise<void> {
+  const imageDir = path.join(input.workDir, "original-pdf-pages");
+  const pages = await renderPdfPagesAsImages({
+    pdfPath: input.pdfPath,
+    outputDir: imageDir,
+  });
+  if (pages.length === 0) {
+    throw new Error("PDF original page rendering produced no images");
+  }
+
+  const entries = await readZipEntries(input.translatedDocxPath);
+  const documentXml = entries.get("word/document.xml");
+  if (!documentXml) {
+    throw new Error("DOCX document.xml is missing");
+  }
+  const embeddedPages = await embedDocxImages(entries, pages);
+  entries.set(
+    "word/document.xml",
+    Buffer.from(
+      appendOriginalPdfPageImagesDocumentXml(documentXml.toString("utf8"), embeddedPages),
+      "utf8",
+    ),
+  );
+  ensureDocxPngContentType(entries);
+  await writeZipEntries(input.outputPath, entries);
+}
+
+interface PdfPageImage {
+  pageNumber: number;
+  path: string;
+}
+
+interface EmbeddedDocxImage {
+  relId: string;
+  pageNumber: number;
+  widthEmu: number;
+  heightEmu: number;
+}
+
+async function renderPdfPagesAsImages(input: {
+  pdfPath: string;
+  outputDir: string;
+}): Promise<PdfPageImage[]> {
+  const pdftoppmBin = await findExecutable(process.env.PDFTOPPM_BIN, "pdftoppm");
+  if (!pdftoppmBin) {
+    throw new Error("pdftoppm is required to preserve PDF original pages");
+  }
+  await fs.rm(input.outputDir, { recursive: true, force: true });
+  await fs.mkdir(input.outputDir, { recursive: true });
+  const outputPrefix = path.join(input.outputDir, "page");
+  const args = [
+    "-png",
+    "-r",
+    String(readPositiveIntegerEnv("PDF_ORIGINAL_RENDER_DPI", 150)),
+    ...pdfPageLimitArgs(),
+    input.pdfPath,
+    outputPrefix,
+  ];
+  await execFileAsync(pdftoppmBin, args, {
+    timeout: COMMAND_TIMEOUT_MS,
+    maxBuffer: 512 * 1024,
+  });
+  return (await fs.readdir(input.outputDir))
+    .map((entry) => {
+      const match = /^page-(\d+)\.png$/i.exec(entry);
+      if (!match?.[1]) {
+        return null;
+      }
+      return {
+        pageNumber: Number.parseInt(match[1], 10),
+        path: path.join(input.outputDir, entry),
+      };
+    })
+    .filter((page): page is PdfPageImage => page !== null)
+    .sort((left, right) => left.pageNumber - right.pageNumber);
+}
+
+function pdfPageLimitArgs(): string[] {
+  const maxPages = readOptionalPositiveIntegerEnv("PDF_ORIGINAL_MAX_PAGES");
+  return maxPages ? ["-f", "1", "-l", String(maxPages)] : [];
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readOptionalPositiveIntegerEnv(name: string): number | null {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+async function embedDocxImages(entries: Map<string, Buffer>, pages: PdfPageImage[]): Promise<EmbeddedDocxImage[]> {
+  const existingRelationships = entries.get("word/_rels/document.xml.rels")?.toString("utf8");
+  let relsXml = existingRelationships ?? createEmptyDocumentRelationshipsXml();
+  let nextRelationshipId = nextDocxRelationshipId(relsXml);
+  const embedded: EmbeddedDocxImage[] = [];
+  for (const page of pages) {
+    const image = await fs.readFile(page.path);
+    const dimensions = readPngDimensions(image);
+    const displaySize = fitImageToDocxPage(dimensions);
+    const mediaPath = uniqueDocxMediaPath(entries, `original-pdf-page-${page.pageNumber}.png`);
+    entries.set(mediaPath, image);
+    const relId = `rId${nextRelationshipId}`;
+    nextRelationshipId += 1;
+    relsXml = appendDocxRelationship(relsXml, {
+      id: relId,
+      target: mediaPath.replace(/^word\//, ""),
+      type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+    });
+    embedded.push({
+      relId,
+      pageNumber: page.pageNumber,
+      widthEmu: displaySize.widthEmu,
+      heightEmu: displaySize.heightEmu,
+    });
+  }
+  entries.set("word/_rels/document.xml.rels", Buffer.from(relsXml, "utf8"));
+  return embedded;
+}
+
+function createEmptyDocumentRelationshipsXml(): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    "</Relationships>",
+  ].join("");
+}
+
+function nextDocxRelationshipId(relsXml: string): number {
+  const ids = [...relsXml.matchAll(/\bId="rId(\d+)"/g)]
+    .map((match) => Number.parseInt(match[1] ?? "", 10))
+    .filter((value) => Number.isFinite(value));
+  return Math.max(0, ...ids) + 1;
+}
+
+function appendDocxRelationship(
+  relsXml: string,
+  relationship: { id: string; type: string; target: string },
+): string {
+  const xml = `<Relationship Id="${relationship.id}" Type="${relationship.type}" Target="${escapeXmlAttribute(relationship.target)}"/>`;
+  return relsXml.replace("</Relationships>", `${xml}</Relationships>`);
+}
+
+function uniqueDocxMediaPath(entries: Map<string, Buffer>, preferredPath: string): string {
+  const parsed = path.posix.parse(preferredPath);
+  let candidate = path.posix.join("word/media", preferredPath);
+  let suffix = 2;
+  while (entries.has(candidate)) {
+    candidate = path.posix.join("word/media", `${parsed.name}-${suffix}${parsed.ext}`);
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function readPngDimensions(buffer: Buffer): { width: number; height: number } {
+  if (
+    buffer.length < 24 ||
+    buffer.readUInt32BE(0) !== 0x89504e47 ||
+    buffer.readUInt32BE(4) !== 0x0d0a1a0a ||
+    buffer.toString("ascii", 12, 16) !== "IHDR"
+  ) {
+    throw new Error("PDF page renderer did not produce a valid PNG image");
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
+
+function fitImageToDocxPage(dimensions: { width: number; height: number }): { widthEmu: number; heightEmu: number } {
+  const maxWidthEmu = 9360 * 635;
+  const maxHeightEmu = 12400 * 635;
+  const widthRatio = maxWidthEmu / dimensions.width;
+  const heightRatio = maxHeightEmu / dimensions.height;
+  const ratio = Math.min(widthRatio, heightRatio);
+  return {
+    widthEmu: Math.max(1, Math.round(dimensions.width * ratio)),
+    heightEmu: Math.max(1, Math.round(dimensions.height * ratio)),
+  };
+}
+
+function appendOriginalPdfPageImagesDocumentXml(translatedXml: string, images: EmbeddedDocxImage[]): string {
+  const xml = ensureWordDrawingNamespaces(translatedXml);
+  const translatedBody = splitWordBodyXml(xml);
+  const headingXml = [
+    '<w:p><w:r><w:br w:type="page"/></w:r></w:p>',
+    '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>[원문]</w:t></w:r></w:p>',
+  ].join("");
+  return [
+    translatedBody.prefix,
+    translatedBody.contentWithoutSectPr,
+    headingXml,
+    images.map((image, index) => renderOriginalPdfPageImageWordXml(image, index < images.length - 1)).join(""),
+    translatedBody.sectPr,
+    translatedBody.suffix,
+  ].join("");
+}
+
+function ensureWordDrawingNamespaces(xml: string): string {
+  return xml.replace(/<w:document\b[^>]*>/, (tag) => {
+    let normalized = tag;
+    const namespaces = [
+      ['xmlns:r', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'],
+      ['xmlns:wp', 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'],
+      ['xmlns:a', 'http://schemas.openxmlformats.org/drawingml/2006/main'],
+      ['xmlns:pic', 'http://schemas.openxmlformats.org/drawingml/2006/picture'],
+    ] as const;
+    for (const [name, value] of namespaces) {
+      if (!new RegExp(`\\b${name}=`).test(normalized)) {
+        normalized = normalized.replace(/>$/, ` ${name}="${value}">`);
+      }
+    }
+    return normalized;
+  });
+}
+
+function renderOriginalPdfPageImageWordXml(image: EmbeddedDocxImage, addPageBreak: boolean): string {
+  const docPrId = 1000 + image.pageNumber;
+  const imageXml = [
+    '<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing>',
+    `<wp:inline distT="0" distB="0" distL="0" distR="0">`,
+    `<wp:extent cx="${image.widthEmu}" cy="${image.heightEmu}"/>`,
+    `<wp:docPr id="${docPrId}" name="Original PDF page ${image.pageNumber}"/>`,
+    '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>',
+    '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">',
+    '<pic:pic><pic:nvPicPr>',
+    `<pic:cNvPr id="${docPrId}" name="Original PDF page ${image.pageNumber}.png"/>`,
+    '<pic:cNvPicPr/>',
+    '</pic:nvPicPr><pic:blipFill>',
+    `<a:blip r:embed="${image.relId}"/>`,
+    '<a:stretch><a:fillRect/></a:stretch>',
+    '</pic:blipFill><pic:spPr>',
+    `<a:xfrm><a:off x="0" y="0"/><a:ext cx="${image.widthEmu}" cy="${image.heightEmu}"/></a:xfrm>`,
+    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>',
+    '</pic:spPr></pic:pic>',
+    '</a:graphicData></a:graphic>',
+    '</wp:inline>',
+    '</w:drawing></w:r></w:p>',
+  ].join("");
+  return addPageBreak ? `${imageXml}${renderWordPageBreak()}` : imageXml;
+}
+
+function ensureDocxPngContentType(entries: Map<string, Buffer>): void {
+  const contentTypes = entries.get("[Content_Types].xml");
+  if (!contentTypes) {
+    throw new Error("DOCX [Content_Types].xml is missing");
+  }
+  const xml = contentTypes.toString("utf8");
+  if (/<Default\b[^>]*\bExtension="png"\b/i.test(xml)) {
+    return;
+  }
+  entries.set(
+    "[Content_Types].xml",
+    Buffer.from(
+      xml.replace("</Types>", '<Default Extension="png" ContentType="image/png"/></Types>'),
+      "utf8",
+    ),
+  );
+}
+
+function escapeXmlAttribute(value: string): string {
+  return sanitizeXmlText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function appendOriginalDocumentXml(translatedXml: string, originalXml: string): string {
@@ -2328,14 +2802,19 @@ function normalizeMarkdownHeading(line: string): string {
     .trim();
 }
 
-function insertTemplateSupportSections(xml: string, support: TemplateSupportSections): string {
-  if (!support.beforeTranslation && !support.afterTranslation) {
+function insertTemplateSupportSections(
+  xml: string,
+  support: TemplateSupportSections,
+  jobMetadataLine = "",
+): string {
+  if (!jobMetadataLine && !support.beforeTranslation && !support.afterTranslation) {
     return xml;
   }
   const body = splitWordBodyXml(xml);
+  const metadataXml = jobMetadataLine ? renderJobMetadataWordXml(jobMetadataLine) : "";
   const frontMatterXml = support.beforeTranslation
-    ? `${renderSupportMarkdownWordXml(support.beforeTranslation)}${renderWordPageBreak()}`
-    : "";
+    ? `${metadataXml}${renderSupportMarkdownWordXml(support.beforeTranslation)}${renderWordPageBreak()}`
+    : metadataXml;
   const translatorNotesXml = support.afterTranslation
     ? `${renderWordPageBreak()}${renderSupportMarkdownWordXml(support.afterTranslation)}`
     : "";
@@ -2347,6 +2826,19 @@ function insertTemplateSupportSections(xml: string, support: TemplateSupportSect
     body.sectPr,
     body.suffix,
   ].join("");
+}
+
+function renderJobMetadataWordXml(text: string): string {
+  return [
+    '<w:p><w:pPr><w:jc w:val="left"/><w:spacing w:after="80"/></w:pPr>',
+    '<w:r><w:rPr><w:color w:val="666666"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>',
+    `<w:t xml:space="preserve">${escapeWordXmlText(text)}</w:t>`,
+    '</w:r></w:p>',
+  ].join("");
+}
+
+function isOutputJobMetadataLine(text: string): boolean {
+  return /^Job: \S+ \(\d{4}-\d{2}-\d{2} \d{2}:\d{2} KST\)$/.test(text);
 }
 
 function renderSupportMarkdownWordXml(markdown: string): string {
@@ -2414,8 +2906,8 @@ function renderSupportMarkdownTableWordXml(rows: string[][]): string {
     "<w:tbl>",
     "<w:tblPr>",
     `<w:tblW w:w="${tableWidth}" w:type="dxa"/>`,
-    '<w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:left w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:right w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/></w:tblBorders>',
-    '<w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar>',
+    WORD_TABLE_BORDERS_XML,
+    WORD_TABLE_CELL_MARGINS_XML,
     "</w:tblPr>",
     `<w:tblGrid>${gridXml}</w:tblGrid>`,
     rowXml,
@@ -2429,7 +2921,7 @@ function renderSupportMarkdownTableRowWordXml(row: string[], columnCount: number
 }
 
 function renderSupportMarkdownTableCellWordXml(cell: string, columnWidth: number, isHeader: boolean): string {
-  const shading = isHeader ? '<w:shd w:val="clear" w:fill="D9EAF7"/>' : "";
+  const shading = isHeader ? WORD_TABLE_HEADER_SHADING_XML : "";
   const boldStart = isHeader ? "<w:rPr><w:b/></w:rPr>" : "";
   return [
     "<w:tc>",
@@ -2559,6 +3051,41 @@ async function readDocxBlockTranslations(filePath: string): Promise<Map<string, 
     translations.set(block.id, block.text);
   }
   return translations;
+}
+
+async function readImageOcrBlocks(filePath: string): Promise<ImageOcrBlock[]> {
+  const parsed: unknown = JSON.parse(await fs.readFile(filePath, "utf8"));
+  if (!isRecord(parsed) || !Array.isArray(parsed.blocks)) {
+    throw new Error("image OCR structure must contain a blocks array");
+  }
+  return parsed.blocks.flatMap((block): ImageOcrBlock[] => {
+    if (
+      !isRecord(block) ||
+      typeof block.id !== "string" ||
+      typeof block.text !== "string" ||
+      !isRecord(block.bbox)
+    ) {
+      return [];
+    }
+    const x = numberFromUnknown(block.bbox.x);
+    const y = numberFromUnknown(block.bbox.y);
+    const width = numberFromUnknown(block.bbox.width);
+    const height = numberFromUnknown(block.bbox.height);
+    if (width <= 0 || height <= 0) {
+      return [];
+    }
+    const confidence = numberFromUnknown(block.confidence);
+    return [{
+      id: block.id,
+      text: block.text,
+      bbox: { x, y, width, height },
+      ...(Number.isFinite(confidence) ? { confidence } : {}),
+    }];
+  });
+}
+
+function numberFromUnknown(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function appendOriginalTextSectionsDocumentXml(translatedXml: string, originalSections: PdfTextSection[]): string {
@@ -2946,17 +3473,10 @@ async function writeOriginalAndTranslationPdf(input: {
     if (input.fontPath) {
       doc.font(input.fontPath);
     }
-    doc.fontSize(18).text("번역문 + 원문", { align: "left" });
-    doc.moveDown(0.4);
-    doc.fontSize(10).fillColor("#555555").text(`Job: ${input.job.id}`);
-    doc.text(`Generated: ${formatKstDateTime(new Date().toISOString())}`);
-    doc.fillColor("#000000");
-    doc.moveDown(1);
+    writePdfJobMetadata(doc, input.job);
 
     doc.fontSize(15).text("번역문", { underline: true });
     doc.moveDown(0.5);
-    doc.fontSize(12).text(input.translation.title, { underline: true });
-    doc.moveDown(0.25);
     writeMarkdownLikePdfText(doc, input.translation.text);
     doc.addPage();
     if (input.fontPath) {
@@ -2974,9 +3494,356 @@ async function writeOriginalAndTranslationPdf(input: {
   });
 }
 
+async function writeImageOverlayPdf(input: {
+  pdfPath: string;
+  job: StoredJob;
+  imageSource: ImageSourceFile;
+  blocks: ImageOcrBlock[];
+  translations: Map<string, string>;
+  supportSections: TemplateSupportSections;
+  fontPath: string | null;
+}): Promise<void> {
+  const imageBuffer = await fs.readFile(input.imageSource.path);
+  const dimensions = readImageDimensions(imageBuffer);
+  if (!dimensions) {
+    throw new Error("Only PNG and JPEG images can be rendered with translated overlay output");
+  }
+  await fs.mkdir(path.dirname(input.pdfPath), { recursive: true });
+  await new Promise<void>((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      margin: 48,
+      info: {
+        Title: `Image Translation - ${input.job.id}`,
+        Subject: "Telegram Local Ingest image translation output",
+        Author: "telegram-local-ingest",
+      },
+    });
+    const stream = createWriteStream(input.pdfPath);
+    const done = (error?: Error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+
+    doc.on("error", reject);
+    stream.on("error", reject);
+    stream.on("finish", () => done());
+    doc.pipe(stream);
+
+    if (input.fontPath) {
+      doc.font(input.fontPath);
+    }
+    writePdfJobMetadata(doc, input.job);
+
+    if (input.supportSections.beforeTranslation) {
+      writeMarkdownLikePdfText(doc, input.supportSections.beforeTranslation);
+      doc.addPage();
+      if (input.fontPath) {
+        doc.font(input.fontPath);
+      }
+    }
+
+    doc.fontSize(15).text("번역문", { underline: true });
+    doc.moveDown(0.5);
+    drawTranslatedImagePage({
+      doc,
+      imagePath: input.imageSource.path,
+      dimensions,
+      blocks: input.blocks,
+      translations: input.translations,
+    });
+
+    if (input.supportSections.afterTranslation) {
+      doc.addPage();
+      if (input.fontPath) {
+        doc.font(input.fontPath);
+      }
+      writeMarkdownLikePdfText(doc, input.supportSections.afterTranslation);
+    }
+
+    doc.addPage();
+    if (input.fontPath) {
+      doc.font(input.fontPath);
+    }
+    doc.fontSize(15).text("[원문]", { underline: true });
+    doc.moveDown(0.5);
+    drawImageFitToCurrentPage(doc, input.imageSource.path, dimensions);
+    doc.end();
+  });
+}
+
+function writePdfJobMetadata(doc: PDFKit.PDFDocument, job: Pick<StoredJob, "id">): void {
+  doc
+    .fontSize(8)
+    .fillColor("#666666")
+    .text(formatOutputJobMetadata(job), { align: "left" });
+  doc.fillColor("#000000");
+  doc.moveDown(0.6);
+}
+
+function drawTranslatedImagePage(input: {
+  doc: PDFKit.PDFDocument;
+  imagePath: string;
+  dimensions: ImageDimensions;
+  blocks: ImageOcrBlock[];
+  translations: Map<string, string>;
+}): void {
+  const placement = drawImageFitToCurrentPage(input.doc, input.imagePath, input.dimensions);
+  const overlayBoxes = layoutTranslatedImageBoxes({
+    doc: input.doc,
+    placement,
+    imageDimensions: input.dimensions,
+    blocks: input.blocks,
+    translations: input.translations,
+  });
+  for (const box of overlayBoxes) {
+    drawTranslatedImageBlockBackground(input.doc, box.rect);
+  }
+  for (const box of overlayBoxes) {
+    drawTranslatedImageBlockText(input.doc, box);
+  }
+}
+
+function drawImageFitToCurrentPage(
+  doc: PDFKit.PDFDocument,
+  imagePath: string,
+  dimensions: ImageDimensions,
+): { x: number; y: number; width: number; height: number } {
+  const maxWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const maxHeight = doc.page.height - doc.y - doc.page.margins.bottom;
+  const scale = Math.min(maxWidth / dimensions.width, maxHeight / dimensions.height);
+  const width = Math.max(1, dimensions.width * scale);
+  const height = Math.max(1, dimensions.height * scale);
+  const x = doc.page.margins.left + Math.max(0, (maxWidth - width) / 2);
+  const y = doc.y;
+  doc.image(imagePath, x, y, { width, height });
+  doc.y = y + height;
+  return { x, y, width, height };
+}
+
+function layoutTranslatedImageBoxes(input: {
+  doc: PDFKit.PDFDocument;
+  placement: PdfRect;
+  imageDimensions: ImageDimensions;
+  blocks: ImageOcrBlock[];
+  translations: Map<string, string>;
+}): ImageOverlayBox[] {
+  const scale = input.placement.width / input.imageDimensions.width;
+  const boxes = input.blocks.flatMap((block): ImageOverlayBox[] => {
+    const text = input.translations.get(block.id)?.trim();
+    if (!text) {
+      return [];
+    }
+    const sourceRect = {
+      x: input.placement.x + block.bbox.x * scale,
+      y: input.placement.y + block.bbox.y * scale,
+      width: block.bbox.width * scale,
+      height: block.bbox.height * scale,
+    };
+    return [buildImageOverlayBox(input.doc, input.placement, sourceRect, text)];
+  });
+  return resolveImageOverlayCollisions(boxes, input.placement);
+}
+
+function buildImageOverlayBox(
+  doc: PDFKit.PDFDocument,
+  placement: PdfRect,
+  sourceRect: PdfRect,
+  text: string,
+): ImageOverlayBox {
+  const preferredFontSize = Math.max(6, Math.min(10, sourceRect.height * 0.55));
+  const fontSize = fitSingleLinePdfTextFontSize(doc, text, placement.width, preferredFontSize);
+  const lineHeight = Math.max(8, fontSize * 1.18);
+  const padding = Math.max(1.5, Math.min(3, fontSize * 0.24));
+  const measuredTextWidth = doc.fontSize(fontSize).widthOfString(text);
+  const desiredWidth = clampNumber(
+    Math.max(sourceRect.width, Math.min(Math.max(sourceRect.width * 2.2, 72), measuredTextWidth + padding * 2, placement.width)),
+    Math.min(36, placement.width),
+    placement.width,
+  );
+  const centeredX = sourceRect.x + sourceRect.width / 2 - desiredWidth / 2;
+  const x = clampNumber(centeredX, placement.x, placement.x + placement.width - desiredWidth);
+  const y = clampNumber(
+    sourceRect.y + sourceRect.height / 2 - lineHeight / 2,
+    placement.y,
+    placement.y + placement.height - lineHeight,
+  );
+  return {
+    rect: {
+      x,
+      y,
+      width: desiredWidth,
+      height: lineHeight,
+    },
+    text,
+    padding,
+    fontSize,
+    lineHeight,
+  };
+}
+
+function resolveImageOverlayCollisions(boxes: ImageOverlayBox[], placement: PdfRect): ImageOverlayBox[] {
+  const sorted = [...boxes].sort((left, right) => left.rect.y - right.rect.y || left.rect.x - right.rect.x);
+  const placed: ImageOverlayBox[] = [];
+  const gap = 2;
+  for (const box of sorted) {
+    const rect = { ...box.rect };
+    let moved = true;
+    while (moved) {
+      moved = false;
+      for (const previous of placed) {
+        if (!rectsOverlap(rect, previous.rect, gap)) {
+          continue;
+        }
+        rect.y = previous.rect.y + previous.rect.height + gap;
+        moved = true;
+      }
+    }
+    if (rect.y + rect.height > placement.y + placement.height) {
+      rect.y = Math.max(placement.y, placement.y + placement.height - rect.height);
+    }
+    placed.push({
+      ...box,
+      rect,
+    });
+  }
+  return placed;
+}
+
+function rectsOverlap(left: PdfRect, right: PdfRect, gap = 0): boolean {
+  return !(
+    left.x + left.width + gap <= right.x ||
+    right.x + right.width + gap <= left.x ||
+    left.y + left.height + gap <= right.y ||
+    right.y + right.height + gap <= left.y
+  );
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (max < min) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+function drawTranslatedImageBlockBackground(doc: PDFKit.PDFDocument, rect: PdfRect): void {
+  doc.save();
+  doc.fillOpacity(0.84).rect(rect.x, rect.y, rect.width, rect.height).fill("#FFFFFF");
+  doc.restore();
+}
+
+function drawTranslatedImageBlockText(doc: PDFKit.PDFDocument, box: ImageOverlayBox): void {
+  const textWidth = Math.max(4, box.rect.width - box.padding * 2);
+  const textHeight = Math.max(4, box.lineHeight);
+  doc
+    .fillColor("#000000")
+    .fontSize(box.fontSize)
+    .text(box.text, box.rect.x + box.padding, box.rect.y, {
+      width: textWidth,
+      height: textHeight,
+      lineGap: 0,
+      ellipsis: true,
+    });
+}
+
+function fitSingleLinePdfTextFontSize(
+  doc: PDFKit.PDFDocument,
+  text: string,
+  maxWidth: number,
+  preferredFontSize: number,
+): number {
+  for (let fontSize = preferredFontSize; fontSize >= 5; fontSize -= 0.5) {
+    doc.fontSize(fontSize);
+    if (doc.widthOfString(text) <= maxWidth) {
+      return fontSize;
+    }
+  }
+  return 5;
+}
+
+function fitPdfTextFontSize(doc: PDFKit.PDFDocument, text: string, width: number, height: number): number {
+  const maxFontSize = Math.max(6, Math.min(16, height * 0.55));
+  for (let fontSize = maxFontSize; fontSize >= 6; fontSize -= 0.5) {
+    doc.fontSize(fontSize);
+    if (doc.heightOfString(text, { width, lineGap: Math.max(0, Math.min(2, fontSize * 0.14)) }) <= height) {
+      return fontSize;
+    }
+  }
+  return 6;
+}
+
+function readImageDimensions(buffer: Buffer): ImageDimensions | null {
+  try {
+    return readPngDimensions(buffer);
+  } catch {
+    return readJpegDimensions(buffer);
+  }
+}
+
+function readJpegDimensions(buffer: Buffer): ImageDimensions | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null;
+  }
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    if (marker === undefined) {
+      return null;
+    }
+    if (marker === 0xd9 || marker === 0xda) {
+      return null;
+    }
+    const segmentLength = buffer.readUInt16BE(offset + 2);
+    if (segmentLength < 2 || offset + 2 + segmentLength > buffer.length) {
+      return null;
+    }
+    if (
+      marker === 0xc0 ||
+      marker === 0xc1 ||
+      marker === 0xc2 ||
+      marker === 0xc3 ||
+      marker === 0xc5 ||
+      marker === 0xc6 ||
+      marker === 0xc7 ||
+      marker === 0xc9 ||
+      marker === 0xca ||
+      marker === 0xcb ||
+      marker === 0xcd ||
+      marker === 0xce ||
+      marker === 0xcf
+    ) {
+      return {
+        height: buffer.readUInt16BE(offset + 5),
+        width: buffer.readUInt16BE(offset + 7),
+      };
+    }
+    offset += 2 + segmentLength;
+  }
+  return null;
+}
+
 function writeMarkdownLikePdfText(doc: PDFKit.PDFDocument, markdown: string): void {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (isMarkdownTableStart(lines, index)) {
+      const rows = [parseMarkdownTableRow(line)];
+      index += 2;
+      while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
+        rows.push(parseMarkdownTableRow(lines[index] ?? ""));
+        index += 1;
+      }
+      writeMarkdownPdfTable(doc, rows);
+      index -= 1;
+      continue;
+    }
     const trimmed = line.trimEnd();
     if (trimmed.length === 0) {
       doc.moveDown(0.35);
@@ -2998,6 +3865,59 @@ function writeMarkdownLikePdfText(doc: PDFKit.PDFDocument, markdown: string): vo
       paragraphGap: 1,
     });
   }
+}
+
+function writeMarkdownPdfTable(doc: PDFKit.PDFDocument, rows: string[][]): void {
+  if (rows.length === 0) {
+    return;
+  }
+  const columnCount = Math.max(1, ...rows.map((row) => row.length));
+  const tableLeft = doc.page.margins.left;
+  const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const columnWidth = tableWidth / columnCount;
+  const cellPadding = 5;
+  const bottomLimit = () => doc.page.height - doc.page.margins.bottom;
+  let y = doc.y + 4;
+
+  doc.fontSize(9);
+  for (const [rowIndex, row] of rows.entries()) {
+    const cells = Array.from({ length: columnCount }, (_, index) => stripInlineMarkdown(row[index] ?? ""));
+    const rowHeight = Math.max(
+      22,
+      ...cells.map((cell) =>
+        doc.heightOfString(cell || " ", {
+          width: Math.max(24, columnWidth - cellPadding * 2),
+          lineGap: 1,
+        }) + cellPadding * 2),
+    );
+    if (y + rowHeight > bottomLimit()) {
+      doc.addPage();
+      y = doc.y;
+    }
+    const isHeader = rowIndex === 0;
+    for (const [cellIndex, cell] of cells.entries()) {
+      const x = tableLeft + cellIndex * columnWidth;
+      doc.save();
+      if (isHeader) {
+        doc.rect(x, y, columnWidth, rowHeight).fillAndStroke("#D9EAF7", "#CCCCCC");
+      } else {
+        doc.rect(x, y, columnWidth, rowHeight).stroke("#CCCCCC");
+      }
+      doc.restore();
+      doc
+        .fillColor("#000000")
+        .fontSize(9)
+        .text(cell, x + cellPadding, y + cellPadding, {
+          width: Math.max(24, columnWidth - cellPadding * 2),
+          lineGap: 1,
+        });
+    }
+    y += rowHeight;
+  }
+
+  doc.x = tableLeft;
+  doc.y = y + 8;
+  doc.fillColor("#000000").fontSize(10);
 }
 
 function writeOriginalPdfText(doc: PDFKit.PDFDocument, text: string): void {

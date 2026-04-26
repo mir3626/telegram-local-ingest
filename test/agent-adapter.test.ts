@@ -72,6 +72,33 @@ test("buildAgentPrompt asks for block translations when DOCX structure is availa
   assert.doesNotMatch(prompt, /Create Markdown only/);
 });
 
+test("buildAgentPrompt tells image OCR agents to translate mixed-language natural text", () => {
+  const fixture = createFixture();
+  const prompt = buildAgentPrompt({
+    ...inputFixture(fixture),
+    language: {
+      primaryLanguage: "zh",
+      confidence: 0.92,
+      translationNeeded: true,
+      targetLanguage: "ko",
+    },
+    artifacts: [{
+      id: "artifact-image",
+      kind: "image_ocr_text",
+      fileName: "menu.png.txt",
+      sourcePath: fixture.transcriptPath,
+      structurePath: path.join(fixture.root, "menu.blocks.json"),
+      charCount: 128,
+      truncated: false,
+    }],
+  });
+
+  assert.match(prompt, /For image OCR structure artifacts/);
+  assert.match(prompt, /Translate every natural-language phrase inside each block into the target language/);
+  assert.match(prompt, /including mixed English\/Chinese\/Korean\/Japanese\/Latin-script text/);
+  assert.match(prompt, /including embedded English or Latin-script phrases/);
+});
+
 test("buildAgentCommand replaces placeholders and detects prompt file usage", () => {
   const command = buildAgentCommand("{projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}", {
     bundlePath: "/raw/job",

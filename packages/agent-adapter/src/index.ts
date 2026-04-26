@@ -115,7 +115,10 @@ export async function runAgentPostprocess(
 
 export function buildAgentPrompt(input: AgentPostprocessInput): string {
   const outputFormat = ".md" as const;
-  const hasStructuredDocx = input.artifacts.some((artifact) => artifact.structurePath);
+  const structuredArtifacts = input.artifacts.filter((artifact) => artifact.structurePath);
+  const hasStructuredArtifacts = structuredArtifacts.length > 0;
+  const hasImageOcrStructure = structuredArtifacts.some((artifact) => artifact.kind === "image_ocr_text");
+  const hasDocxStructure = structuredArtifacts.some((artifact) => artifact.kind === "docx_text");
   const artifactLines = input.artifacts.length === 0
     ? ["- None"]
     : input.artifacts.map((artifact) => [
@@ -150,17 +153,24 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "",
     "Use the fixed business document translation preset below whenever translation is needed.",
     "Run the translator/reviewer methodology internally; do not write separate draft files unless they are needed for the final deliverable.",
-    hasStructuredDocx
+    hasStructuredArtifacts
       ? "Create text output files only: `translated.md` and `translations.json`. Do not use DOCX/PDF/HWP/HWPX/ZIP/binary document generation tools or skills."
       : "Create Markdown only. Do not use DOCX/PDF/HWP/HWPX/ZIP/binary document generation tools or skills.",
     "Use Markdown headings, numbering, tables, and lists to preserve the source structure clearly for the worker renderer.",
     "Do not flatten paragraphs, tables, numbered clauses, or lists into one pasted block.",
-    ...(hasStructuredDocx
+    ...(hasStructuredArtifacts
       ? [
           "For artifacts with a structure path, also create `translations.json` using the exact block ids from that structure file.",
           "The JSON schema is: `{ \"schemaVersion\": 1, \"blocks\": [{ \"id\": \"b0001\", \"text\": \"translated block text\" }] }`.",
           "Do not omit, rename, merge, split, or reorder block ids in `translations.json`; leave uncertain blocks translated as faithfully as possible.",
-          "Keep translation metadata, glossary, and translator notes in `translated.md`; the worker preserves those support sections around the template-preserved DOCX body.",
+          "Translate every natural-language phrase inside each block into the target language, including mixed English/Chinese/Korean/Japanese/Latin-script text; preserve only true names, product codes, URLs, units, and formulas where translation would change their identity.",
+          ...(hasDocxStructure
+            ? ["For DOCX structure artifacts, the worker uses `translations.json` to preserve the original DOCX package/template while replacing body text."]
+            : []),
+          ...(hasImageOcrStructure
+            ? ["For image OCR structure artifacts, the worker uses `translations.json` to draw translated text back over the original image at the recorded bounding boxes."]
+            : []),
+          "Keep translation metadata, glossary, and translator notes in `translated.md`; the worker preserves those support sections around structured DOCX/image rendering when possible.",
           "The job is incomplete unless both `translated.md` and `translations.json` exist directly in the output directory.",
         ]
       : []),
@@ -173,8 +183,8 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "",
     "## Required Output",
     "",
-    hasStructuredDocx
-      ? "- Create exactly these two text files directly in the output directory: `translated.md` for human review and `translations.json` for worker-owned DOCX template replacement."
+    hasStructuredArtifacts
+      ? "- Create exactly these two text files directly in the output directory: `translated.md` for human review and `translations.json` for worker-owned structured rendering."
       : "- Create exactly one final translated Markdown file named `translated.md` in the output directory.",
     "- Do not create `.docx`, `.pdf`, `.hwp`, `.hwpx`, `.zip`, or any other binary document file.",
     "- Put translation metadata, glossary, translated document, and translator notes into `translated.md`. Put only block id translations in `translations.json` when that file is required. Do not append a duplicate original/source section unless explicitly requested, because the worker may append `[원문]` itself.",
@@ -274,6 +284,7 @@ function buildBusinessDocumentTranslationPreset(input: AgentPostprocessInput, ou
     "",
     "Both translators MUST:",
     "- Apply Glossary v1 consistently",
+    "- Translate mixed-language source passages completely into TARGET_LANG, including embedded English or Latin-script phrases when they are ordinary natural-language content rather than proper names/codes",
     "- Preserve all numbers, dates, proper nouns, code references verbatim",
     "- Retain source document's layout: headings, numbering, tables, lists",
     "- Flag uncertain terms with `[?term]` for reviewer attention",

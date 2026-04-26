@@ -41,6 +41,18 @@ export interface DocxTextBlock {
   text: string;
 }
 
+export interface ImageOcrBlock {
+  id: string;
+  text: string;
+  bbox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  confidence: number;
+}
+
 export interface SkippedPreprocessFile {
   fileId?: string;
   fileName: string;
@@ -211,12 +223,16 @@ export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput
         continue;
       }
       const extractedPath = await writeExtractedTextArtifact(input.artifactRoot, file, sourcePath, preview.text);
+      const structurePath = preview.blocks.length > 0
+        ? await writeImageOcrStructureArtifact(extractedPath, file, sourcePath, preview.blocks)
+        : undefined;
       artifacts.push({
         id: `${file.id}:image_ocr_text`,
         kind: "image_ocr_text",
         fileId: file.id,
         fileName: `${file.originalName ?? path.basename(sourcePath)}.txt`,
         sourcePath: extractedPath,
+        ...(structurePath ? { structurePath } : {}),
         text: preview.text,
         charCount: preview.text.length,
         truncated: preview.truncated,
@@ -482,7 +498,7 @@ async function readPdfOcrTextPreview(
 async function readImageOcrTextPreview(
   filePath: string,
   maxBytes: number,
-): Promise<{ text: string; truncated: boolean; reason?: string }> {
+): Promise<{ text: string; truncated: boolean; blocks: ImageOcrBlock[]; reason?: string }> {
   const tesseractBin = process.env.TESSERACT_BIN?.trim() || "tesseract";
   try {
     const { stdout } = await execFileAsync(tesseractBin, [
@@ -492,17 +508,130 @@ async function readImageOcrTextPreview(
       process.env.OCR_LANGUAGES?.trim() || DEFAULT_OCR_LANGUAGES,
       "--psm",
       process.env.OCR_PSM?.trim() || "3",
+      "tsv",
     ], {
       timeout: TESSERACT_TIMEOUT_MS,
       maxBuffer: Math.max(4 * 1024 * 1024, maxBytes * 8),
     });
-    return truncateUtf8(stdout.replace(/\u0000/g, ""), maxBytes);
+    const blocks = parseTesseractTsv(stdout.replace(/\u0000/g, ""));
+    const text = blocks.length > 0
+      ? blocks.map((block) => block.text).join("\n")
+      : stdout.replace(/\u0000/g, "");
+    return { ...truncateUtf8(text, maxBytes), blocks };
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
-      return { text: "", truncated: false, reason: "image_ocr_tool_missing" };
+      return { text: "", truncated: false, blocks: [], reason: "image_ocr_tool_missing" };
     }
-    return { text: "", truncated: false, reason: "image_ocr_failed" };
+    return { text: "", truncated: false, blocks: [], reason: "image_ocr_failed" };
   }
+}
+
+function parseTesseractTsv(stdout: string): ImageOcrBlock[] {
+  const lines = stdout.replace(/\r\n/g, "\n").split("\n").filter((line) => line.trim().length > 0);
+  if (lines.length < 2) {
+    return [];
+  }
+  const headers = (lines[0] ?? "").split("\t");
+  const indexes = {
+    level: headers.indexOf("level"),
+    pageNum: headers.indexOf("page_num"),
+    blockNum: headers.indexOf("block_num"),
+    parNum: headers.indexOf("par_num"),
+    lineNum: headers.indexOf("line_num"),
+    left: headers.indexOf("left"),
+    top: headers.indexOf("top"),
+    width: headers.indexOf("width"),
+    height: headers.indexOf("height"),
+    conf: headers.indexOf("conf"),
+    text: headers.indexOf("text"),
+  };
+  if (
+    indexes.level < 0 ||
+    indexes.pageNum < 0 ||
+    indexes.blockNum < 0 ||
+    indexes.parNum < 0 ||
+    indexes.lineNum < 0 ||
+    indexes.left < 0 ||
+    indexes.top < 0 ||
+    indexes.width < 0 ||
+    indexes.height < 0 ||
+    indexes.conf < 0 ||
+    indexes.text < 0
+  ) {
+    return [];
+  }
+
+  const linesByKey = new Map<string, {
+    words: string[];
+    confidences: number[];
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  }>();
+  for (const line of lines.slice(1)) {
+    const columns = line.split("\t");
+    const text = columns.slice(indexes.text).join("\t").trim();
+    const level = readTsvInteger(columns[indexes.level]);
+    const left = readTsvInteger(columns[indexes.left]);
+    const top = readTsvInteger(columns[indexes.top]);
+    const width = readTsvInteger(columns[indexes.width]);
+    const height = readTsvInteger(columns[indexes.height]);
+    if (level !== 5 || !text || width <= 0 || height <= 0) {
+      continue;
+    }
+    const key = [
+      columns[indexes.pageNum] ?? "1",
+      columns[indexes.blockNum] ?? "0",
+      columns[indexes.parNum] ?? "0",
+      columns[indexes.lineNum] ?? "0",
+    ].join(":");
+    const confidence = readTsvNumber(columns[indexes.conf]);
+    const existing = linesByKey.get(key);
+    if (!existing) {
+      linesByKey.set(key, {
+        words: [text],
+        confidences: Number.isFinite(confidence) && confidence >= 0 ? [confidence] : [],
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+      });
+      continue;
+    }
+    existing.words.push(text);
+    if (Number.isFinite(confidence) && confidence >= 0) {
+      existing.confidences.push(confidence);
+    }
+    existing.left = Math.min(existing.left, left);
+    existing.top = Math.min(existing.top, top);
+    existing.right = Math.max(existing.right, left + width);
+    existing.bottom = Math.max(existing.bottom, top + height);
+  }
+
+  return [...linesByKey.values()].map((line, index) => ({
+    id: `b${String(index + 1).padStart(4, "0")}`,
+    text: line.words.join(" "),
+    bbox: {
+      x: line.left,
+      y: line.top,
+      width: line.right - line.left,
+      height: line.bottom - line.top,
+    },
+    confidence: line.confidences.length > 0
+      ? Math.round(line.confidences.reduce((sum, value) => sum + value, 0) / line.confidences.length)
+      : -1,
+  }));
+}
+
+function readTsvInteger(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function readTsvNumber(value: string | undefined): number {
+  const parsed = Number.parseFloat(value ?? "");
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
 async function writeExtractedTextArtifact(
@@ -532,6 +661,25 @@ async function writeDocxStructureArtifact(
   await fs.writeFile(outputPath, `${JSON.stringify({
     schemaVersion: 1,
     sourceFileName: file.originalName ?? path.basename(sourcePath),
+    blocks,
+  }, null, 2)}\n`, "utf8");
+  return outputPath;
+}
+
+async function writeImageOcrStructureArtifact(
+  extractedPath: string,
+  file: StoredJobFile,
+  sourcePath: string,
+  blocks: ImageOcrBlock[],
+): Promise<string> {
+  const outputPath = path.join(
+    path.dirname(extractedPath),
+    `${artifactStem(file.originalName ?? path.basename(sourcePath))}.blocks.json`,
+  );
+  await fs.writeFile(outputPath, `${JSON.stringify({
+    schemaVersion: 1,
+    sourceFileName: file.originalName ?? path.basename(sourcePath),
+    sourceType: "image_ocr",
     blocks,
   }, null, 2)}\n`, "utf8");
   return outputPath;
