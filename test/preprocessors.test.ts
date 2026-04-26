@@ -28,8 +28,8 @@ test("collectPreprocessedTextArtifacts reads text originals and bundled transcri
       }),
       fileFixture({
         id: "file-binary",
-        originalName: "image.png",
-        mimeType: "image/png",
+        originalName: "archive.bin",
+        mimeType: "application/octet-stream",
       }),
     ],
     sourceBundle: bundleFixture(root, "job-1"),
@@ -41,7 +41,7 @@ test("collectPreprocessedTextArtifacts reads text originals and bundled transcri
   assert.match(result.artifacts[1]?.text ?? "", /회의 전사/);
   assert.deepEqual(result.skippedFiles, [{
     fileId: "file-binary",
-    fileName: "image.png",
+    fileName: "archive.bin",
     reason: "unsupported_file_type",
   }]);
 });
@@ -76,6 +76,54 @@ test("collectPreprocessedTextArtifacts extracts DOCX text into runtime artifacts
   assert.match(result.artifacts[0]?.text ?? "", /vendor update requires Korean translation & formatting/);
   assert.match(result.artifacts[0]?.sourcePath ?? "", /runtime\/extracted\/job-docx\/preprocess\/file-docx\/vendor-update\.txt$/);
   assert.match(fs.readFileSync(result.artifacts[0]?.sourcePath ?? "", "utf8"), /vendor update requires Korean translation/);
+});
+
+test("collectPreprocessedTextArtifacts extracts EML message text into runtime artifacts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "preprocessors-eml-"));
+  const originalPath = writeFile(root, "runtime/archive/originals/vendor-update.eml", [
+    "From: Vendor <vendor@example.com>",
+    "To: Operator <operator@example.com>",
+    "Subject: =?UTF-8?Q?Vendor_update?=",
+    "Date: Fri, 24 Apr 2026 10:30:00 +0000",
+    "MIME-Version: 1.0",
+    "Content-Type: multipart/alternative; boundary=\"mail-boundary\"",
+    "",
+    "--mail-boundary",
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    "This vendor update requires Korean translation.=0AArticle 1. Scope.",
+    "--mail-boundary",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    "<p>This HTML alternative should not be preferred.</p>",
+    "--mail-boundary--",
+    "",
+  ].join("\r\n"));
+  const artifactRoot = path.join(root, "runtime/extracted/job-eml/preprocess");
+
+  const result = await collectPreprocessedTextArtifacts({
+    job: jobFixture("job-eml"),
+    files: [
+      fileFixture({
+        id: "file-eml",
+        originalName: "vendor-update.eml",
+        mimeType: "message/rfc822",
+        archivePath: originalPath,
+      }),
+    ],
+    sourceBundle: bundleFixture(root, "job-eml"),
+    artifactRoot,
+  });
+
+  assert.equal(result.jobId, "job-eml");
+  assert.equal(result.skippedFiles.length, 0);
+  assert.equal(result.artifacts.length, 1);
+  assert.equal(result.artifacts[0]?.kind, "eml_text");
+  assert.match(result.artifacts[0]?.text ?? "", /Subject: Vendor update/);
+  assert.match(result.artifacts[0]?.text ?? "", /This vendor update requires Korean translation/);
+  assert.doesNotMatch(result.artifacts[0]?.text ?? "", /HTML alternative/);
+  assert.match(result.artifacts[0]?.sourcePath ?? "", /runtime\/extracted\/job-eml\/preprocess\/file-eml\/vendor-update\.txt$/);
 });
 
 test("collectPreprocessedTextArtifacts extracts PDF text into runtime artifacts", async () => {
@@ -116,13 +164,101 @@ test("collectPreprocessedTextArtifacts extracts PDF text into runtime artifacts"
   }
 });
 
-test("collectPreprocessedTextArtifacts reports missing PDF text extractor", async () => {
+test("collectPreprocessedTextArtifacts falls back to OCR for scanned PDF uploads", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "preprocessors-pdf-ocr-"));
+  const originalPath = writeFile(root, "runtime/archive/originals/scanned.pdf", "%PDF-1.4\n");
+  const toolRoot = path.join(root, "tools");
+  const fakePdftotext = writeExecutable(toolRoot, "pdftotext", [
+    "#!/bin/sh",
+    "printf ''",
+  ].join("\n"));
+  const fakePdftoppm = writeExecutable(toolRoot, "pdftoppm", [
+    "#!/bin/sh",
+    "prefix=''",
+    "for arg do prefix=\"$arg\"; done",
+    "printf 'fake image' > \"${prefix}-1.png\"",
+  ].join("\n"));
+  const fakeTesseract = writeExecutable(toolRoot, "tesseract", [
+    "#!/bin/sh",
+    "printf 'OCR text from scanned PDF requiring Korean translation.\\n'",
+  ].join("\n"));
+  const previousPdftotext = process.env.PDFTOTEXT_BIN;
+  const previousPdftoppm = process.env.PDFTOPPM_BIN;
+  const previousTesseract = process.env.TESSERACT_BIN;
+
+  try {
+    process.env.PDFTOTEXT_BIN = fakePdftotext;
+    process.env.PDFTOPPM_BIN = fakePdftoppm;
+    process.env.TESSERACT_BIN = fakeTesseract;
+    const result = await collectPreprocessedTextArtifacts({
+      job: jobFixture("job-pdf-ocr"),
+      files: [
+        fileFixture({
+          id: "file-pdf",
+          originalName: "scanned.pdf",
+          mimeType: "application/pdf",
+          archivePath: originalPath,
+        }),
+      ],
+      sourceBundle: bundleFixture(root, "job-pdf-ocr"),
+      artifactRoot: path.join(root, "runtime/extracted/job-pdf-ocr/preprocess"),
+    });
+
+    assert.equal(result.skippedFiles.length, 0);
+    assert.equal(result.artifacts.length, 1);
+    assert.equal(result.artifacts[0]?.kind, "pdf_ocr_text");
+    assert.match(result.artifacts[0]?.text ?? "", /OCR text from scanned PDF/);
+  } finally {
+    restoreEnv("PDFTOTEXT_BIN", previousPdftotext);
+    restoreEnv("PDFTOPPM_BIN", previousPdftoppm);
+    restoreEnv("TESSERACT_BIN", previousTesseract);
+  }
+});
+
+test("collectPreprocessedTextArtifacts extracts image OCR text into runtime artifacts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "preprocessors-image-ocr-"));
+  const originalPath = writeFile(root, "runtime/archive/originals/photo.png", "not really png");
+  const fakeTesseract = writeExecutable(path.join(root, "tools"), "tesseract", [
+    "#!/bin/sh",
+    "printf 'Image OCR text requiring Korean translation.\\n'",
+  ].join("\n"));
+  const previousTesseract = process.env.TESSERACT_BIN;
+
+  try {
+    process.env.TESSERACT_BIN = fakeTesseract;
+    const result = await collectPreprocessedTextArtifacts({
+      job: jobFixture("job-image-ocr"),
+      files: [
+        fileFixture({
+          id: "file-image",
+          originalName: "photo.png",
+          mimeType: "image/png",
+          archivePath: originalPath,
+        }),
+      ],
+      sourceBundle: bundleFixture(root, "job-image-ocr"),
+      artifactRoot: path.join(root, "runtime/extracted/job-image-ocr/preprocess"),
+    });
+
+    assert.equal(result.skippedFiles.length, 0);
+    assert.equal(result.artifacts.length, 1);
+    assert.equal(result.artifacts[0]?.kind, "image_ocr_text");
+    assert.match(result.artifacts[0]?.text ?? "", /Image OCR text/);
+    assert.match(result.artifacts[0]?.sourcePath ?? "", /runtime\/extracted\/job-image-ocr\/preprocess\/file-image\/photo\.txt$/);
+  } finally {
+    restoreEnv("TESSERACT_BIN", previousTesseract);
+  }
+});
+
+test("collectPreprocessedTextArtifacts reports missing PDF OCR tools when text layer is unavailable", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "preprocessors-pdf-missing-tool-"));
   const originalPath = writeFile(root, "runtime/archive/originals/source.pdf", "%PDF-1.4\n");
   const previousPdftotext = process.env.PDFTOTEXT_BIN;
+  const previousPdftoppm = process.env.PDFTOPPM_BIN;
 
   try {
     process.env.PDFTOTEXT_BIN = path.join(root, "tools", "missing-pdftotext");
+    process.env.PDFTOPPM_BIN = path.join(root, "tools", "missing-pdftoppm");
     const result = await collectPreprocessedTextArtifacts({
       job: jobFixture("job-pdf-missing-tool"),
       files: [
@@ -141,10 +277,11 @@ test("collectPreprocessedTextArtifacts reports missing PDF text extractor", asyn
     assert.deepEqual(result.skippedFiles, [{
       fileId: "file-pdf",
       fileName: "source.pdf",
-      reason: "pdf_tool_missing",
+      reason: "pdf_ocr_tool_missing",
     }]);
   } finally {
     restoreEnv("PDFTOTEXT_BIN", previousPdftotext);
+    restoreEnv("PDFTOPPM_BIN", previousPdftoppm);
   }
 });
 
@@ -169,6 +306,7 @@ test("isTextLikeJobFile accepts common text extensions and mimes", () => {
   assert.equal(isTextLikeJobFile(fileFixture({ originalName: "data.bin", mimeType: "application/json" })), true);
   assert.equal(isTextLikeJobFile(fileFixture({ originalName: "photo.jpg", mimeType: "image/jpeg" })), false);
   assert.equal(isTextLikeJobFile(fileFixture({ originalName: "memo.docx" })), false);
+  assert.equal(isTextLikeJobFile(fileFixture({ originalName: "mail.eml", mimeType: "message/rfc822" })), false);
   assert.equal(isDocxJobFile(fileFixture({ originalName: "memo.docx" })), true);
 });
 

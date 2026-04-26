@@ -3,11 +3,13 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   getJob,
   listJobEvents,
+  listJobOutputs,
   listJobs,
   requestRetry,
   transitionJob,
   type StoredJob,
   type StoredJobFile,
+  type StoredJobOutput,
 } from "@telegram-local-ingest/db";
 import {
   getMessageCommand,
@@ -33,7 +35,7 @@ export function handleOperatorCommand(db: DatabaseSync, message: ParsedTelegramM
     return {
       handled: true,
       chatId: message.chatId,
-      text: buildStatusResponse(db, command.targetJobId, message),
+      text: buildStatusResponse(db, command.targetJobId, message, now),
     };
   }
 
@@ -83,10 +85,16 @@ export async function sendOperatorCommandResponse(
   return result;
 }
 
-export function buildStatusResponse(db: DatabaseSync, targetJobId: string | undefined, requester?: ParsedTelegramMessage): string {
+export function buildStatusResponse(
+  db: DatabaseSync,
+  targetJobId: string | undefined,
+  requester?: ParsedTelegramMessage,
+  now = new Date().toISOString(),
+): string {
   if (targetJobId) {
     const job = assertJobVisibleToMessage(db, targetJobId, requester);
     const events = listJobEvents(db, job.id).slice(-5);
+    const outputs = listJobOutputs(db, job.id);
     return [
       `📌 작업 ${job.id}`,
       `상태: ${job.status}`,
@@ -94,6 +102,8 @@ export function buildStatusResponse(db: DatabaseSync, targetJobId: string | unde
       `태그: ${job.tags.length > 0 ? job.tags.join(", ") : "-"}`,
       `업데이트: ${job.updatedAt}`,
       job.error ? `오류: ${job.error}` : undefined,
+      outputs.length > 0 ? "결과 파일:" : undefined,
+      ...formatOutputStatusLines(outputs, now),
       events.length > 0 ? "최근 이벤트:" : undefined,
       ...events.map((event) => `- ${event.createdAt} ${event.type}${event.message ? `: ${event.message}` : ""}`),
     ].filter((line): line is string => line !== undefined).join("\n");
@@ -105,7 +115,7 @@ export function buildStatusResponse(db: DatabaseSync, targetJobId: string | unde
   }
   return [
     "📋 최근 작업:",
-    ...jobs.map((job) => `${job.id} ${job.status} ${job.project ?? "-"}`),
+    ...jobs.map((job) => `${job.id} ${job.status} ${job.project ?? "-"}${formatOutputSummary(listJobOutputs(db, job.id), now)}`),
   ].join("\n");
 }
 
@@ -161,4 +171,48 @@ function jobMatchesRequester(job: StoredJob, requester: ParsedTelegramMessage): 
     return false;
   }
   return true;
+}
+
+function formatOutputStatusLines(outputs: StoredJobOutput[], now: string): string[] {
+  return outputs.map((output) => {
+    const status = outputDisplayStatus(output, now);
+    return `- ${output.fileName} [${status}] 만료: ${output.expiresAt}`;
+  });
+}
+
+function formatOutputSummary(outputs: StoredJobOutput[], now: string): string {
+  if (outputs.length === 0) {
+    return "";
+  }
+  const counts = countOutputStatuses(outputs, now);
+  const parts = [
+    counts.active > 0 ? `다운로드 가능 ${counts.active}` : undefined,
+    counts.expired > 0 ? `만료 ${counts.expired}` : undefined,
+    counts.deleted > 0 ? `폐기 ${counts.deleted}` : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? ` | 결과: ${parts.join(", ")}` : "";
+}
+
+function countOutputStatuses(outputs: StoredJobOutput[], now: string): { active: number; expired: number; deleted: number } {
+  const counts = { active: 0, expired: 0, deleted: 0 };
+  for (const output of outputs) {
+    if (output.deletedAt) {
+      counts.deleted += 1;
+    } else if (output.expiresAt <= now) {
+      counts.expired += 1;
+    } else {
+      counts.active += 1;
+    }
+  }
+  return counts;
+}
+
+function outputDisplayStatus(output: StoredJobOutput, now: string): string {
+  if (output.deletedAt) {
+    return "폐기됨";
+  }
+  if (output.expiresAt <= now) {
+    return "만료됨";
+  }
+  return "다운로드 가능";
 }

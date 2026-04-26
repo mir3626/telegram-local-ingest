@@ -87,7 +87,7 @@ export interface TranslationConfig {
   targetLanguage: string;
 }
 
-export type AgentPostprocessProvider = "none" | "codex" | "custom";
+export type AgentPostprocessProvider = "none" | "codex" | "claude" | "custom";
 
 export interface AgentPostprocessConfig {
   provider: AgentPostprocessProvider;
@@ -100,6 +100,7 @@ export interface WorkerConfig {
   sttConcurrency: number;
   agentConcurrency: number;
   jobClaimTtlMs: number;
+  outputCleanupIntervalMs: number;
 }
 
 export interface AppConfig {
@@ -206,6 +207,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     "WORKER_JOB_CLAIM_TTL_MS",
     issues,
   );
+  const workerOutputCleanupIntervalMs = parseInteger(
+    env.WORKER_OUTPUT_CLEANUP_INTERVAL_MS,
+    10 * 60 * 1000,
+    "WORKER_OUTPUT_CLEANUP_INTERVAL_MS",
+    issues,
+  );
 
   const config: AppConfig = {
     telegram: {
@@ -261,6 +268,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       sttConcurrency: workerSttConcurrency,
       agentConcurrency: workerAgentConcurrency,
       jobClaimTtlMs: workerJobClaimTtlMs,
+      outputCleanupIntervalMs: workerOutputCleanupIntervalMs,
     },
   };
 
@@ -320,6 +328,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (workerJobClaimTtlMs < 1) {
     issues.push("WORKER_JOB_CLAIM_TTL_MS must be at least 1");
+  }
+  if (workerOutputCleanupIntervalMs < 1) {
+    issues.push("WORKER_OUTPUT_CLEANUP_INTERVAL_MS must be at least 1");
   }
   if (config.agent.provider !== "none" && !config.agent.command) {
     issues.push("AGENT_POSTPROCESS_COMMAND is required when AGENT_POSTPROCESS_PROVIDER is enabled");
@@ -414,10 +425,10 @@ function parseSttProvider(value: string | undefined, issues: string[]): SttProvi
 
 function parseAgentPostprocessProvider(value: string | undefined, issues: string[]): AgentPostprocessProvider {
   const raw = readNonEmpty(value) ?? "none";
-  if (raw === "none" || raw === "codex" || raw === "custom") {
+  if (raw === "none" || raw === "codex" || raw === "claude" || raw === "custom") {
     return raw;
   }
-  issues.push("AGENT_POSTPROCESS_PROVIDER must be one of: none, codex, custom");
+  issues.push("AGENT_POSTPROCESS_PROVIDER must be one of: none, codex, claude, custom");
   return "none";
 }
 

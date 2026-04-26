@@ -209,7 +209,7 @@ Telegram mobile/desktop
 - **acceptance criteria**:
   - Worker can decide whether translation is needed without asking an LLM.
   - Unsupported file types are preserved and logged without blocking the source bundle.
-- **status**: completed. Added `packages/preprocessors`, `packages/language-detector`, `TRANSLATION_TARGET_LANGUAGE`, and worker `preprocess.completed`/`language.detected` events during `INGESTING`. Current preprocessing reads text-like imported originals, extracts DOCX text into runtime-only artifacts, and reads bundled transcript Markdown, preserving unsupported files without blocking the job.
+- **status**: completed. Added `packages/preprocessors`, `packages/language-detector`, `TRANSLATION_TARGET_LANGUAGE`, and worker `preprocess.completed`/`language.detected` events during `INGESTING`. Current preprocessing reads text-like imported originals, parses EML messages into mail headers plus preferred text body, extracts DOCX text into runtime-only artifacts, and reads bundled transcript Markdown, preserving unsupported files without blocking the job.
 
 ## Sprint 11 — Codex Agent Post-Processing
 
@@ -224,8 +224,8 @@ Telegram mobile/desktop
 - **acceptance criteria**:
   - Agent input is a prepared data package, not arbitrary workspace access.
   - Agent writes only output artifacts; `raw/**` remains immutable.
-  - Claude Code can be added later behind the same interface.
-- **status**: completed. Added `packages/agent-adapter`, local command placeholder/stdin prompt execution, prompt hard-boundaries, output/work directory separation, raw snapshot protection, and disabled-by-default config via `AGENT_POSTPROCESS_PROVIDER`. The worker now runs the agent adapter when deterministic language detection marks translation as needed, registers generated files through `packages/output-store`, and sends a Korean completion message with `download:<output_id>` buttons for 24-hour downloads. Download button labels show the actual KST expiry deadline. DOCX/PDF/HWP-family sources are delivered as document files, preferring agent-generated DOCX/HWP/HWPX outputs and falling back to worker-rendered DOCX through `pandoc`; non-document sources are delivered as mobile-friendly PDFs that combine preprocessed original text plus the translated/formatted result. Output filenames use the uploaded source stem plus `_translated`, and appended source text is labeled `[원문]` rather than appendix/`부록`. Added `{projectRoot}` command placeholders, `scripts/run-codex-postprocess.sh`, `scripts/smoke-agent-postprocess.sh`, `npm run smoke:agent:ready`, `npm run smoke:agent:live`, and operations documentation for the Codex command recipe.
+  - Claude Code can be tested behind the same interface.
+- **status**: completed. Added `packages/agent-adapter`, local command placeholder/stdin prompt execution, prompt hard-boundaries, output/work directory separation, raw snapshot protection, and disabled-by-default config via `AGENT_POSTPROCESS_PROVIDER`. The worker now runs the agent adapter when deterministic language detection marks translation as needed, registers generated files through `packages/output-store`, and sends a Korean completion message with `download:<output_id>` buttons for 24-hour downloads. Download button labels show the actual KST expiry deadline. DOCX/PDF/EML/HWP-family sources are delivered as document files, preferring agent-generated DOCX/HWP/HWPX outputs and falling back to worker-rendered DOCX through `pandoc`; non-document sources are delivered as mobile-friendly PDFs that combine preprocessed original text plus the translated/formatted result. Output filenames use the uploaded source stem plus `_translated`, and appended source text is labeled `[원문]` rather than appendix/`부록`. Added `{projectRoot}` command placeholders, `scripts/run-codex-postprocess.sh`, `scripts/run-claude-postprocess.sh`, `scripts/smoke-agent-postprocess.sh`, `npm run smoke:agent:ready`, `npm run smoke:agent:live`, and operations documentation for Codex and Claude command recipes.
 
 ## Sprint 12 — Utility Cleanup And Bot Separation Prep
 
@@ -241,7 +241,7 @@ Telegram mobile/desktop
   - Utility concerns are isolated from wiki/raw capture concerns.
   - Expired output cleanup is repeatable after worker restart.
   - Public/multi-user service constraints are documented.
-- **status**: in progress. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent. User-facing regenerate/discard controls are deliberately parked as low-priority follow-up work.
+- **status**: in progress, implementation-complete except live validation. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent. Current polish also added OCR preprocessing for scanned PDF and image uploads through `pdftoppm` plus `tesseract`, while leaving the existing language preset scope unchanged. The worker now performs expired-output cleanup on startup and then on `WORKER_OUTPUT_CLEANUP_INTERVAL_MS`, and `/status` reports output downloadability, expiry, and discard state. Operator docs record the personal-OAuth-only boundary and API migration path for any future public/multi-user service. User-facing regenerate/discard controls are deliberately parked as low-priority follow-up work.
 
 ## Sprint 13 — Vault Reconcile And Retention
 

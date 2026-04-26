@@ -88,6 +88,7 @@ import { runWikiIngestAdapter } from "@telegram-local-ingest/wiki-adapter";
 
 const execFileAsync = promisify(execFile);
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const EML_MIME_TYPES = new Set(["application/eml", "message/rfc822"]);
 const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
 export interface WorkerContext {
@@ -142,6 +143,7 @@ interface WorkerRuntimeState {
   runningTasks: Set<Promise<void>>;
   sttSemaphore: Semaphore;
   agentSemaphore: Semaphore;
+  lastOutputCleanupAtMs: number;
 }
 
 class Semaphore {
@@ -358,7 +360,7 @@ export async function runWorkerLoop(context: WorkerContext, options: WorkerLoopO
     const jobsStarted = await processRunnableJobs(context, context.config.worker.jobConcurrency, {
       waitForCompletion: false,
     });
-    await cleanupExpiredOutputFiles(context);
+    await cleanupExpiredOutputFilesIfDue(context);
     if (jobsStarted > 0 || updateResult.updatesSeen > 0) {
       const runtime = ensureWorkerRuntimeState(context);
       logWorker(
@@ -570,7 +572,11 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       await runPreprocessingAndLanguageCheck(context, job);
       logWorker(`preprocessing phase finished job=${job.id}`, "info", "PREPROCESS");
       logWorker(`agent postprocess phase started job=${job.id} provider=${context.config.agent.provider}`, "info", "AGENT");
-      await runWithSemaphore(context, "agent", () => runConfiguredAgentPostprocess(context, job));
+      if (shouldUseAgentSemaphore(context, job)) {
+        await runWithSemaphore(context, "agent", () => runConfiguredAgentPostprocess(context, job));
+      } else {
+        await runConfiguredAgentPostprocess(context, job);
+      }
       const stopped = terminalJobIfStopped(context.db, job.id);
       if (stopped) {
         return stopped;
@@ -636,6 +642,7 @@ function createWorkerRuntimeState(config: AppConfig): WorkerRuntimeState {
     runningTasks: new Set(),
     sttSemaphore: new Semaphore(config.worker.sttConcurrency),
     agentSemaphore: new Semaphore(config.worker.agentConcurrency),
+    lastOutputCleanupAtMs: 0,
   };
 }
 
@@ -733,6 +740,19 @@ async function cleanupExpiredOutputFiles(context: WorkerContext): Promise<void> 
   if (cleanup.failedOutputs.length > 0) {
     logWorker(`expired output cleanup failures=${cleanup.failedOutputs.length}`, "warn", "OUTPUT");
   }
+}
+
+async function cleanupExpiredOutputFilesIfDue(context: WorkerContext): Promise<void> {
+  const runtime = ensureWorkerRuntimeState(context);
+  const nowMs = Date.now();
+  if (
+    runtime.lastOutputCleanupAtMs > 0 &&
+    nowMs - runtime.lastOutputCleanupAtMs < context.config.worker.outputCleanupIntervalMs
+  ) {
+    return;
+  }
+  runtime.lastOutputCleanupAtMs = nowMs;
+  await cleanupExpiredOutputFiles(context);
 }
 
 async function answerCallbackQuerySafely(context: WorkerContext, callbackQueryId: string, text: string): Promise<void> {
@@ -1304,6 +1324,19 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
   return outputs;
 }
 
+function shouldUseAgentSemaphore(context: WorkerContext, job: StoredJob): boolean {
+  if (context.config.agent.provider === "none" || !context.config.agent.command) {
+    return false;
+  }
+  const events = listJobEvents(context.db, job.id);
+  if (
+    events.some((event) => event.type === "agent.postprocess.completed" || event.type === "agent.postprocess.skipped")
+  ) {
+    return false;
+  }
+  return readLanguageDetection(events)?.translationNeeded === true;
+}
+
 async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: StoredJob): Promise<void> {
   const events = listJobEvents(context.db, job.id);
   if (events.some((event) => event.type === "language.detected")) {
@@ -1340,7 +1373,7 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
   const blockingPreprocessSkip = findBlockingPreprocessSkip(preprocessing.skippedFiles);
   if (context.config.agent.provider !== "none" && blockingPreprocessSkip) {
     throw new Error(
-      `PDF text extraction is required for agent postprocess but failed for ${blockingPreprocessSkip.fileName}: ${blockingPreprocessSkip.reason}`,
+      `Source text extraction is required for agent postprocess but failed for ${blockingPreprocessSkip.fileName}: ${blockingPreprocessSkip.reason}`,
     );
   }
 
@@ -1367,6 +1400,13 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
 
 function findBlockingPreprocessSkip(skippedFiles: Array<{ fileName: string; reason: string }>): { fileName: string; reason: string } | null {
   return skippedFiles.find((file) =>
+    file.reason === "eml_no_text" ||
+    file.reason === "image_ocr_failed" ||
+    file.reason === "image_ocr_no_text" ||
+    file.reason === "image_ocr_tool_missing" ||
+    file.reason === "pdf_ocr_failed" ||
+    file.reason === "pdf_ocr_no_text" ||
+    file.reason === "pdf_ocr_tool_missing" ||
     file.reason === "pdf_tool_missing" ||
     file.reason === "pdf_text_extraction_failed" ||
     file.reason === "pdf_no_text"
@@ -1704,6 +1744,14 @@ interface PdfTextSection {
   text: string;
 }
 
+type DocumentSourceKind = "docx" | "eml" | "hwp" | "pdf";
+
+interface DocumentSourceFile {
+  kind: DocumentSourceKind;
+  path: string;
+  fileName: string;
+}
+
 function listActiveJobOutputs(db: DatabaseSync, jobId: string): StoredJobOutput[] {
   const now = new Date().toISOString();
   return listJobOutputs(db, jobId).filter((output) => !output.deletedAt && output.expiresAt > now);
@@ -1802,7 +1850,7 @@ async function createOriginalAndTranslationPdf(input: {
   };
 }
 
-function findDocumentSourceFile(files: StoredJobFile[]): { kind: "docx" | "hwp" | "pdf"; path: string; fileName: string } | null {
+function findDocumentSourceFile(files: StoredJobFile[]): DocumentSourceFile | null {
   for (const file of files) {
     const candidatePath = file.archivePath ?? file.localPath;
     if (!candidatePath) {
@@ -1814,6 +1862,13 @@ function findDocumentSourceFile(files: StoredJobFile[]): { kind: "docx" | "hwp" 
     if (extension === ".docx" || mimeType === DOCX_MIME_TYPE) {
       return {
         kind: "docx",
+        path: candidatePath,
+        fileName,
+      };
+    }
+    if (extension === ".eml" || (mimeType && EML_MIME_TYPES.has(mimeType))) {
+      return {
+        kind: "eml",
         path: candidatePath,
         fileName,
       };
@@ -1841,7 +1896,7 @@ async function createDocumentTranslationDocx(input: {
   artifacts: AgentPostprocessInput["artifacts"];
   originalSections: PdfTextSection[];
   generatedFiles: GeneratedFile[];
-  documentSource: { kind: "docx" | "hwp" | "pdf"; path: string; fileName: string };
+  documentSource: DocumentSourceFile;
   outputDir: string;
 }): Promise<GeneratedFile | null> {
   const existingDocumentOutput = findDocumentOutput(input.generatedFiles);
@@ -1957,7 +2012,7 @@ async function createDocumentTranslationDocx(input: {
 
 async function normalizeDocumentOutputFile(input: {
   job: StoredJob;
-  documentSource: { kind: "docx" | "hwp" | "pdf"; path: string; fileName: string };
+  documentSource: DocumentSourceFile;
   originalSections: PdfTextSection[];
   sourcePath: string;
   outputDir: string;
@@ -1992,7 +2047,7 @@ async function renderCombinedMarkdownDocx(input: {
   pandocBin: string;
   markdownPath: string;
   outputPath: string;
-  documentSource: { kind: "docx" | "hwp" | "pdf"; path: string; fileName: string };
+  documentSource: DocumentSourceFile;
 }): Promise<void> {
   const args = [
     input.markdownPath,
@@ -2664,6 +2719,8 @@ function inferMimeType(fileName: string): string | undefined {
       return "application/pdf";
     case ".docx":
       return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case ".eml":
+      return "message/rfc822";
     case ".hwp":
       return "application/x-hwp";
     case ".hwpx":

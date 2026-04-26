@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createJobOutput,
   createJob,
   getJob,
+  markJobOutputDeleted,
   migrate,
   openIngestDatabase,
   transitionJob,
@@ -26,10 +28,45 @@ test("buildStatusResponse lists recent jobs and details one job", () => {
     migrate(handle.db);
     createTelegramJob(handle.db, "job-1");
     transitionJob(handle.db, "job-1", "IMPORTING", { now: NOW });
+    createJobOutput(handle.db, {
+      id: "out-active",
+      jobId: "job-1",
+      kind: "agent_translation",
+      filePath: "/tmp/translated.docx",
+      fileName: "translated.docx",
+      createdAt: "2026-04-22T12:01:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    createJobOutput(handle.db, {
+      id: "out-expired",
+      jobId: "job-1",
+      kind: "agent_translation",
+      filePath: "/tmp/old.pdf",
+      fileName: "old.pdf",
+      createdAt: "2026-04-22T12:02:00.000Z",
+      expiresAt: "2026-04-22T11:59:00.000Z",
+    });
+    createJobOutput(handle.db, {
+      id: "out-deleted",
+      jobId: "job-1",
+      kind: "agent_translation",
+      filePath: "/tmp/deleted.md",
+      fileName: "deleted.md",
+      createdAt: "2026-04-22T12:03:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    markJobOutputDeleted(handle.db, "out-deleted", "2026-04-22T12:04:00.000Z");
 
-    assert.match(buildStatusResponse(handle.db, undefined, message("/status")), /최근 작업:\njob-1 IMPORTING sales/);
-    const detail = buildStatusResponse(handle.db, "job-1", message("/status job-1"));
+    assert.match(
+      buildStatusResponse(handle.db, undefined, message("/status"), NOW),
+      /job-1 IMPORTING sales \| 결과: 다운로드 가능 1, 만료 1, 폐기 1/,
+    );
+    const detail = buildStatusResponse(handle.db, "job-1", message("/status job-1"), NOW);
     assert.match(detail, /작업 job-1/);
+    assert.match(detail, /결과 파일:/);
+    assert.match(detail, /translated\.docx \[다운로드 가능\]/);
+    assert.match(detail, /old\.pdf \[만료됨\]/);
+    assert.match(detail, /deleted\.md \[폐기됨\]/);
     assert.match(detail, /최근 이벤트:/);
   } finally {
     handle.close();

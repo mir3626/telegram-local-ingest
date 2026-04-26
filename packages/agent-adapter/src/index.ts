@@ -173,7 +173,12 @@ function inferRequestedOutputFormat(input: AgentPostprocessInput): ".docx" | ".m
   return input.artifacts.some((artifact) => {
     const kind = artifact.kind.toLowerCase();
     const extension = path.extname(artifact.fileName).toLowerCase();
-    return kind.includes("docx") || kind.includes("pdf") || extension === ".docx" || extension === ".pdf";
+    return kind.includes("docx")
+      || kind.includes("eml")
+      || kind.includes("pdf")
+      || extension === ".docx"
+      || extension === ".eml"
+      || extension === ".pdf";
   })
     ? ".docx"
     : ".md";

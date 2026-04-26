@@ -32,6 +32,7 @@ import {
   pollTelegramUpdatesOnce,
   processJob,
   processRunnableJobs,
+  runWorkerLoop,
   runWorkerOnce,
   type AgentPostprocessor,
   type RtzrTranscriber,
@@ -274,15 +275,86 @@ test("runWorkerOnce renders PDF uploads as DOCX downloads when extracted text ne
   }
 });
 
-test("runWorkerOnce fails PDF agent jobs when pdftotext is missing", async () => {
+test("runWorkerOnce renders EML uploads as DOCX downloads with original message text", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "documents/vendor-update.eml", [
+    "From: Vendor <vendor@example.com>",
+    "To: Operator <operator@example.com>",
+    "Subject: Vendor update",
+    "Date: Fri, 24 Apr 2026 10:30:00 +0000",
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "This vendor update requires Korean translation and business formatting.",
+  ].join("\r\n"));
+  const toolRoot = path.join(fixture.root, "tools");
+  const fakePandoc = writeExecutable(toolRoot, "pandoc", [
+    "#!/bin/sh",
+    "input=\"\"",
+    "out=\"\"",
+    "prev=\"\"",
+    "for arg in \"$@\"; do",
+    "  if [ -z \"$input\" ]; then input=\"$arg\"; fi",
+    "  if [ \"$prev\" = \"--output\" ]; then out=\"$arg\"; fi",
+    "  prev=\"$arg\"",
+    "done",
+    "cat \"$input\" > \"$out\"",
+  ].join("\n"));
+  const oldPandoc = process.env.PANDOC_BIN;
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const agentInputs: AgentPostprocessInput[] = [];
+  try {
+    process.env.PANDOC_BIN = fakePandoc;
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest project:sales", "documents/vendor-update.eml"),
+      ),
+      agent: mockAgentPostprocessor(agentInputs),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsProcessed, 1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    assert.equal(agentInputs.length, 1);
+    assert.equal(agentInputs[0]?.artifacts[0]?.kind, "eml_text");
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.fileName, "vendor-update_translated.docx");
+    assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    const rendered = fs.readFileSync(outputs[0]?.filePath ?? "", "utf8");
+    assert.match(rendered, /# \[원문\]/);
+    assert.match(rendered, /Subject: Vendor update/);
+    assert.match(rendered, /This vendor update requires Korean translation/);
+    assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
+  } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce fails PDF agent jobs when text extraction and OCR are unavailable", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "documents/source.pdf", "%PDF-1.4\n");
   const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const oldPdftoppm = process.env.PDFTOPPM_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const agentInputs: AgentPostprocessInput[] = [];
   try {
     process.env.PDFTOTEXT_BIN = path.join(fixture.root, "tools", "missing-pdftotext");
+    process.env.PDFTOPPM_BIN = path.join(fixture.root, "tools", "missing-pdftoppm");
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.agent = {
@@ -302,7 +374,7 @@ test("runWorkerOnce fails PDF agent jobs when pdftotext is missing", async () =>
 
     await assert.rejects(
       () => runWorkerOnce(context),
-      /PDF text extraction is required for agent postprocess.*pdf_tool_missing/,
+      /Source text extraction is required for agent postprocess.*pdf_ocr_tool_missing/,
     );
 
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "FAILED");
@@ -310,10 +382,11 @@ test("runWorkerOnce fails PDF agent jobs when pdftotext is missing", async () =>
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "preprocess.completed"));
     assert.equal(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "language.detected"), false);
     const failureMessage = sentMessages.at(-1);
-    assert.match(failureMessage?.text ?? "", /PDF text extraction is required for agent postprocess/);
+    assert.match(failureMessage?.text ?? "", /Source text extraction is required for agent postprocess/);
     assert.match(JSON.stringify(failureMessage?.reply_markup), /retry:tg_300_21/);
   } finally {
     restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    restoreEnv("PDFTOPPM_BIN", oldPdftoppm);
     dbHandle.close();
   }
 });
@@ -869,6 +942,55 @@ test("pollTelegramUpdatesOnce records hidden output regenerate callbacks", async
   }
 });
 
+test("runWorkerLoop cleans expired outputs on the scheduled cadence", async () => {
+  const fixture = createFixture();
+  const outputPath = writeFile(fixture.runtimeDir, "outputs/job-expired/out-old/old.md", "old output");
+  const dbHandle = openIngestDatabase(":memory:");
+  const abort = new AbortController();
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, {
+      id: "job-expired",
+      source: "telegram-local-bot-api",
+      chatId: "300",
+      userId: "400",
+      now: "2026-04-22T12:00:00.000Z",
+    });
+    createJobOutput(dbHandle.db, {
+      id: "out-old",
+      jobId: "job-expired",
+      kind: "agent_translation",
+      filePath: outputPath,
+      fileName: "old.md",
+      createdAt: "2026-04-22T12:01:00.000Z",
+      expiresAt: "2026-04-22T12:02:00.000Z",
+    });
+    const context: WorkerContext = {
+      config: {
+        ...configFixture(fixture),
+        worker: {
+          ...configFixture(fixture).worker,
+          outputCleanupIntervalMs: 60_000,
+        },
+      },
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockEmptyUpdatesFetch(),
+      ),
+    };
+
+    setTimeout(() => abort.abort(), 5);
+    await runWorkerLoop(context, { pollIntervalMs: 1, abortSignal: abort.signal });
+
+    assert.equal(fs.existsSync(outputPath), false);
+    assert.ok(getJobOutput(dbHandle.db, "out-old")?.deletedAt);
+  } finally {
+    abort.abort();
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce handles operator status without creating a job", async () => {
   const fixture = createFixture();
   const dbHandle = openIngestDatabase(":memory:");
@@ -959,6 +1081,61 @@ test("processRunnableJobs claims multiple jobs while limiting STT concurrency", 
   }
 });
 
+test("processRunnableJobs does not gate translation-skipped jobs behind agent concurrency", async () => {
+  const fixture = createFixture();
+  const agentInput = writeFile(fixture.runtimeDir, "archive/originals/agent/lead.txt", "This contract requires Korean translation.");
+  const skippedInput = writeFile(fixture.runtimeDir, "archive/originals/skip/korean.txt", "한국어 문서입니다. 번역이 필요하지 않습니다.");
+  const dbHandle = openIngestDatabase(":memory:");
+  const releaseAgent = deferred<void>();
+  const agentCalls: AgentPostprocessInput[] = [];
+  try {
+    migrate(dbHandle.db);
+    createIngestingTextJob(dbHandle.db, fixture, "job-agent", "file-agent", "lead.txt", agentInput);
+    createIngestingTextJob(dbHandle.db, fixture, "job-skip", "file-skip", "korean.txt", skippedInput);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    config.worker.agentConcurrency = 1;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockEmptyUpdatesFetch(),
+      ),
+      agent: {
+        async postprocess(input): Promise<AgentPostprocessResult> {
+          agentCalls.push(input);
+          await releaseAgent.promise;
+          fs.mkdirSync(input.outputDir, { recursive: true });
+          fs.writeFileSync(path.join(input.outputDir, "translated.md"), "번역 결과\n", "utf8");
+          return {
+            command: "custom-agent",
+            args: [],
+            promptPath: path.join(input.outputDir, "..", ".agent-work", "prompt.md"),
+            outputDir: input.outputDir,
+            stdout: "ok",
+            stderr: "",
+          };
+        },
+      },
+    };
+
+    assert.equal(await processRunnableJobs(context, 2, { waitForCompletion: false }), 2);
+    await waitFor(() => agentCalls.length === 1 && getJob(dbHandle.db, "job-skip")?.status === "COMPLETED");
+    assert.equal(getJob(dbHandle.db, "job-agent")?.status, "INGESTING");
+
+    releaseAgent.resolve();
+    await waitFor(() => getJob(dbHandle.db, "job-agent")?.status === "COMPLETED");
+  } finally {
+    releaseAgent.resolve();
+    dbHandle.close();
+  }
+});
+
 function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot: string }): AppConfig {
   return {
     telegram: {
@@ -1016,8 +1193,54 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
       sttConcurrency: 1,
       agentConcurrency: 1,
       jobClaimTtlMs: 2 * 60 * 60 * 1000,
+      outputCleanupIntervalMs: 10 * 60 * 1000,
     },
   };
+}
+
+function createIngestingTextJob(
+  db: DatabaseSync,
+  fixture: { vaultPath: string },
+  jobId: string,
+  fileId: string,
+  originalName: string,
+  localPath: string,
+): void {
+  createJob(db, {
+    id: jobId,
+    source: "telegram-local-bot-api",
+    chatId: "300",
+    userId: "400",
+    now: NOW_FOR_TESTS,
+  });
+  transitionJob(db, jobId, "QUEUED", { now: NOW_FOR_TESTS });
+  addJobFile(db, {
+    id: fileId,
+    jobId,
+    originalName,
+    mimeType: "text/plain",
+    sizeBytes: 10,
+    localPath,
+    archivePath: localPath,
+    now: NOW_FOR_TESTS,
+  });
+  transitionJob(db, jobId, "IMPORTING", { now: NOW_FOR_TESTS });
+  transitionJob(db, jobId, "NORMALIZING", { now: NOW_FOR_TESTS });
+  transitionJob(db, jobId, "BUNDLE_WRITING", { now: NOW_FOR_TESTS });
+  const bundlePath = path.join(fixture.vaultPath, "raw", "2026-04-22", jobId);
+  const manifestPath = writeFile(bundlePath, "manifest.yaml", "schema_version: 1\n");
+  const sourceMarkdownPath = writeFile(bundlePath, "source.md", "# Source\n");
+  writeFile(bundlePath, ".finalized", "finalized_at=2026-04-22T12:00:00.000Z\n");
+  createSourceBundle(db, {
+    id: jobId,
+    jobId,
+    bundlePath,
+    manifestPath,
+    sourceMarkdownPath,
+    finalizedAt: NOW_FOR_TESTS,
+    now: NOW_FOR_TESTS,
+  });
+  transitionJob(db, jobId, "INGESTING", { now: NOW_FOR_TESTS });
 }
 
 function createNormalizingAudioJob(
@@ -1282,10 +1505,35 @@ function mockTelegramFetch(
   };
 }
 
+function mockEmptyUpdatesFetch(sentMessages: Array<{ chat_id: string; text: string }> = []): FetchLike {
+  return async (input, init) => {
+    const method = input.split("/").at(-1);
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    if (method === "getUpdates") {
+      return jsonResponse({ ok: true, result: [] });
+    }
+    if (method === "sendMessage") {
+      sentMessages.push(body as { chat_id: string; text: string });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: 99,
+          date: 1,
+          chat: { id: Number((body as { chat_id: string }).chat_id), type: "private" },
+          text: (body as { text: string }).text,
+        },
+      });
+    }
+    return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
 function mimeTypeForFixture(filePath: string): string {
   switch (path.extname(filePath).toLowerCase()) {
     case ".docx":
       return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case ".eml":
+      return "message/rfc822";
     case ".pdf":
       return "application/pdf";
     default:

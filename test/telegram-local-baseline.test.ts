@@ -50,6 +50,7 @@ test("loadConfig applies local Bot API defaults and parses allowlist", () => {
   assert.equal(config.worker.sttConcurrency, 1);
   assert.equal(config.worker.agentConcurrency, 1);
   assert.equal(config.worker.jobClaimTtlMs, 2 * 60 * 60 * 1000);
+  assert.equal(config.worker.outputCleanupIntervalMs, 10 * 60 * 1000);
 });
 
 test("loadConfig supports SenseVoice local CPU STT", () => {
@@ -80,6 +81,7 @@ test("loadConfig supports local agent post-processing settings", () => {
     WORKER_STT_CONCURRENCY: "2",
     WORKER_AGENT_CONCURRENCY: "1",
     WORKER_JOB_CLAIM_TTL_MS: "600000",
+    WORKER_OUTPUT_CLEANUP_INTERVAL_MS: "300000",
   });
 
   assert.equal(config.agent.provider, "codex");
@@ -90,6 +92,19 @@ test("loadConfig supports local agent post-processing settings", () => {
   assert.equal(config.worker.sttConcurrency, 2);
   assert.equal(config.worker.agentConcurrency, 1);
   assert.equal(config.worker.jobClaimTtlMs, 600000);
+  assert.equal(config.worker.outputCleanupIntervalMs, 300000);
+});
+
+test("loadConfig supports Claude local agent post-processing settings", () => {
+  const config = loadConfig({
+    TELEGRAM_BOT_TOKEN: "123:abc",
+    OBSIDIAN_VAULT_PATH: "C:/vault",
+    AGENT_POSTPROCESS_PROVIDER: "claude",
+    AGENT_POSTPROCESS_COMMAND: "{projectRoot}/scripts/run-claude-postprocess.sh --prompt {promptFile}",
+  });
+
+  assert.equal(config.agent.provider, "claude");
+  assert.equal(config.agent.command, "{projectRoot}/scripts/run-claude-postprocess.sh --prompt {promptFile}");
 });
 
 test("loadConfig requires an agent command when post-processing is enabled", () => {

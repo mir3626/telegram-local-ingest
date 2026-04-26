@@ -26,6 +26,23 @@ test("buildAgentPrompt constrains agents to raw read and output writes", () => {
   assert.match(prompt, /worker may append `\[원문\]` itself/);
 });
 
+test("buildAgentPrompt treats EML artifacts as document-derived output", () => {
+  const fixture = createFixture();
+  const prompt = buildAgentPrompt({
+    ...inputFixture(fixture),
+    artifacts: [{
+      id: "artifact-eml",
+      kind: "eml_text",
+      fileName: "vendor-update.eml.txt",
+      sourcePath: fixture.transcriptPath,
+      charCount: 128,
+      truncated: false,
+    }],
+  });
+
+  assert.match(prompt, /prefer `<original-file-stem>_translated\.docx`/);
+});
+
 test("buildAgentCommand replaces placeholders and detects prompt file usage", () => {
   const command = buildAgentCommand("{projectRoot}/scripts/run-codex-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}", {
     bundlePath: "/raw/job",

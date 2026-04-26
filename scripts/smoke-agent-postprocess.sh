@@ -4,28 +4,57 @@ set -euo pipefail
 print_usage() {
   cat <<'EOF'
 Usage:
-  smoke-agent-postprocess.sh --ready
-  smoke-agent-postprocess.sh --live
+  smoke-agent-postprocess.sh --ready [--provider codex|claude]
+  smoke-agent-postprocess.sh --live [--provider codex|claude]
 
---ready checks the local Codex wrapper health without running a job.
---live creates a temporary raw bundle under runtime/agent-smoke and runs the Codex postprocess wrapper.
+--ready checks the selected local agent wrapper health without running a job.
+--live creates a temporary raw bundle under runtime/agent-smoke and runs the selected postprocess wrapper.
 EOF
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_dir/.." && pwd)"
-wrapper="$script_dir/run-codex-postprocess.sh"
 
-mode="${1:---ready}"
-case "$mode" in
-  --help|-h)
-    print_usage
-    exit 0
+mode="--ready"
+provider="${AGENT_POSTPROCESS_PROVIDER:-codex}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help|-h)
+      print_usage
+      exit 0
+      ;;
+    --ready|--live)
+      mode="$1"
+      shift
+      ;;
+    --provider)
+      provider="${2:-}"
+      shift 2
+      ;;
+    --provider=*)
+      provider="${1#--provider=}"
+      shift
+      ;;
+    *)
+      echo "smoke-agent-postprocess: unknown argument: $1" >&2
+      print_usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$provider" in
+  codex)
+    wrapper="$script_dir/run-codex-postprocess.sh"
+    label="Codex"
     ;;
-  --ready|--live)
+  claude)
+    wrapper="$script_dir/run-claude-postprocess.sh"
+    label="Claude"
     ;;
   *)
-    echo "smoke-agent-postprocess: unknown mode: $mode" >&2
+    echo "smoke-agent-postprocess: unsupported provider: $provider" >&2
     print_usage >&2
     exit 2
     ;;
@@ -38,9 +67,9 @@ fi
 
 echo "Agent postprocess smoke readiness:"
 "$wrapper" --health
-echo "OK   Codex wrapper health passed"
+echo "OK   $label wrapper health passed"
 echo "OK   command example:"
-echo "     AGENT_POSTPROCESS_PROVIDER=codex"
+echo "     AGENT_POSTPROCESS_PROVIDER=$provider"
 echo "     AGENT_POSTPROCESS_COMMAND=$wrapper --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}"
 
 if [[ "$mode" == "--ready" ]]; then

@@ -144,6 +144,45 @@ test("checkLiveSmokeReadiness checks configured Codex postprocess wrapper", asyn
   assert.match(renderReadinessReport(report), /codex wrapper ok/);
 });
 
+test("checkLiveSmokeReadiness checks configured Claude postprocess wrapper", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-readiness-claude-agent-"));
+  const runtime = path.join(root, "runtime");
+  const vault = path.join(root, "vault");
+  const telegramFiles = path.join(root, "telegram-files");
+  const scripts = path.join(root, "scripts");
+  fs.mkdirSync(vault);
+  fs.mkdirSync(telegramFiles);
+  fs.mkdirSync(scripts);
+  writeExecutable(scripts, "run-claude-postprocess.sh", "#!/usr/bin/env bash\necho claude wrapper ok");
+  fs.writeFileSync(
+    path.join(root, ".env"),
+    [
+      "TELEGRAM_BOT_TOKEN=123:abc",
+      "TELEGRAM_ALLOWED_USER_IDS=42",
+      "TELEGRAM_BOT_API_BASE_URL=http://127.0.0.1:8081",
+      `TELEGRAM_LOCAL_FILES_ROOT=${telegramFiles}`,
+      `INGEST_RUNTIME_DIR=${runtime}`,
+      `SQLITE_DB_PATH=${path.join(runtime, "ingest.db")}`,
+      `OBSIDIAN_VAULT_PATH=${vault}`,
+      "OBSIDIAN_RAW_ROOT=raw",
+      "AGENT_POSTPROCESS_PROVIDER=claude",
+      "AGENT_POSTPROCESS_COMMAND={projectRoot}/scripts/run-claude-postprocess.sh --prompt {promptFile} --output {outputDir} --bundle {bundlePath} --job {jobId}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const report = await checkLiveSmokeReadiness({
+    cwd: root,
+    env: {},
+    checkTelegram: false,
+  });
+
+  assert.equal(report.ready, true);
+  assert.equal(report.checks.some((check) => check.name === "Claude postprocess wrapper" && check.status === "ok"), true);
+  assert.match(renderReadinessReport(report), /claude wrapper ok/);
+});
+
 function writeExecutable(root: string, fileName: string, content: string): string {
   const filePath = path.join(root, fileName);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

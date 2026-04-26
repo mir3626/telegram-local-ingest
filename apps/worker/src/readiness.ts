@@ -68,7 +68,7 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
   }
   checks.push(ok(
     "WORKER_CONCURRENCY",
-    `jobs=${config.worker.jobConcurrency}, stt=${config.worker.sttConcurrency}, agent=${config.worker.agentConcurrency}, claimTtlMs=${config.worker.jobClaimTtlMs}`,
+    `jobs=${config.worker.jobConcurrency}, stt=${config.worker.sttConcurrency}, agent=${config.worker.agentConcurrency}, claimTtlMs=${config.worker.jobClaimTtlMs}, outputCleanupIntervalMs=${config.worker.outputCleanupIntervalMs}`,
   ));
 
   await checkWritableDirectoryIntent(checks, "INGEST_RUNTIME_DIR", resolveFrom(cwd, config.runtime.runtimeDir), {
@@ -189,15 +189,23 @@ async function checkAgentPostprocessReadiness(
     }
   }
 
-  if (path.basename(command.command) === "run-codex-postprocess.sh") {
+  const wrapperName = path.basename(command.command);
+  if (wrapperName === "run-codex-postprocess.sh") {
     const health = await checkCommandVersion(commandPath, ["--health"]);
     if (health.ok) {
       checks.push(ok("Codex postprocess wrapper", health.output));
     } else {
       checks.push(fail("Codex postprocess wrapper", health.output));
     }
+  } else if (wrapperName === "run-claude-postprocess.sh") {
+    const health = await checkCommandVersion(commandPath, ["--health"]);
+    if (health.ok) {
+      checks.push(ok("Claude postprocess wrapper", health.output));
+    } else {
+      checks.push(fail("Claude postprocess wrapper", health.output));
+    }
   } else {
-    checks.push(warn("Codex postprocess wrapper", "not using scripts/run-codex-postprocess.sh; custom command live behavior was not checked"));
+    checks.push(warn("Agent postprocess wrapper", "not using a project postprocess wrapper; custom command live behavior was not checked"));
   }
 
   await checkDocumentProcessingTools(checks, cwd, env);
@@ -217,7 +225,37 @@ async function checkDocumentProcessingTools(checks: ReadinessCheck[], cwd: strin
   if (pdftotext.ok) {
     checks.push(ok("PDF text extractor: pdftotext", firstLine(pdftotext.output)));
   } else {
-    checks.push(warn("PDF text extractor: pdftotext", "missing; PDF uploads cannot be language-checked or translated until poppler-utils/pdftotext is installed"));
+    checks.push(warn("PDF text extractor: pdftotext", "missing; text-layer PDF extraction will fall back to OCR when pdftoppm+tesseract are available"));
+  }
+
+  const pdftoppmCommand = resolveCommandPath(cwd, env.PDFTOPPM_BIN || "pdftoppm");
+  const pdftoppm = await checkCommandVersion(pdftoppmCommand, ["-v"]);
+  if (pdftoppm.ok) {
+    checks.push(ok("PDF OCR renderer: pdftoppm", firstLine(pdftoppm.output)));
+  } else {
+    checks.push(warn("PDF OCR renderer: pdftoppm", "missing; scanned PDF OCR requires poppler-utils/pdftoppm"));
+  }
+
+  const tesseractCommand = resolveCommandPath(cwd, env.TESSERACT_BIN || "tesseract");
+  const tesseract = await checkCommandVersion(tesseractCommand, ["--version"]);
+  if (tesseract.ok) {
+    checks.push(ok("OCR engine: tesseract", firstLine(tesseract.output)));
+    const languages = await checkCommandVersion(tesseractCommand, ["--list-langs"]);
+    if (languages.ok) {
+      const required = (env.OCR_LANGUAGES || "kor+eng+chi_sim+jpn")
+        .split("+")
+        .map((language) => language.trim())
+        .filter(Boolean);
+      const available = new Set(languages.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+      const missing = required.filter((language) => !available.has(language));
+      if (missing.length === 0) {
+        checks.push(ok("OCR languages", required.join("+")));
+      } else {
+        checks.push(warn("OCR languages", `missing tesseract language data: ${missing.join(", ")}`));
+      }
+    }
+  } else {
+    checks.push(warn("OCR engine: tesseract", "missing; image uploads and scanned PDF OCR require tesseract"));
   }
 }
 

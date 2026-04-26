@@ -1,12 +1,20 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
+import { promisify, TextDecoder } from "node:util";
 import zlib from "node:zlib";
 
 import type { StoredJob, StoredJobFile, StoredSourceBundle } from "@telegram-local-ingest/db";
 
-export type PreprocessedArtifactKind = "docx_text" | "original_text" | "pdf_text" | "transcript_markdown";
+export type PreprocessedArtifactKind =
+  | "docx_text"
+  | "eml_text"
+  | "image_ocr_text"
+  | "original_text"
+  | "pdf_ocr_text"
+  | "pdf_text"
+  | "transcript_markdown";
 
 export interface PreprocessJobInput {
   job: StoredJob;
@@ -68,8 +76,26 @@ const TEXT_MIME_TYPES = new Set([
   "text/yaml",
 ]);
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const EML_MIME_TYPES = new Set(["application/eml", "message/rfc822"]);
 const PDF_MIME_TYPE = "application/pdf";
+const IMAGE_EXTENSIONS = new Set([".bmp", ".jpeg", ".jpg", ".png", ".pnm", ".tif", ".tiff", ".webp"]);
+const IMAGE_MIME_TYPES = new Set([
+  "image/bmp",
+  "image/jpeg",
+  "image/png",
+  "image/tiff",
+  "image/webp",
+  "image/x-portable-anymap",
+  "image/x-portable-bitmap",
+  "image/x-portable-graymap",
+  "image/x-portable-pixmap",
+]);
 const PDFTOTEXT_TIMEOUT_MS = 60 * 1000;
+const PDFTOPPM_TIMEOUT_MS = 120 * 1000;
+const TESSERACT_TIMEOUT_MS = 120 * 1000;
+const DEFAULT_PDF_OCR_MAX_PAGES = 10;
+const DEFAULT_PDF_OCR_DPI = 200;
+const DEFAULT_OCR_LANGUAGES = "kor+eng+chi_sim+jpn";
 
 export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput): Promise<PreprocessJobResult> {
   const maxBytes = input.maxBytesPerArtifact ?? DEFAULT_MAX_BYTES_PER_ARTIFACT;
@@ -114,6 +140,54 @@ export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput
 
     if (preprocessKind === "pdf") {
       const preview = await readPdfTextPreview(sourcePath, maxBytes);
+      if (!preview.reason && preview.text.trim().length > 0) {
+        const extractedPath = await writeExtractedTextArtifact(input.artifactRoot, file, sourcePath, preview.text);
+        artifacts.push({
+          id: `${file.id}:pdf_text`,
+          kind: "pdf_text",
+          fileId: file.id,
+          fileName: `${file.originalName ?? path.basename(sourcePath)}.txt`,
+          sourcePath: extractedPath,
+          text: preview.text,
+          charCount: preview.text.length,
+          truncated: preview.truncated,
+        });
+        continue;
+      }
+
+      const ocrPreview = await readPdfOcrTextPreview(sourcePath, maxBytes);
+      if (ocrPreview.reason) {
+        skippedFiles.push({
+          fileId: file.id,
+          fileName: file.originalName ?? file.id,
+          reason: ocrPreview.reason,
+        });
+        continue;
+      }
+      if (ocrPreview.text.trim().length === 0) {
+        skippedFiles.push({
+          fileId: file.id,
+          fileName: file.originalName ?? file.id,
+          reason: "pdf_ocr_no_text",
+        });
+        continue;
+      }
+      const extractedPath = await writeExtractedTextArtifact(input.artifactRoot, file, sourcePath, ocrPreview.text);
+      artifacts.push({
+        id: `${file.id}:pdf_ocr_text`,
+        kind: "pdf_ocr_text",
+        fileId: file.id,
+        fileName: `${file.originalName ?? path.basename(sourcePath)}.txt`,
+        sourcePath: extractedPath,
+        text: ocrPreview.text,
+        charCount: ocrPreview.text.length,
+        truncated: ocrPreview.truncated,
+      });
+      continue;
+    }
+
+    if (preprocessKind === "image") {
+      const preview = await readImageOcrTextPreview(sourcePath, maxBytes);
       if (preview.reason) {
         skippedFiles.push({
           fileId: file.id,
@@ -126,14 +200,38 @@ export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput
         skippedFiles.push({
           fileId: file.id,
           fileName: file.originalName ?? file.id,
-          reason: "pdf_no_text",
+          reason: "image_ocr_no_text",
         });
         continue;
       }
       const extractedPath = await writeExtractedTextArtifact(input.artifactRoot, file, sourcePath, preview.text);
       artifacts.push({
-        id: `${file.id}:pdf_text`,
-        kind: "pdf_text",
+        id: `${file.id}:image_ocr_text`,
+        kind: "image_ocr_text",
+        fileId: file.id,
+        fileName: `${file.originalName ?? path.basename(sourcePath)}.txt`,
+        sourcePath: extractedPath,
+        text: preview.text,
+        charCount: preview.text.length,
+        truncated: preview.truncated,
+      });
+      continue;
+    }
+
+    if (preprocessKind === "eml") {
+      const preview = await readEmlTextPreview(sourcePath, maxBytes);
+      if (preview.text.trim().length === 0) {
+        skippedFiles.push({
+          fileId: file.id,
+          fileName: file.originalName ?? file.id,
+          reason: "eml_no_text",
+        });
+        continue;
+      }
+      const extractedPath = await writeExtractedTextArtifact(input.artifactRoot, file, sourcePath, preview.text);
+      artifacts.push({
+        id: `${file.id}:eml_text`,
+        kind: "eml_text",
         fileId: file.id,
         fileName: `${file.originalName ?? path.basename(sourcePath)}.txt`,
         sourcePath: extractedPath,
@@ -184,12 +282,15 @@ export function isDocxJobFile(file: StoredJobFile): boolean {
   return classifyJobFile(file) === "docx";
 }
 
-function classifyJobFile(file: StoredJobFile): "docx" | "pdf" | "text" | null {
+function classifyJobFile(file: StoredJobFile): "docx" | "eml" | "image" | "pdf" | "text" | null {
   const mimeType = file.mimeType?.toLowerCase();
+  const extension = path.extname(file.originalName ?? file.localPath ?? file.archivePath ?? "").toLowerCase();
+  if (extension === ".eml" || (mimeType && EML_MIME_TYPES.has(mimeType))) {
+    return "eml";
+  }
   if (mimeType?.startsWith("text/") || (mimeType && TEXT_MIME_TYPES.has(mimeType))) {
     return "text";
   }
-  const extension = path.extname(file.originalName ?? file.localPath ?? file.archivePath ?? "").toLowerCase();
   if (TEXT_EXTENSIONS.has(extension)) {
     return "text";
   }
@@ -198,6 +299,9 @@ function classifyJobFile(file: StoredJobFile): "docx" | "pdf" | "text" | null {
   }
   if (mimeType === DOCX_MIME_TYPE || extension === ".docx") {
     return "docx";
+  }
+  if ((mimeType && IMAGE_MIME_TYPES.has(mimeType)) || IMAGE_EXTENSIONS.has(extension)) {
+    return "image";
   }
   return null;
 }
@@ -263,6 +367,30 @@ async function readDocxTextPreview(filePath: string, maxBytes: number): Promise<
   return truncateUtf8(extractTextFromWordDocumentXml(documentXml.toString("utf8")), maxBytes);
 }
 
+async function readEmlTextPreview(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  const raw = await fs.readFile(filePath, "utf8");
+  const parsed = parseMimeMessage(raw);
+  const bodyText = extractMimeText(parsed.headers, parsed.body).trim();
+  const headerLines = [
+    ["Subject", getHeader(parsed.headers, "subject")],
+    ["From", getHeader(parsed.headers, "from")],
+    ["To", getHeader(parsed.headers, "to")],
+    ["Cc", getHeader(parsed.headers, "cc")],
+    ["Date", getHeader(parsed.headers, "date")],
+  ].flatMap(([label, value]) => {
+    const decoded = decodeMimeWords(value ?? "").trim();
+    return decoded ? [`${label}: ${decoded}`] : [];
+  });
+  const text = [
+    ...headerLines,
+    ...(headerLines.length > 0 ? [""] : []),
+    "Body:",
+    "",
+    bodyText,
+  ].join("\n").trim();
+  return truncateUtf8(text, maxBytes);
+}
+
 async function readPdfTextPreview(
   filePath: string,
   maxBytes: number,
@@ -279,6 +407,91 @@ async function readPdfTextPreview(
       return { text: "", truncated: false, reason: "pdf_tool_missing" };
     }
     return { text: "", truncated: false, reason: "pdf_text_extraction_failed" };
+  }
+}
+
+async function readPdfOcrTextPreview(
+  filePath: string,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean; reason?: string }> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-local-ingest-pdf-ocr-"));
+  try {
+    const pdfToPpmBin = process.env.PDFTOPPM_BIN?.trim() || "pdftoppm";
+    const outputPrefix = path.join(tempDir, "page");
+    try {
+      await execFileAsync(pdfToPpmBin, [
+        "-png",
+        "-r",
+        String(readPositiveIntegerEnv("PDF_OCR_DPI", DEFAULT_PDF_OCR_DPI)),
+        "-f",
+        "1",
+        "-l",
+        String(readPositiveIntegerEnv("PDF_OCR_MAX_PAGES", DEFAULT_PDF_OCR_MAX_PAGES)),
+        filePath,
+        outputPrefix,
+      ], {
+        timeout: PDFTOPPM_TIMEOUT_MS,
+        maxBuffer: 512 * 1024,
+      });
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return { text: "", truncated: false, reason: "pdf_ocr_tool_missing" };
+      }
+      return { text: "", truncated: false, reason: "pdf_ocr_failed" };
+    }
+
+    const pagePaths = (await fs.readdir(tempDir))
+      .filter((entry) => /^page-\d+\.png$/i.test(entry))
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+      .map((entry) => path.join(tempDir, entry));
+    if (pagePaths.length === 0) {
+      return { text: "", truncated: false, reason: "pdf_ocr_failed" };
+    }
+
+    const pageTexts: string[] = [];
+    for (const pagePath of pagePaths) {
+      const pagePreview = await readImageOcrTextPreview(pagePath, maxBytes);
+      if (pagePreview.reason) {
+        return {
+          text: "",
+          truncated: false,
+          reason: pagePreview.reason === "image_ocr_tool_missing" ? "pdf_ocr_tool_missing" : "pdf_ocr_failed",
+        };
+      }
+      if (pagePreview.text.trim().length > 0) {
+        pageTexts.push(pagePreview.text.trim());
+      }
+    }
+
+    return truncateUtf8(pageTexts.join("\n\n"), maxBytes);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function readImageOcrTextPreview(
+  filePath: string,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean; reason?: string }> {
+  const tesseractBin = process.env.TESSERACT_BIN?.trim() || "tesseract";
+  try {
+    const { stdout } = await execFileAsync(tesseractBin, [
+      filePath,
+      "stdout",
+      "-l",
+      process.env.OCR_LANGUAGES?.trim() || DEFAULT_OCR_LANGUAGES,
+      "--psm",
+      process.env.OCR_PSM?.trim() || "3",
+    ], {
+      timeout: TESSERACT_TIMEOUT_MS,
+      maxBuffer: Math.max(4 * 1024 * 1024, maxBytes * 8),
+    });
+    return truncateUtf8(stdout.replace(/\u0000/g, ""), maxBytes);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return { text: "", truncated: false, reason: "image_ocr_tool_missing" };
+    }
+    return { text: "", truncated: false, reason: "image_ocr_failed" };
   }
 }
 
@@ -368,6 +581,203 @@ function extractTextFromWordDocumentXml(xml: string): string {
     .join("\n");
 }
 
+type MimeHeaders = Map<string, string>;
+
+function parseMimeMessage(raw: string): { headers: MimeHeaders; body: string } {
+  const separator = /\r?\n\r?\n/.exec(raw);
+  if (!separator || separator.index === undefined) {
+    return { headers: new Map(), body: raw };
+  }
+  return {
+    headers: parseMimeHeaders(raw.slice(0, separator.index)),
+    body: raw.slice(separator.index + separator[0].length),
+  };
+}
+
+function parseMimeHeaders(headerBlock: string): MimeHeaders {
+  const headers = new Map<string, string>();
+  let current = "";
+  const flush = () => {
+    const colon = current.indexOf(":");
+    if (colon <= 0) {
+      current = "";
+      return;
+    }
+    const key = current.slice(0, colon).trim().toLowerCase();
+    const value = current.slice(colon + 1).trim();
+    if (key && value) {
+      headers.set(key, headers.has(key) ? `${headers.get(key)}, ${value}` : value);
+    }
+    current = "";
+  };
+
+  for (const line of headerBlock.split(/\r?\n/)) {
+    if (/^[\t ]/.test(line) && current) {
+      current += ` ${line.trim()}`;
+      continue;
+    }
+    flush();
+    current = line;
+  }
+  flush();
+  return headers;
+}
+
+function getHeader(headers: MimeHeaders, name: string): string | undefined {
+  return headers.get(name.toLowerCase());
+}
+
+function extractMimeText(headers: MimeHeaders, body: string): string {
+  const contentType = parseHeaderWithParameters(getHeader(headers, "content-type") ?? "text/plain");
+  const contentDisposition = (getHeader(headers, "content-disposition") ?? "").toLowerCase();
+  if (contentDisposition.startsWith("attachment")) {
+    return "";
+  }
+
+  if (contentType.value.startsWith("multipart/")) {
+    const boundary = contentType.params.get("boundary");
+    if (!boundary) {
+      return "";
+    }
+    const partTexts = parseMultipartBody(body, boundary)
+      .map((part) => ({ part, text: extractMimeText(part.headers, part.body) }))
+      .filter((entry) => entry.text.trim().length > 0);
+    if (contentType.value === "multipart/alternative") {
+      return partTexts.find((entry) => contentTypeValue(entry.part.headers) === "text/plain")?.text
+        ?? partTexts.find((entry) => contentTypeValue(entry.part.headers) === "text/html")?.text
+        ?? partTexts[0]?.text
+        ?? "";
+    }
+    return partTexts.map((entry) => entry.text).join("\n\n");
+  }
+
+  if (contentType.value === "text/plain") {
+    return decodeMimeBody(body, getHeader(headers, "content-transfer-encoding"), contentType.params.get("charset"));
+  }
+  if (contentType.value === "text/html") {
+    return htmlToText(decodeMimeBody(body, getHeader(headers, "content-transfer-encoding"), contentType.params.get("charset")));
+  }
+  if (contentType.value === "message/rfc822") {
+    const nested = parseMimeMessage(body);
+    return extractMimeText(nested.headers, nested.body);
+  }
+  return "";
+}
+
+function contentTypeValue(headers: MimeHeaders): string {
+  return parseHeaderWithParameters(getHeader(headers, "content-type") ?? "text/plain").value;
+}
+
+function parseMultipartBody(body: string, boundary: string): Array<{ headers: MimeHeaders; body: string }> {
+  const parts: Array<{ headers: MimeHeaders; body: string }> = [];
+  for (const rawPart of body.split(`--${boundary}`).slice(1)) {
+    if (rawPart.startsWith("--")) {
+      break;
+    }
+    const trimmed = rawPart.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+    if (!trimmed) {
+      continue;
+    }
+    parts.push(parseMimeMessage(trimmed));
+  }
+  return parts;
+}
+
+function parseHeaderWithParameters(value: string): { value: string; params: Map<string, string> } {
+  const [rawValue = "", ...rawParams] = value.split(";");
+  const params = new Map<string, string>();
+  for (const rawParam of rawParams) {
+    const equals = rawParam.indexOf("=");
+    if (equals <= 0) {
+      continue;
+    }
+    const key = rawParam.slice(0, equals).trim().toLowerCase().replace(/\*$/, "");
+    const paramValue = rawParam.slice(equals + 1).trim().replace(/^"|"$/g, "");
+    if (key) {
+      params.set(key, paramValue);
+    }
+  }
+  return { value: rawValue.trim().toLowerCase() || "text/plain", params };
+}
+
+function decodeMimeBody(body: string, transferEncoding: string | undefined, charset: string | undefined): string {
+  const encoding = transferEncoding?.trim().toLowerCase();
+  if (encoding === "base64") {
+    return decodeCharsetBuffer(Buffer.from(body.replace(/\s+/g, ""), "base64"), charset);
+  }
+  if (encoding === "quoted-printable") {
+    return decodeCharsetBuffer(decodeQuotedPrintableToBuffer(body), charset);
+  }
+  return decodeCharsetBuffer(Buffer.from(body.replace(/\u0000/g, ""), "utf8"), charset);
+}
+
+function decodeMimeWords(value: string): string {
+  return value.replace(/=\?([^?]+)\?([bq])\?([^?]*)\?=/gi, (_match, charset: string, encoding: string, encoded: string) => {
+    if (encoding.toLowerCase() === "b") {
+      return decodeCharsetBuffer(Buffer.from(encoded, "base64"), charset);
+    }
+    return decodeCharsetBuffer(decodeQuotedPrintableToBuffer(encoded.replace(/_/g, " ")), charset);
+  });
+}
+
+function decodeQuotedPrintableToBuffer(value: string): Buffer {
+  const bytes: number[] = [];
+  const normalized = value.replace(/=\r?\n/g, "");
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index] ?? "";
+    if (char === "=" && /^[0-9a-f]{2}$/i.test(normalized.slice(index + 1, index + 3))) {
+      bytes.push(Number.parseInt(normalized.slice(index + 1, index + 3), 16));
+      index += 2;
+      continue;
+    }
+    bytes.push(...Buffer.from(char, "utf8"));
+  }
+  return Buffer.from(bytes);
+}
+
+function decodeCharsetBuffer(buffer: Buffer, charset: string | undefined): string {
+  const label = (charset ?? "utf-8").trim().toLowerCase().replace(/^"|"$/g, "");
+  try {
+    return new TextDecoder(label || "utf-8").decode(buffer).replace(/\u0000/g, "");
+  } catch {
+    return buffer.toString("utf8").replace(/\u0000/g, "");
+  }
+}
+
+function htmlToText(html: string): string {
+  return decodeHtmlEntities(html
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n"))
+    .trim();
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: "\"",
+  };
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code: string) => {
+    const normalized = code.toLowerCase();
+    if (normalized.startsWith("#x")) {
+      return String.fromCodePoint(Number.parseInt(normalized.slice(2), 16));
+    }
+    if (normalized.startsWith("#")) {
+      return String.fromCodePoint(Number.parseInt(normalized.slice(1), 10));
+    }
+    return named[normalized] ?? entity;
+  });
+}
+
 function truncateUtf8(text: string, maxBytes: number): { text: string; truncated: boolean } {
   const buffer = Buffer.from(text, "utf8");
   if (buffer.length <= maxBytes) {
@@ -377,6 +787,15 @@ function truncateUtf8(text: string, maxBytes: number): { text: string; truncated
     text: buffer.subarray(0, maxBytes).toString("utf8").replace(/\uFFFD$/u, ""),
     truncated: true,
   };
+}
+
+function readPositiveIntegerEnv(key: string, fallback: number): number {
+  const raw = process.env[key]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function decodeXmlText(text: string): string {
