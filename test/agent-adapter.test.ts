@@ -66,6 +66,7 @@ test("buildAgentPrompt asks for block translations when DOCX structure is availa
   assert.match(prompt, /also create `translations\.json`/);
   assert.match(prompt, /exact block ids/);
   assert.match(prompt, /Create text output files only: `translated\.md` and `translations\.json`/);
+  assert.match(prompt, /Keep translation metadata, glossary, and translator notes in `translated\.md`/);
   assert.match(prompt, /both `translated\.md` and `translations\.json` exist directly in the output directory/);
   assert.match(prompt, /Create exactly these two text files directly in the output directory/);
   assert.doesNotMatch(prompt, /Create Markdown only/);

@@ -237,7 +237,53 @@ test("runWorkerOnce preserves DOCX templates by replacing structured text blocks
         { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
         mockTelegramFetch(sentMessages, "/ingest project:sales tag:lead", "documents/vendor-template.docx"),
       ),
-      agent: mockAgentPostprocessor(agentInputs),
+      agent: {
+        async postprocess(input): Promise<AgentPostprocessResult> {
+          agentInputs.push(input);
+          fs.mkdirSync(input.outputDir, { recursive: true });
+          fs.writeFileSync(path.join(input.outputDir, "translated.md"), [
+            "# Translation metadata block",
+            "",
+            "Document: Vendor agreement",
+            "Source -> Target: English -> Korean",
+            "",
+            "# Glossary",
+            "",
+            "| SOURCE term | TARGET term | Notes |",
+            "| --- | --- | --- |",
+            "| vendor agreement | 공급업체 계약 | keep consistent |",
+            "",
+            "# Translated document",
+            "",
+            "번역 결과",
+            "",
+            "# Translator's notes",
+            "",
+            "- Formal business register applied.",
+            "",
+          ].join("\n"), "utf8");
+          const structuredArtifact = input.artifacts.find((artifact) => artifact.structurePath);
+          assert.ok(structuredArtifact?.structurePath);
+          const structure = JSON.parse(fs.readFileSync(structuredArtifact.structurePath, "utf8")) as {
+            blocks?: Array<{ id: string; text: string }>;
+          };
+          fs.writeFileSync(path.join(input.outputDir, "translations.json"), `${JSON.stringify({
+            schemaVersion: 1,
+            blocks: (structure.blocks ?? []).map((block) => ({
+              id: block.id,
+              text: block.id === "b0001" ? "번역 결과" : `번역 결과 ${block.id}`,
+            })),
+          }, null, 2)}\n`, "utf8");
+          return {
+            command: "custom-agent",
+            args: ["--prompt", "prompt.md"],
+            promptPath: path.join(input.outputDir, "..", ".agent-work", "prompt.md"),
+            outputDir: input.outputDir,
+            stdout: "ok",
+            stderr: "",
+          };
+        },
+      },
     };
 
     const result = await runWorkerOnce(context);
@@ -250,7 +296,13 @@ test("runWorkerOnce preserves DOCX templates by replacing structured text blocks
     assert.equal(outputs[0]?.fileName, "vendor-template_translated.docx");
     assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     const documentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(documentXml, /Translation metadata block/);
+    assert.match(documentXml, /Glossary/);
+    assert.match(documentXml, /vendor agreement/);
     assert.match(documentXml, /번역 결과/);
+    assert.match(documentXml, /Translator's notes/);
+    assert.ok(documentXml.indexOf("Glossary") < documentXml.indexOf("번역 결과"));
+    assert.ok(documentXml.indexOf("번역 결과") < documentXml.indexOf("[원문]"));
     assert.match(documentXml, /w:pStyle w:val="TemplateBody"/);
     assert.match(documentXml, /\[원문\]/);
     assert.match(documentXml, /This vendor agreement needs translation/);

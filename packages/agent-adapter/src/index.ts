@@ -160,6 +160,7 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
           "For artifacts with a structure path, also create `translations.json` using the exact block ids from that structure file.",
           "The JSON schema is: `{ \"schemaVersion\": 1, \"blocks\": [{ \"id\": \"b0001\", \"text\": \"translated block text\" }] }`.",
           "Do not omit, rename, merge, split, or reorder block ids in `translations.json`; leave uncertain blocks translated as faithfully as possible.",
+          "Keep translation metadata, glossary, and translator notes in `translated.md`; the worker preserves those support sections around the template-preserved DOCX body.",
           "The job is incomplete unless both `translated.md` and `translations.json` exist directly in the output directory.",
         ]
       : []),

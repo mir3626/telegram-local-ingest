@@ -1963,6 +1963,7 @@ async function createDocumentTranslationDocx(input: {
       await createTemplatePreservedDocx({
         originalDocxPath: input.documentSource.path,
         translationsPath: translationsFile.path,
+        supportMarkdownPath: translationFile.path,
         workDir,
         outputPath: docxPath,
       });
@@ -2090,18 +2091,23 @@ async function renderCombinedMarkdownDocx(input: {
 async function createTemplatePreservedDocx(input: {
   originalDocxPath: string;
   translationsPath: string;
+  supportMarkdownPath: string;
   workDir: string;
   outputPath: string;
 }): Promise<void> {
-  const [entries, translations] = await Promise.all([
+  const [entries, translations, supportSections] = await Promise.all([
     readZipEntries(input.originalDocxPath),
     readDocxBlockTranslations(input.translationsPath),
+    readTemplatePreservedSupportSections(input.supportMarkdownPath),
   ]);
   const originalDocument = entries.get("word/document.xml");
   if (!originalDocument) {
     throw new Error("DOCX document.xml is missing");
   }
-  const translatedXml = applyBlockTranslationsToWordDocumentXml(originalDocument.toString("utf8"), translations);
+  const translatedXml = insertTemplateSupportSections(
+    applyBlockTranslationsToWordDocumentXml(originalDocument.toString("utf8"), translations),
+    supportSections,
+  );
   entries.set("word/document.xml", Buffer.from(translatedXml, "utf8"));
   const translatedOnlyPath = path.join(input.workDir, "template-preserved-translated.docx");
   await writeZipEntries(translatedOnlyPath, entries);
@@ -2247,6 +2253,130 @@ function appendOriginalDocumentXml(translatedXml: string, originalXml: string): 
     translatedBody.sectPr,
     translatedBody.suffix,
   ].join("");
+}
+
+interface TemplateSupportSections {
+  beforeTranslation: string;
+  afterTranslation: string;
+}
+
+async function readTemplatePreservedSupportSections(markdownPath: string): Promise<TemplateSupportSections> {
+  return extractTemplatePreservedSupportSections(await fs.readFile(markdownPath, "utf8"));
+}
+
+function extractTemplatePreservedSupportSections(markdown: string): TemplateSupportSections {
+  const lines = normalizeMarkdownText(markdown).split("\n");
+  const translatedHeadingIndex = lines.findIndex((line) => isTranslatedDocumentHeading(line));
+  if (translatedHeadingIndex >= 0) {
+    const notesIndex = lines.findIndex((line, index) => index > translatedHeadingIndex && isTranslatorNotesHeading(line));
+    return {
+      beforeTranslation: cleanSupportMarkdown(lines.slice(0, translatedHeadingIndex).join("\n")),
+      afterTranslation: notesIndex >= 0 ? cleanSupportMarkdown(lines.slice(notesIndex).join("\n")) : "",
+    };
+  }
+  return {
+    beforeTranslation: extractKnownSupportMarkdownSections(lines),
+    afterTranslation: "",
+  };
+}
+
+function extractKnownSupportMarkdownSections(lines: string[]): string {
+  const sections: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!isKnownSupportHeading(lines[index] ?? "")) {
+      continue;
+    }
+    const end = findNextMarkdownHeadingIndex(lines, index + 1);
+    sections.push(lines.slice(index, end < 0 ? lines.length : end).join("\n"));
+    index = end < 0 ? lines.length : end - 1;
+  }
+  return cleanSupportMarkdown(sections.join("\n\n"));
+}
+
+function cleanSupportMarkdown(value: string): string {
+  return value.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function findNextMarkdownHeadingIndex(lines: string[], start: number): number {
+  for (let index = start; index < lines.length; index += 1) {
+    if (/^\s{0,3}#{1,6}\s+\S/.test(lines[index] ?? "")) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isTranslatedDocumentHeading(line: string): boolean {
+  const heading = normalizeMarkdownHeading(line);
+  return /^(?:\d+\.\s*)?(?:translated document|translated text|final translation|번역문|번역\s*문서|최종\s*번역)\b/i.test(heading);
+}
+
+function isTranslatorNotesHeading(line: string): boolean {
+  const heading = normalizeMarkdownHeading(line);
+  return /^(?:\d+\.\s*)?(?:translator'?s notes?|translation notes?|번역자\s*주|번역\s*노트|주석)\b/i.test(heading);
+}
+
+function isKnownSupportHeading(line: string): boolean {
+  const heading = normalizeMarkdownHeading(line);
+  return /(?:translation metadata|metadata|glossary|terminology|용어|메타정보|메타데이터)/i.test(heading);
+}
+
+function normalizeMarkdownHeading(line: string): string {
+  return line
+    .replace(/^\s{0,3}#{1,6}\s+/, "")
+    .replace(/\s+#+\s*$/, "")
+    .trim();
+}
+
+function insertTemplateSupportSections(xml: string, support: TemplateSupportSections): string {
+  if (!support.beforeTranslation && !support.afterTranslation) {
+    return xml;
+  }
+  const body = splitWordBodyXml(xml);
+  const frontMatterXml = support.beforeTranslation
+    ? `${renderSupportMarkdownWordXml(support.beforeTranslation)}${renderWordPageBreak()}`
+    : "";
+  const translatorNotesXml = support.afterTranslation
+    ? `${renderWordPageBreak()}${renderSupportMarkdownWordXml(support.afterTranslation)}`
+    : "";
+  return [
+    body.prefix,
+    frontMatterXml,
+    body.contentWithoutSectPr,
+    translatorNotesXml,
+    body.sectPr,
+    body.suffix,
+  ].join("");
+}
+
+function renderSupportMarkdownWordXml(markdown: string): string {
+  return cleanSupportMarkdown(markdown)
+    .split("\n")
+    .map((line) => renderSupportMarkdownLineWordXml(line))
+    .join("");
+}
+
+function renderSupportMarkdownLineWordXml(line: string): string {
+  const headingMatch = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+  if (headingMatch) {
+    const level = headingMatch[1]?.length ?? 1;
+    const style = level <= 1 ? "Heading1" : level === 2 ? "Heading2" : "Heading3";
+    return `<w:p><w:pPr><w:pStyle w:val="${style}"/></w:pPr><w:r><w:t>${escapeWordXmlText(headingMatch[2] ?? "")}</w:t></w:r></w:p>`;
+  }
+  if (line.trim().length === 0) {
+    return "<w:p/>";
+  }
+  if (/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)) {
+    return "";
+  }
+  const text = line.includes("|")
+    ? line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((cell) => cell.trim()).join("\t")
+    : line;
+  return `<w:p><w:r><w:t xml:space="preserve">${escapeWordXmlText(text)}</w:t></w:r></w:p>`;
+}
+
+function renderWordPageBreak(): string {
+  return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
 }
 
 function applyBlockTranslationsToWordDocumentXml(xml: string, translations: Map<string, string>): string {
