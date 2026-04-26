@@ -112,7 +112,7 @@ export async function runAgentPostprocess(
 }
 
 export function buildAgentPrompt(input: AgentPostprocessInput): string {
-  const outputFormat = inferRequestedOutputFormat(input);
+  const outputFormat = ".md" as const;
   const artifactLines = input.artifacts.length === 0
     ? ["- None"]
     : input.artifacts.map((artifact) => [
@@ -146,10 +146,11 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "",
     "Use the fixed business document translation preset below whenever translation is needed.",
     "Run the translator/reviewer methodology internally; do not write separate draft files unless they are needed for the final deliverable.",
-    "When producing DOCX, use the installed official Anthropic `docx` skill/workflow if available. Preserve headings, numbering, tables, lists, labels, and footnote references with DOCX-native structure.",
-    "For DOCX deliverables, preserve the uploaded document's template and layout as the working template. Do not flatten paragraphs, tables, numbered clauses, or lists into one pasted block.",
+    "Create Markdown only. Do not use DOCX/PDF/HWP/HWPX/ZIP/binary document generation tools or skills.",
+    "Use Markdown headings, numbering, tables, and lists to preserve the source structure clearly for the worker renderer.",
+    "Do not flatten paragraphs, tables, numbered clauses, or lists into one pasted block.",
     "Do not append the original/source section yourself unless the operator explicitly asks for agent-side source reproduction. The worker composes the final deliverable and appends the source section separately.",
-    "Do not create PDF output yourself. The worker selects the final Telegram-deliverable file format.",
+    "Do not create DOCX, PDF, HWP, HWPX, ZIP, or other binary output yourself. The worker renders and validates the final Telegram-deliverable file.",
     "",
     "## Prepared Artifacts",
     "",
@@ -157,11 +158,9 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
     "",
     "## Required Output",
     "",
-    "- Create at least one operator-downloadable file in the output directory.",
-    outputFormat === ".docx"
-      ? "- For document-derived artifacts, prefer `<original-file-stem>_translated.docx`; if the source filename is unclear, use `translated.docx`."
-      : "- Prefer `translated.md` for translated or reformatted Markdown output. The worker may compose the final Telegram-deliverable file from it.",
-    "- Put translation metadata, glossary, translated document, and translator notes into the deliverable. Do not append a duplicate original/source section unless explicitly requested, because the worker may append `[원문]` itself.",
+    "- Create exactly one final translated Markdown file named `translated.md` in the output directory.",
+    "- Do not create `.docx`, `.pdf`, `.hwp`, `.hwpx`, `.zip`, or any other binary document file.",
+    "- Put translation metadata, glossary, translated document, and translator notes into `translated.md`. Do not append a duplicate original/source section unless explicitly requested, because the worker may append `[원문]` itself.",
     "- Keep any temporary reasoning or scratch files out of the output directory.",
     "",
     buildBusinessDocumentTranslationPreset(input, outputFormat),
@@ -169,22 +168,7 @@ export function buildAgentPrompt(input: AgentPostprocessInput): string {
   ].join("\n");
 }
 
-function inferRequestedOutputFormat(input: AgentPostprocessInput): ".docx" | ".md" {
-  return input.artifacts.some((artifact) => {
-    const kind = artifact.kind.toLowerCase();
-    const extension = path.extname(artifact.fileName).toLowerCase();
-    return kind.includes("docx")
-      || kind.includes("eml")
-      || kind.includes("pdf")
-      || extension === ".docx"
-      || extension === ".eml"
-      || extension === ".pdf";
-  })
-    ? ".docx"
-    : ".md";
-}
-
-function buildBusinessDocumentTranslationPreset(input: AgentPostprocessInput, outputFormat: ".docx" | ".md"): string {
+function buildBusinessDocumentTranslationPreset(input: AgentPostprocessInput, outputFormat: ".md"): string {
   const sourceLanguage = input.language.primaryLanguage || "unknown";
   const targetLanguage = input.targetLanguage || input.language.targetLanguage || "ko";
   const documentType = input.instructions
@@ -206,7 +190,7 @@ function buildBusinessDocumentTranslationPreset(input: AgentPostprocessInput, ou
     `- TARGET_LANG: ${targetLanguage}`,
     `- DOCUMENT_TYPE: ${documentType}`,
     `- SCOPE: ${scope}`,
-    `- OUTPUT_FORMAT: ${outputFormat}`,
+    `- OUTPUT_FORMAT: ${outputFormat} (worker-rendered to the final Telegram document format)`,
     "- PRIORITY: balanced",
     "",
     "## AGENT WORKFLOW",

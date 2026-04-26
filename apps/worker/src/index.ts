@@ -1899,19 +1899,6 @@ async function createDocumentTranslationDocx(input: {
   documentSource: DocumentSourceFile;
   outputDir: string;
 }): Promise<GeneratedFile | null> {
-  const existingDocumentOutput = findDocumentOutput(input.generatedFiles);
-  if (existingDocumentOutput) {
-    logWorker(`document output selected job=${input.job.id} file=${existingDocumentOutput.relativePath}`, "info", "OUTPUT");
-    return await normalizeDocumentOutputFile({
-      job: input.job,
-      documentSource: input.documentSource,
-      originalSections: input.originalSections,
-      sourcePath: existingDocumentOutput.path,
-      outputDir: input.outputDir,
-      extension: path.extname(existingDocumentOutput.relativePath) || ".docx",
-    });
-  }
-
   const translationFile = findTranslationFile(input.generatedFiles);
   if (!translationFile) {
     throw new Error(`Agent postprocess did not create translated markdown/text output in ${input.outputDir}`);
@@ -1971,23 +1958,22 @@ async function createDocumentTranslationDocx(input: {
       timeout: COMMAND_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
     });
-    if (input.documentSource.kind === "docx") {
-      try {
+    try {
+      if (input.documentSource.kind === "docx") {
         await appendOriginalDocxSection({
           translatedDocxPath: translatedOnlyDocxPath,
           originalDocxPath: input.documentSource.path,
           outputPath: docxPath,
         });
-      } catch (error) {
-        logWorker(`docx source append failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
-        await renderCombinedMarkdownDocx({
-          pandocBin,
-          markdownPath: fallbackMarkdownPath,
+      } else {
+        await appendOriginalTextDocxSection({
+          translatedDocxPath: translatedOnlyDocxPath,
+          originalSections: input.originalSections,
           outputPath: docxPath,
-          documentSource: input.documentSource,
         });
       }
-    } else {
+    } catch (error) {
+      logWorker(`docx source append failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
       await renderCombinedMarkdownDocx({
         pandocBin,
         markdownPath: fallbackMarkdownPath,
@@ -1995,6 +1981,7 @@ async function createDocumentTranslationDocx(input: {
         documentSource: input.documentSource,
       });
     }
+    await validateDocxOutput(docxPath);
     logWorker(`document render complete job=${input.job.id} source=${input.documentSource.fileName}`, "info", "OUTPUT");
     return {
       path: docxPath,
@@ -2008,39 +1995,6 @@ async function createDocumentTranslationDocx(input: {
       buildTranslatedOutputFileName(input.documentSource.fileName, path.extname(translationFile.relativePath) || ".md"),
     );
   }
-}
-
-async function normalizeDocumentOutputFile(input: {
-  job: StoredJob;
-  documentSource: DocumentSourceFile;
-  originalSections: PdfTextSection[];
-  sourcePath: string;
-  outputDir: string;
-  extension: string;
-}): Promise<GeneratedFile> {
-  const fileName = buildTranslatedOutputFileName(input.documentSource.fileName, input.extension);
-  const destinationPath = path.join(input.outputDir, fileName);
-  if (path.extname(fileName).toLowerCase() === ".docx") {
-    try {
-      if (input.documentSource.kind === "docx") {
-        await appendOriginalDocxSection({
-          translatedDocxPath: input.sourcePath,
-          originalDocxPath: input.documentSource.path,
-          outputPath: destinationPath,
-        });
-      } else {
-        await appendOriginalTextDocxSection({
-          translatedDocxPath: input.sourcePath,
-          originalSections: input.originalSections,
-          outputPath: destinationPath,
-        });
-      }
-      return { path: destinationPath, relativePath: fileName };
-    } catch (error) {
-      logWorker(`docx source append failed job=${input.job.id} source=${input.documentSource.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
-    }
-  }
-  return await copyGeneratedFileWithTranslatedName(input.sourcePath, input.outputDir, fileName);
 }
 
 async function renderCombinedMarkdownDocx(input: {
@@ -2065,6 +2019,13 @@ async function renderCombinedMarkdownDocx(input: {
     timeout: COMMAND_TIMEOUT_MS,
     maxBuffer: 8 * 1024 * 1024,
   });
+}
+
+async function validateDocxOutput(filePath: string): Promise<void> {
+  const entries = await readZipEntries(filePath);
+  if (!entries.has("[Content_Types].xml") || !entries.has("word/document.xml")) {
+    throw new Error("Rendered DOCX is missing required package entries");
+  }
 }
 
 async function copyGeneratedFileWithTranslatedName(sourcePath: string, outputDir: string, fileName: string): Promise<GeneratedFile> {
@@ -2487,14 +2448,6 @@ function sanitizeOutputFileStem(value: string): string {
     .trim()
     .replace(/[. ]+$/g, "");
   return sanitized.length > 0 ? sanitized : "document";
-}
-
-function findDocumentOutput(files: GeneratedFile[]): GeneratedFile | null {
-  const sorted = [...files].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-  return sorted.find((file) => file.relativePath.toLowerCase() === "original-and-translated.docx")
-    ?? sorted.find((file) => file.relativePath.toLowerCase() === "translated.docx")
-    ?? sorted.find((file) => [".docx", ".hwp", ".hwpx"].includes(path.extname(file.relativePath).toLowerCase()))
-    ?? null;
 }
 
 async function readOriginalPdfSections(artifacts: AgentPostprocessInput["artifacts"]): Promise<PdfTextSection[]> {

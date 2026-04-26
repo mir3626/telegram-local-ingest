@@ -21,12 +21,14 @@ test("buildAgentPrompt constrains agents to raw read and output writes", () => {
   assert.match(prompt, /meeting\.transcript\.md/);
   assert.match(prompt, /Business Document Translation Preset/);
   assert.match(prompt, /2 translators \+ 1 reviewer/);
-  assert.match(prompt, /official Anthropic `docx` skill/);
+  assert.match(prompt, /Create Markdown only/);
+  assert.match(prompt, /translated\.md/);
+  assert.match(prompt, /Do not create DOCX, PDF, HWP, HWPX, ZIP, or other binary output yourself/);
   assert.match(prompt, /Do not append the original\/source section yourself/);
   assert.match(prompt, /worker may append `\[원문\]` itself/);
 });
 
-test("buildAgentPrompt treats EML artifacts as document-derived output", () => {
+test("buildAgentPrompt requires Markdown output for document-derived artifacts", () => {
   const fixture = createFixture();
   const prompt = buildAgentPrompt({
     ...inputFixture(fixture),
@@ -40,7 +42,9 @@ test("buildAgentPrompt treats EML artifacts as document-derived output", () => {
     }],
   });
 
-  assert.match(prompt, /prefer `<original-file-stem>_translated\.docx`/);
+  assert.match(prompt, /Create exactly one final translated Markdown file named `translated\.md`/);
+  assert.match(prompt, /Do not create `\.docx`, `\.pdf`, `\.hwp`, `\.hwpx`, `\.zip`/);
+  assert.match(prompt, /OUTPUT_FORMAT: \.md \(worker-rendered to the final Telegram document format\)/);
 });
 
 test("buildAgentCommand replaces placeholders and detects prompt file usage", () => {

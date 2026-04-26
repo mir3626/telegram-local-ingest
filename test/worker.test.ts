@@ -151,21 +151,7 @@ test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is av
     "This vendor agreement needs translation and business formatting.",
   );
   const toolRoot = path.join(fixture.root, "tools");
-  const fakePandoc = writeExecutable(toolRoot, "pandoc", [
-    "#!/bin/sh",
-    "input=\"\"",
-    "out=\"\"",
-    "ref=\"\"",
-    "prev=\"\"",
-    "for arg in \"$@\"; do",
-    "  if [ -z \"$input\" ]; then input=\"$arg\"; fi",
-    "  if [ \"$prev\" = \"--output\" ]; then out=\"$arg\"; fi",
-    "  if [ \"$prev\" = \"--reference-doc\" ]; then ref=\"$arg\"; fi",
-    "  prev=\"$arg\"",
-    "done",
-    "printf 'template=%s\\n' \"$ref\" > \"$out\"",
-    "cat \"$input\" >> \"$out\"",
-  ].join("\n"));
+  const fakePandoc = writeFakePandoc(toolRoot);
   const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
@@ -197,11 +183,12 @@ test("runWorkerOnce renders DOCX uploads as document downloads when pandoc is av
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.fileName, "vendor-template_translated.docx");
     assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /vendor-template\.docx/);
-    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /# \[원문\]/);
-    assert.doesNotMatch(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /# 원문/);
+    const documentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(documentXml, /번역 결과/);
+    assert.match(documentXml, /\[원문\]/);
+    assert.match(documentXml, /This vendor agreement needs translation/);
     const renderedDocx = path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "vendor-template_translated.docx");
-    assert.match(fs.readFileSync(renderedDocx, "utf8"), /vendor-template\.docx/);
+    assert.ok(extractZipEntry(fs.readFileSync(renderedDocx), "word/document.xml"));
     assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translated.md")), false);
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
   } finally {
@@ -214,18 +201,7 @@ test("runWorkerOnce renders PDF uploads as DOCX downloads when extracted text ne
   const fixture = createFixture();
   writeFile(fixture.botRoot, "documents/chinese-food-law.pdf", "%PDF-1.4\n");
   const toolRoot = path.join(fixture.root, "tools");
-  const fakePandoc = writeExecutable(toolRoot, "pandoc", [
-    "#!/bin/sh",
-    "input=\"\"",
-    "out=\"\"",
-    "prev=\"\"",
-    "for arg in \"$@\"; do",
-    "  if [ -z \"$input\" ]; then input=\"$arg\"; fi",
-    "  if [ \"$prev\" = \"--output\" ]; then out=\"$arg\"; fi",
-    "  prev=\"$arg\"",
-    "done",
-    "cat \"$input\" > \"$out\"",
-  ].join("\n"));
+  const fakePandoc = writeFakePandoc(toolRoot);
   const fakePdftotext = writeExecutable(toolRoot, "pdftotext", [
     "#!/bin/sh",
     "printf 'Chinese food law requires Korean translation.\\nArticle 1. Scope\\n'",
@@ -265,9 +241,75 @@ test("runWorkerOnce renders PDF uploads as DOCX downloads when extracted text ne
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.fileName, "chinese-food-law_translated.docx");
     assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /# \[원문\]/);
-    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /Chinese food law requires Korean translation/);
+    const documentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(documentXml, /\[원문\]/);
+    assert.match(documentXml, /Chinese food law requires Korean translation/);
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
+  } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
+    restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce ignores agent-created DOCX and renders document output from Markdown", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "documents/vendor-policy.pdf", "%PDF-1.4\n");
+  const toolRoot = path.join(fixture.root, "tools");
+  const fakePandoc = writeFakePandoc(toolRoot, "정상 번역 결과");
+  const fakePdftotext = writeExecutable(toolRoot, "pdftotext", [
+    "#!/bin/sh",
+    "printf 'Vendor policy requires Korean translation.\\n'",
+  ].join("\n"));
+  const oldPandoc = process.env.PANDOC_BIN;
+  const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  try {
+    process.env.PANDOC_BIN = fakePandoc;
+    process.env.PDFTOTEXT_BIN = fakePdftotext;
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.agent = {
+      provider: "custom",
+      command: "custom-agent --prompt {promptFile} --output {outputDir}",
+      timeoutMs: 30 * 60 * 1000,
+    };
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest project:sales", "documents/vendor-policy.pdf"),
+      ),
+      agent: {
+        async postprocess(input): Promise<AgentPostprocessResult> {
+          fs.mkdirSync(input.outputDir, { recursive: true });
+          fs.writeFileSync(path.join(input.outputDir, "translated.md"), "정상 번역 결과\n", "utf8");
+          fs.writeFileSync(path.join(input.outputDir, "translated.docx"), "sandbox blocked arbitrary binary ZIP creation", "utf8");
+          return {
+            command: "custom-agent",
+            args: ["--prompt", "prompt.md"],
+            promptPath: path.join(input.outputDir, "..", ".agent-work", "prompt.md"),
+            outputDir: input.outputDir,
+            stdout: "ok",
+            stderr: "",
+          };
+        },
+      },
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsProcessed, 1);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs[0]?.fileName, "vendor-policy_translated.docx");
+    const outputXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(outputXml, /정상 번역 결과/);
+    assert.match(outputXml, /Vendor policy requires Korean translation/);
+    assert.doesNotMatch(outputXml, /sandbox blocked arbitrary binary ZIP creation/);
+    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translated.docx")), false);
   } finally {
     restoreEnv("PANDOC_BIN", oldPandoc);
     restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
@@ -288,18 +330,7 @@ test("runWorkerOnce renders EML uploads as DOCX downloads with original message 
     "This vendor update requires Korean translation and business formatting.",
   ].join("\r\n"));
   const toolRoot = path.join(fixture.root, "tools");
-  const fakePandoc = writeExecutable(toolRoot, "pandoc", [
-    "#!/bin/sh",
-    "input=\"\"",
-    "out=\"\"",
-    "prev=\"\"",
-    "for arg in \"$@\"; do",
-    "  if [ -z \"$input\" ]; then input=\"$arg\"; fi",
-    "  if [ \"$prev\" = \"--output\" ]; then out=\"$arg\"; fi",
-    "  prev=\"$arg\"",
-    "done",
-    "cat \"$input\" > \"$out\"",
-  ].join("\n"));
+  const fakePandoc = writeFakePandoc(toolRoot);
   const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
@@ -333,8 +364,8 @@ test("runWorkerOnce renders EML uploads as DOCX downloads with original message 
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.fileName, "vendor-update_translated.docx");
     assert.equal(outputs[0]?.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    const rendered = fs.readFileSync(outputs[0]?.filePath ?? "", "utf8");
-    assert.match(rendered, /# \[원문\]/);
+    const rendered = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(rendered, /\[원문\]/);
     assert.match(rendered, /Subject: Vendor update/);
     assert.match(rendered, /This vendor update requires Korean translation/);
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /DOCX 다운로드/);
@@ -399,12 +430,15 @@ test("runWorkerOnce sanitizes extracted PDF text before appending it to DOCX out
     "#!/bin/sh",
     "printf 'Chinese food law A\\001B <tag> & value requires Korean translation.\\n'",
   ].join("\n"));
+  const fakePandoc = writeFakePandoc(toolRoot);
   const oldPdftotext = process.env.PDFTOTEXT_BIN;
+  const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const agentInputs: AgentPostprocessInput[] = [];
   try {
     process.env.PDFTOTEXT_BIN = fakePdftotext;
+    process.env.PANDOC_BIN = fakePandoc;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.agent = {
@@ -422,7 +456,8 @@ test("runWorkerOnce sanitizes extracted PDF text before appending it to DOCX out
       agent: {
         async postprocess(input): Promise<AgentPostprocessResult> {
           agentInputs.push(input);
-          writeMinimalDocx(input.outputDir, "translated.docx", "번역 결과");
+          fs.mkdirSync(input.outputDir, { recursive: true });
+          fs.writeFileSync(path.join(input.outputDir, "translated.md"), "번역 결과\n", "utf8");
           return {
             command: "custom-agent",
             args: ["--prompt", "prompt.md"],
@@ -448,6 +483,7 @@ test("runWorkerOnce sanitizes extracted PDF text before appending it to DOCX out
     assert.match(documentXml, /Chinese food law AB &lt;tag&gt; &amp; value requires Korean translation/);
   } finally {
     restoreEnv("PDFTOTEXT_BIN", oldPdftotext);
+    restoreEnv("PANDOC_BIN", oldPandoc);
     dbHandle.close();
   }
 });
@@ -1320,6 +1356,21 @@ function writeExecutable(root: string, fileName: string, content: string): strin
   return filePath;
 }
 
+function writeFakePandoc(root: string, translatedText = "번역 결과"): string {
+  const templatePath = writeMinimalDocx(root, "pandoc-template.docx", translatedText);
+  return writeExecutable(root, "pandoc", [
+    "#!/bin/sh",
+    "out=\"\"",
+    "prev=\"\"",
+    "for arg in \"$@\"; do",
+    "  if [ \"$prev\" = \"--output\" ]; then out=\"$arg\"; fi",
+    "  prev=\"$arg\"",
+    "done",
+    "if [ -z \"$out\" ]; then echo 'missing --output' >&2; exit 2; fi",
+    `cp ${JSON.stringify(templatePath)} "$out"`,
+  ].join("\n"));
+}
+
 function writeMinimalDocx(root: string, relativePath: string, textContent: string): string {
   const escaped = textContent
     .replace(/&/g, "&amp;")
@@ -1334,7 +1385,16 @@ function writeMinimalDocx(root: string, relativePath: string, textContent: strin
   ].join("");
   const filePath = path.join(root, relativePath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, buildZip({ "word/document.xml": documentXml }));
+  fs.writeFileSync(filePath, buildZip({
+    "[Content_Types].xml": [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+      '<Default Extension="xml" ContentType="application/xml"/>',
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>',
+      "</Types>",
+    ].join(""),
+    "word/document.xml": documentXml,
+  }));
   return filePath;
 }
 
