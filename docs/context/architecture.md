@@ -88,6 +88,8 @@ Sprint 11 adds `packages/agent-adapter` and worker integration. The adapter buil
 
 Sprint 12 starts output lifecycle separation. Hidden callback interfaces exist for `output-discard:<output_id>` and `output-regenerate:<output_id>` but are not exposed in Telegram keyboards. Discard deletes the runtime output file and marks the output deleted in SQLite. Regenerate records `output.regenerate_requested` as an interface-only event until automatic regeneration is implemented. The worker runs expired-output cleanup on startup and then on `WORKER_OUTPUT_CLEANUP_INTERVAL_MS`, and `/status` reports whether recorded outputs are downloadable, expired, or discarded. User-facing Telegram controls for regenerate/discard are intentionally deferred as a low-priority follow-up.
 
+Iteration 2 adds the LLMwiki raw policy. Wiki raw means the finalized raw bundle plus deterministic canonical text projections, not the rendered user deliverables. The planned schema version 2 `wiki_inputs` list should classify inputs as `canonical_text`, `translation_aid`, `evidence_original`, or `structure`. LLMwiki agents should read `source.md`, `manifest.yaml`, and declared canonical inputs by default; they must not treat `_translated.*`, image overlay PDFs, transcript DOCX files, or `runtime/outputs/**` as source authority. DOCX/PDF/EML/image preprocessing currently runs during `INGESTING`, after raw bundle finalization, so Sprint 15 must move or copy canonical preprocessing artifacts into `raw/**/extracted/` before wiki ingest.
+
 ## Obsidian Vault Layout
 
 ```text
@@ -109,6 +111,8 @@ Sprint 12 starts output lifecycle separation. Hidden callback interfaces exist f
 ```
 
 Raw bundles are append-only/finalized artifacts. The wiki ingest adapter may read `raw/**/source.md` and modify `wiki/**`, but must not rewrite `raw/**`.
+
+The wiki ingest adapter should evolve from reading the raw bundle broadly to reading the bundle contract: `source.md`, `manifest.yaml`, and manifest-declared `wiki_inputs`. Original binaries remain available for audit, but the token-efficient default input is canonical text.
 
 Deletion is a separate lifecycle concern from mutation. While present, finalized raw bundles remain immutable. If a source package is no longer valuable, the preferred path is a managed delete command that resolves the job/source bundle from SQLite, removes or tombstones related runtime outputs, delegates wiki note cleanup to the configured LLMwiki/wiki tool, and records a deletion event in SQLite. Manual filesystem deletion is supported only as drift to be detected by a deterministic reconcile command.
 

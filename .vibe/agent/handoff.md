@@ -4,11 +4,17 @@
 
 - **repo**: `telegram-local-ingest`
 - **path**: `/home/tony/workspace/telegram-local-ingest`
-- **current iteration**: `iter-1`
-- **current sprint**: `idle` (next: `sprint-13-vault-reconcile-retention`)
+- **current iteration**: `iter-2`
+- **current sprint**: `idle` (next: `sprint-14-wiki-raw-input-schema`)
 - **harnessVersion**: `1.6.11`
 
 ## Status
+
+### Iteration 2 Started — 2026-04-27
+
+`vibe-iterate` started `iter-2` as `llmwiki-foundation`. The interview log is `.vibe/interview-log/iter-2.json` and terminates with high coverage for the new LLMwiki direction. Durable decision: wiki raw is the finalized raw bundle plus deterministic canonical text projections declared by `manifest.yaml` `wiki_inputs`; rendered user deliverables are not wiki source authority. `_translated.*`, image overlay PDFs, transcript DOCX files, and `runtime/outputs/**` remain convenience outputs only.
+
+Iteration 2 planned sprint order is now `sprint-14-wiki-raw-input-schema`, `sprint-15-prebundle-canonical-artifacts`, `sprint-16-llmwiki-ingest-contract`, then carryover `sprint-13-vault-reconcile-retention`. This intentionally moves raw/schema work ahead of retention so reconcile can understand `wiki_inputs` and wiki citations.
 
 ### Sprint 12 Closed — 2026-04-27
 
@@ -124,10 +130,12 @@ Image overlay labels are now single-line-height boxes without strokes. The worke
 - Use RTZR STT for audio and voice files.
 - Write immutable Obsidian raw bundles under `raw/<date>/<source_id>/`.
 - Let the LLM wiki adapter update `wiki/**` only, never `raw/**`.
+- LLMwiki may read only `source.md`, `manifest.yaml`, and manifest-declared canonical wiki inputs by default.
+- Treat `_translated.*`, image overlay PDFs, transcript DOCX files, and `runtime/outputs/**` as user-facing deliverables, not wiki source authority.
 
 ## Next Action
 
-MVP roadmap plus Sprint 9, Sprint 10, Sprint 11, and Sprint 12 utility foundations are complete. The next planned sprint is `sprint-13-vault-reconcile-retention` on the `llm-wiki-integration` branch. Start by implementing deterministic dry-run reconcile for SQLite `source_bundles`/`job_outputs` versus raw/wiki/output filesystem state, then add explicit apply/tombstone behavior and LLMwiki lint integration as a wiki graph signal only.
+MVP roadmap plus Sprint 9, Sprint 10, Sprint 11, and Sprint 12 utility foundations are complete. Iteration 2 is active on the `llm-wiki-integration` branch. The next planned sprint is `sprint-14-wiki-raw-input-schema`. Start by adding raw bundle manifest schema v2 `wiki_inputs`, source.md read-order guidance, and tests that exclude runtime outputs/rendered translated deliverables from wiki source authority.
 
 ```text
 Current utility flow target: local Telegram server -> upload file -> SQLite job -> SQLite job claim -> bounded background processing pool -> import -> STT transcript output when applicable -> raw bundle -> preprocessing -> translation-needed check -> configured agent postprocess when needed -> worker-normalized `<source-stem>_translated` deliverable -> worker-appended `[원문]` source section with translation first -> output store -> Telegram download button with actual expiry -> hidden output lifecycle callbacks.
@@ -138,7 +146,7 @@ Current utility flow target: local Telegram server -> upload file -> SQLite job 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md and .vibe/agent/session-log.md first. Sprint 12 is passed. Audio/voice uploads now register RTZR/SenseVoice `*.transcript.md` artifacts as `stt_transcript` runtime outputs with a Telegram `전사 스크립트` download button, including audio-like files uploaded as Telegram documents. Hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callbacks exist, OCR preprocessing handles scanned PDFs/images, image uploads can render translated overlay PDFs with untouched `[원문]` image pages, EML uploads render translated DOCX, and agents remain Markdown/JSON-only. Next planned work is Sprint 13: deterministic vault reconcile/retention for managed delete, manual drift detection, LLMwiki lint as a wiki graph signal only, explicit apply/tombstone behavior, and clear `/status`/retry/download messages for missing or deleted source/output state.
+Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, and .vibe/interview-log/iter-2.json first. Sprint 12 is passed and iter-2 `llmwiki-foundation` is active. Core decision: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority. Next planned work is Sprint 14: implement raw bundle schema v2/wiki_inputs and source.md read-order guidance before moving canonical preprocessing into raw finalization in Sprint 15.
 ```
 
 ## Latest Verification

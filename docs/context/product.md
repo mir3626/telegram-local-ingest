@@ -46,6 +46,8 @@ Personal OAuth-backed Codex/Claude Code automation is an operator-only local wor
 
 Raw bundles and wiki notes can become stale or valueless over time, but deletion must remain explicit because SQLite is the operational source of job state. The preferred deletion path is a managed delete command that starts from a job/source bundle identity, removes or tombstones related runtime outputs, asks the wiki/LLMwiki layer to remove linked wiki material, and records the deletion in SQLite as an event/tombstone instead of silently dropping history.
 
+LLMwiki source policy is now explicit: wiki raw is the finalized raw bundle plus deterministic canonical text projections, not the rendered user deliverables. `_translated.docx`, `_translated.pdf`, image overlay PDFs, transcript DOCX downloads, and `runtime/outputs/**` are convenience outputs only. The wiki layer should read `source.md`, `manifest.yaml`, and manifest-declared canonical wiki inputs, with optional translation aids clearly marked as secondary.
+
 Manual deletion from Obsidian, `raw/**`, or `wiki/**` is treated as drift, not as the canonical deletion workflow. A deterministic vault reconcile command should scan SQLite records against the filesystem, report missing bundles, orphan raw folders, missing wiki references, and missing output files, then apply tombstones only when the operator explicitly chooses an apply mode. The command must not recreate deleted raw bundles automatically.
 
 LLMwiki lint is useful for wiki graph health, such as broken links, missing source references, or orphan wiki notes. It is not sufficient for SQLite synchronization. SQLite reconciliation must be owned by the worker/CLI because it must update `source_bundles`, `job_outputs`, and job events consistently.

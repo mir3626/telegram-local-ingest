@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: idle (next: sprint-13-vault-reconcile-retention)
+> **Current**: idle (next: sprint-14-wiki-raw-input-schema)
 > **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish
-> **Pending**: sprint-13-vault-reconcile-retention
+> **Pending**: sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-13-vault-reconcile-retention
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -261,3 +261,69 @@ Telegram mobile/desktop
   - LLMwiki lint findings are linked into the report without being treated as DB authority.
   - Retries never recreate missing raw evidence implicitly; they require restore, reimport, or delete-confirm.
 - **status**: planned after Sprint 12 live validation.
+
+## Iteration iter-2 — LLMwiki Foundation
+
+This iteration turns the completed Telegram ingest utility into a Karpathy-style LLMwiki source pipeline. The core decision is that rendered user deliverables are not wiki raw. Wiki raw is the immutable raw bundle plus deterministic canonical text projections declared by `manifest.yaml` `wiki_inputs`.
+
+### Sprint 14 — Wiki Raw Input Schema
+
+- **id**: `sprint-14-wiki-raw-input-schema`
+- **goal**: Define and implement the raw bundle contract that tells LLMwiki exactly which artifacts may be read.
+- **tasks**:
+  - Add `manifest.yaml` schema version 2 fields for `wiki_inputs`.
+  - Classify entries as `canonical_text`, `translation_aid`, and `evidence_original`.
+  - Update `source.md` so it is an LLM-readable read-order entrypoint, not a large rendered body dump.
+  - Document that `runtime/outputs`, `_translated.*`, overlay PDFs, and transcript DOCX files are excluded from wiki source authority.
+  - Add tests for manifest/source rendering and backwards-safe bundle layout.
+- **acceptance criteria**:
+  - A raw bundle declares canonical wiki inputs without requiring the LLM to inspect rendered DOCX/PDF deliverables.
+  - Every wiki input links back to an original file or extracted deterministic artifact.
+  - `source.md` gives the wiki agent a concise read order and authority policy.
+- **status**: planned.
+
+### Sprint 15 — Pre-Bundle Canonical Artifacts
+
+- **id**: `sprint-15-prebundle-canonical-artifacts`
+- **goal**: Move deterministic text extraction into the raw bundle finalization path so wiki inputs are durable raw artifacts.
+- **tasks**:
+  - Run PDF/DOCX/EML/image/text canonical preprocessing before raw bundle finalization.
+  - Copy canonical text artifacts and structure files into `raw/**/extracted/`.
+  - Keep STT transcript Markdown as the canonical audio input while user-facing transcript DOCX remains runtime output only.
+  - Record preprocessing skips and OCR confidence limits in manifest/log metadata.
+  - Keep language detection and agent postprocess reading the same canonical artifact set after finalization.
+- **acceptance criteria**:
+  - DOCX/PDF/EML/image canonical text no longer exists only under runtime-only preprocess directories.
+  - Retrying a job does not rewrite finalized raw evidence.
+  - Translation/output rendering still works while wiki ingest sees only canonical text inputs.
+- **status**: planned.
+
+### Sprint 16 — LLMwiki Ingest Contract
+
+- **id**: `sprint-16-llmwiki-ingest-contract`
+- **goal**: Provide the LLMwiki adapter schema, prompts, and filesystem contract for maintaining `wiki/**`.
+- **tasks**:
+  - Define `_system/schemas/llmwiki.md` or equivalent repo-owned schema for index, log, source pages, entity/topic pages, and citations.
+  - Add a local adapter wrapper that reads only `source.md`, `manifest.yaml`, and declared `wiki_inputs`.
+  - Require wiki edits to cite canonical input ids/source paths and update `wiki/index.md` plus `wiki/log.md`.
+  - Forbid wiki agents from treating runtime outputs or rendered translated files as source authority.
+  - Add smoke tests with a fake LLMwiki command proving raw immutability and expected wiki file updates.
+- **acceptance criteria**:
+  - LLMwiki can ingest one finalized bundle into `wiki/**` with index/log/citations.
+  - The adapter fails if it attempts to mutate `raw/**`.
+  - Wiki output remains provider-neutral and can be driven by Claude, Codex, or a custom LLMwiki CLI.
+- **status**: planned.
+
+### Sprint 13 Carryover — Vault Reconcile And Retention
+
+- **id**: `sprint-13-vault-reconcile-retention`
+- **goal**: Make raw/wiki/output deletion safe after LLMwiki starts depending on durable source bundles.
+- **tasks**:
+  - Preserve the earlier Sprint 13 scope for SQLite tombstones, drift findings, `vault:reconcile`, and managed delete.
+  - Extend reconcile to understand `wiki_inputs` and wiki citations once Sprint 14/16 define them.
+  - Keep LLMwiki lint as a wiki graph health signal only; SQLite remains the authority for source bundle state.
+- **acceptance criteria**:
+  - Manual deletion of `raw/**` or `wiki/**` produces a deterministic drift report.
+  - Missing source evidence is never silently recreated by retry or lint.
+  - Reconcile can tell present, missing, intentionally deleted, and orphaned raw/wiki/output state apart.
+- **status**: planned after the wiki raw/input contract lands.

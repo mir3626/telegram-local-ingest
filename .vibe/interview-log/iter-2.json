@@ -1,0 +1,497 @@
+{
+  "sessionId": "2026-04-27T06-00-50-988Z-ea859a",
+  "createdAt": "2026-04-27T06:00:50.990Z",
+  "lang": "ko",
+  "maxRounds": 15,
+  "oneLiner": "LLMwiki 구축: Telegram raw bundle을 원본 보존 + deterministic canonical text projection 기준으로 재정의하고, wiki_inputs schema, preprocessing-before-finalization, LLMwiki ingest rules, reconcile/retention boundary를 구현한다.",
+  "inferredDomain": "Local-first Obsidian LLMwiki construction for Telegram-captured documents, focused on immutable raw evidence, deterministic canonical text projections, wiki schema discipline, and SQLite-backed retention/reconcile controls.",
+  "domainConfidence": 0.92,
+  "adjacentDomains": [
+    "personal knowledge management",
+    "document processing",
+    "local-first automation",
+    "LLM agent orchestration",
+    "Obsidian vault maintenance"
+  ],
+  "dimensions": [
+    {
+      "id": "goal",
+      "label": "프로젝트 목표 / 한 줄 정의",
+      "weight": 1,
+      "subFields": [
+        "one_liner",
+        "primary_value"
+      ],
+      "required": true
+    },
+    {
+      "id": "target_user",
+      "label": "핵심 사용자 및 이해관계자",
+      "weight": 0.9,
+      "subFields": [
+        "primary_persona",
+        "secondary_stakeholders",
+        "user_scale"
+      ],
+      "required": true
+    },
+    {
+      "id": "platform",
+      "label": "플랫폼 / 배포 대상",
+      "weight": 0.7,
+      "subFields": [
+        "platform_type",
+        "runtime_constraints"
+      ],
+      "required": true
+    },
+    {
+      "id": "data_model",
+      "label": "주요 도메인 엔티티 및 관계",
+      "weight": 0.9,
+      "subFields": [
+        "entities",
+        "key_relations",
+        "invariants"
+      ],
+      "required": true
+    },
+    {
+      "id": "primary_interaction",
+      "label": "핵심 사용자 시나리오",
+      "weight": 0.9,
+      "subFields": [
+        "happy_path",
+        "failure_paths"
+      ],
+      "required": true
+    },
+    {
+      "id": "success_metric",
+      "label": "성공 기준 / 측정 지표",
+      "weight": 0.8,
+      "subFields": [
+        "acceptance_criteria",
+        "kpi"
+      ],
+      "required": true
+    },
+    {
+      "id": "non_goals",
+      "label": "v1 의도적 제외 (non-goals)",
+      "weight": 0.5,
+      "subFields": [],
+      "required": false
+    },
+    {
+      "id": "constraints",
+      "label": "법·규제·비용·보안 제약",
+      "weight": 0.8,
+      "subFields": [
+        "legal_regulatory",
+        "budget",
+        "security_privacy"
+      ],
+      "required": true
+    },
+    {
+      "id": "tech_stack",
+      "label": "기술 스택 선호·제약",
+      "weight": 0.6,
+      "subFields": [
+        "language_runtime",
+        "framework",
+        "datastore",
+        "hosting"
+      ],
+      "required": false
+    },
+    {
+      "id": "domain_specifics",
+      "label": "도메인 특화 이슈 (전문가 probing)",
+      "weight": 1,
+      "subFields": [],
+      "required": true
+    }
+  ],
+  "coverage": {
+    "goal": {
+      "ratio": 0.95,
+      "subFields": {
+        "one_liner": {
+          "value": "Build the LLMwiki foundation for telegram-local-ingest by defining immutable raw evidence, deterministic canonical text projections, wiki_inputs schema, disciplined ingest rules, and retention/reconcile boundaries.",
+          "confidence": 0.95,
+          "deferred": false
+        },
+        "primary_value": {
+          "value": "The user gets a compounding Obsidian wiki where LLM-generated pages are grounded in stable raw evidence instead of re-reading rendered documents or transient Telegram output files.",
+          "confidence": 0.95,
+          "deferred": false
+        }
+      }
+    },
+    "target_user": {
+      "ratio": 0.9,
+      "subFields": {
+        "primary_persona": {
+          "value": "Single local operator maintaining an Obsidian LLMwiki from Telegram-captured sources.",
+          "confidence": 0.95,
+          "deferred": false
+        },
+        "secondary_stakeholders": {
+          "value": "Allowlisted Telegram senders and future wiki maintenance agents, but no public/multi-user service in this iteration.",
+          "confidence": 0.9,
+          "deferred": false
+        },
+        "user_scale": {
+          "value": "Personal/local-first scale: one operator, small allowlist, hundreds to low-thousands of sources before search tooling becomes necessary.",
+          "confidence": 0.85,
+          "deferred": false
+        }
+      }
+    },
+    "platform": {
+      "ratio": 0.95,
+      "subFields": {
+        "platform_type": {
+          "value": "Local-first worker and CLI over filesystem Obsidian vault, not a web frontend.",
+          "confidence": 0.95,
+          "deferred": false
+        },
+        "runtime_constraints": {
+          "value": "Must preserve raw immutability, use Node/SQLite boundaries, run under Linux/WSL, and keep runtime outputs disposable while raw/wiki state is durable.",
+          "confidence": 0.95,
+          "deferred": false
+        }
+      }
+    },
+    "data_model": {
+      "ratio": 0.9499999999999998,
+      "subFields": {
+        "entities": {
+          "value": "StoredJob, StoredJobFile, SourceBundle, original artifact, canonical_text artifact, translation_aid artifact, wiki_input manifest entry, wiki page, citation/backlink, job_output, tombstone/drift finding.",
+          "confidence": 0.95,
+          "deferred": false
+        },
+        "key_relations": {
+          "value": "A job owns files; files become original artifacts; deterministic preprocessors create canonical artifacts; manifest wiki_inputs declares which artifacts LLMwiki may read; wiki pages cite wiki_input ids/source spans; outputs are runtime-only and may expire.",
+          "confidence": 0.95,
+          "deferred": false
+        },
+        "invariants": {
+          "value": "raw/** is immutable after finalization; runtime/outputs is never a wiki source; rendered translated deliverables are excluded from wiki input; retries do not recreate deleted raw evidence implicitly.",
+          "confidence": 0.95,
+          "deferred": false
+        }
+      }
+    },
+    "primary_interaction": {
+      "ratio": 0.925,
+      "subFields": {
+        "happy_path": {
+          "value": "Upload -> import/archive -> deterministic preprocessing -> raw bundle with original/ and extracted canonical wiki inputs -> LLMwiki ingest adapter reads source.md/manifest/wiki_inputs -> wiki pages/index/log updated with citations.",
+          "confidence": 0.95,
+          "deferred": false
+        },
+        "failure_paths": {
+          "value": "OCR/STT extraction failure becomes skipped artifact metadata; low-confidence OCR is marked non-authoritative; missing raw bundle is drift/tombstone, not rebuilt silently; LLMwiki lint reports graph issues but cannot mutate SQLite.",
+          "confidence": 0.9,
+          "deferred": false
+        }
+      }
+    },
+    "success_metric": {
+      "ratio": 0.925,
+      "subFields": {
+        "acceptance_criteria": {
+          "value": "A new mixed source job produces manifest schema v2 wiki_inputs, source.md read order, canonical extracted artifacts, and wiki adapter prompt/schema that forbids runtime output ingestion. Reconcile dry-run reports missing/orphaned raw/wiki/output state deterministically.",
+          "confidence": 0.95,
+          "deferred": false
+        },
+        "kpi": {
+          "value": "Zero wiki citations to runtime/outputs or _translated deliverables; each wiki page claim can trace to a canonical_text wiki_input or original evidence path; dry-run reconcile performs no writes.",
+          "confidence": 0.9,
+          "deferred": false
+        }
+      }
+    },
+    "non_goals": {
+      "ratio": 0,
+      "subFields": {}
+    },
+    "constraints": {
+      "ratio": 0.9166666666666666,
+      "subFields": {
+        "legal_regulatory": {
+          "value": "No public or multi-user claims; personal local workflow only. Source evidence must remain auditable because documents can be business/legal/regulatory in nature.",
+          "confidence": 0.85,
+          "deferred": false
+        },
+        "budget": {
+          "value": "Avoid repeated query-time RAG over large binaries/rendered DOCX/PDF; keep LLM inputs compact through canonical text, chunking, summaries, and manifest read order.",
+          "confidence": 0.95,
+          "deferred": false
+        },
+        "security_privacy": {
+          "value": "Raw bundles are immutable; LLM adapters cannot mutate raw/** or SQLite directly; allowlist remains the Telegram access boundary; no secrets in tracked schema/docs.",
+          "confidence": 0.95,
+          "deferred": false
+        }
+      }
+    },
+    "tech_stack": {
+      "ratio": 0,
+      "subFields": {
+        "language_runtime": {
+          "value": "",
+          "confidence": 0,
+          "deferred": false
+        },
+        "framework": {
+          "value": "",
+          "confidence": 0,
+          "deferred": false
+        },
+        "datastore": {
+          "value": "",
+          "confidence": 0,
+          "deferred": false
+        },
+        "hosting": {
+          "value": "",
+          "confidence": 0,
+          "deferred": false
+        }
+      }
+    },
+    "domain_specifics": {
+      "ratio": 1,
+      "subFields": {
+        "free_form": {
+          "value": "Raw bundle은 original bytes + deterministic canonical text projection + manifest/wiki_inputs를 포함한다. _translated DOCX/PDF, overlay PDF, transcript DOCX 같은 사용자 전달물은 wiki source가 아니라 runtime output이다. Wiki claims must cite canonical text artifact ids or original evidence paths, not rendered convenience files.",
+          "confidence": 0.95,
+          "deferred": false
+        }
+      }
+    }
+  },
+  "rounds": [
+    {
+      "roundNumber": 1,
+      "dimensionId": "domain_specifics",
+      "questions": [
+        "[Questions were synthesized by the Orchestrator from the prior prompt; exact text was not echoed back to the engine.]"
+      ],
+      "answer": "Karpathy식 LLMwiki 원칙을 이 프로젝트에 적용한다. raw source는 불변 source of truth이고, wiki는 LLM이 유지하는 Markdown 지식 레이어이며, schema가 LLM의 작업 규칙을 강제한다. telegram-local-ingest에서는 rendered deliverable이 아니라 deterministic canonical text projection을 wiki input으로 삼는다.",
+      "attribution": {
+        "attribution": {
+          "free_form": {
+            "value": "Raw bundle은 original bytes + deterministic canonical text projection + manifest/wiki_inputs를 포함한다. _translated DOCX/PDF, overlay PDF, transcript DOCX 같은 사용자 전달물은 wiki source가 아니라 runtime output이다. Wiki claims must cite canonical text artifact ids or original evidence paths, not rendered convenience files.",
+            "confidence": 0.95
+          }
+        },
+        "rationale": "PO-proxy attribution for iter-2 domain_specifics"
+      },
+      "crossDimensionSignals": [],
+      "timestamp": "2026-04-27T06:03:13.217Z"
+    },
+    {
+      "roundNumber": 2,
+      "dimensionId": "goal",
+      "questions": [
+        "[Questions were synthesized by the Orchestrator from the prior prompt; exact text was not echoed back to the engine.]"
+      ],
+      "answer": "iter-2의 목표는 Telegram으로 들어온 문서/이미지/음성/메일을 Obsidian LLMwiki가 안정적으로 축적할 수 있는 raw/schema/ingest 체계로 바꾸는 것이다. 핵심 가치는 토큰 효율, 출처 추적, 재처리 가능성, wiki drift 방지다.",
+      "attribution": {
+        "attribution": {
+          "one_liner": {
+            "value": "Build the LLMwiki foundation for telegram-local-ingest by defining immutable raw evidence, deterministic canonical text projections, wiki_inputs schema, disciplined ingest rules, and retention/reconcile boundaries.",
+            "confidence": 0.95
+          },
+          "primary_value": {
+            "value": "The user gets a compounding Obsidian wiki where LLM-generated pages are grounded in stable raw evidence instead of re-reading rendered documents or transient Telegram output files.",
+            "confidence": 0.95
+          }
+        },
+        "rationale": "PO-proxy attribution for iter-2 goal"
+      },
+      "crossDimensionSignals": [],
+      "timestamp": "2026-04-27T06:03:13.332Z"
+    },
+    {
+      "roundNumber": 3,
+      "dimensionId": "data_model",
+      "questions": [
+        "[Questions were synthesized by the Orchestrator from the prior prompt; exact text was not echoed back to the engine.]"
+      ],
+      "answer": "주요 엔티티는 job, job_file, source_bundle, raw original, extracted canonical artifact, wiki_input, wiki page, wiki citation, job_output, deletion tombstone/drift finding이다. source_bundle과 manifest/wiki_inputs가 wiki ingest의 계약이다.",
+      "attribution": {
+        "attribution": {
+          "entities": {
+            "value": "StoredJob, StoredJobFile, SourceBundle, original artifact, canonical_text artifact, translation_aid artifact, wiki_input manifest entry, wiki page, citation/backlink, job_output, tombstone/drift finding.",
+            "confidence": 0.95
+          },
+          "key_relations": {
+            "value": "A job owns files; files become original artifacts; deterministic preprocessors create canonical artifacts; manifest wiki_inputs declares which artifacts LLMwiki may read; wiki pages cite wiki_input ids/source spans; outputs are runtime-only and may expire.",
+            "confidence": 0.95
+          },
+          "invariants": {
+            "value": "raw/** is immutable after finalization; runtime/outputs is never a wiki source; rendered translated deliverables are excluded from wiki input; retries do not recreate deleted raw evidence implicitly.",
+            "confidence": 0.95
+          }
+        },
+        "rationale": "PO-proxy attribution for iter-2 data_model"
+      },
+      "crossDimensionSignals": [],
+      "timestamp": "2026-04-27T06:03:13.442Z"
+    },
+    {
+      "roundNumber": 4,
+      "dimensionId": "primary_interaction",
+      "questions": [
+        "[Questions were synthesized by the Orchestrator from the prior prompt; exact text was not echoed back to the engine.]"
+      ],
+      "answer": "Happy path: 사용자가 Telegram에 파일을 올리면 worker가 import/preprocess를 수행하고, raw bundle finalization 전에 canonical text와 wiki_inputs를 기록한다. 이후 wiki adapter가 schema에 따라 canonical inputs만 읽어 wiki pages/index/log를 갱신한다.",
+      "attribution": {
+        "attribution": {
+          "happy_path": {
+            "value": "Upload -> import/archive -> deterministic preprocessing -> raw bundle with original/ and extracted canonical wiki inputs -> LLMwiki ingest adapter reads source.md/manifest/wiki_inputs -> wiki pages/index/log updated with citations.",
+            "confidence": 0.95
+          },
+          "failure_paths": {
+            "value": "OCR/STT extraction failure becomes skipped artifact metadata; low-confidence OCR is marked non-authoritative; missing raw bundle is drift/tombstone, not rebuilt silently; LLMwiki lint reports graph issues but cannot mutate SQLite.",
+            "confidence": 0.9
+          }
+        },
+        "rationale": "PO-proxy attribution for iter-2 primary_interaction"
+      },
+      "crossDimensionSignals": [],
+      "timestamp": "2026-04-27T06:03:13.562Z"
+    },
+    {
+      "roundNumber": 5,
+      "dimensionId": "target_user",
+      "questions": [
+        "[Questions were synthesized by the Orchestrator from the prior prompt; exact text was not echoed back to the engine.]"
+      ],
+      "answer": "주 사용자는 로컬 PC/서버에서 Telegram bot과 Obsidian vault를 운용하는 단일 operator다. 보조 사용자는 allowlisted Telegram sender이며, 다중 사용자/공개 서비스는 현재 범위가 아니다.",
+      "attribution": {
+        "attribution": {
+          "primary_persona": {
+            "value": "Single local operator maintaining an Obsidian LLMwiki from Telegram-captured sources.",
+            "confidence": 0.95
+          },
+          "secondary_stakeholders": {
+            "value": "Allowlisted Telegram senders and future wiki maintenance agents, but no public/multi-user service in this iteration.",
+            "confidence": 0.9
+          },
+          "user_scale": {
+            "value": "Personal/local-first scale: one operator, small allowlist, hundreds to low-thousands of sources before search tooling becomes necessary.",
+            "confidence": 0.85
+          }
+        },
+        "rationale": "PO-proxy attribution for iter-2 target_user"
+      },
+      "crossDimensionSignals": [],
+      "timestamp": "2026-04-27T06:03:13.677Z"
+    },
+    {
+      "roundNumber": 6,
+      "dimensionId": "constraints",
+      "questions": [
+        "[Questions were synthesized by the Orchestrator from the prior prompt; exact text was not echoed back to the engine.]"
+      ],
+      "answer": "보안/무결성 제약이 가장 중요하다. 사용자가 올린 파일은 untrusted이고, LLM은 raw를 수정할 수 없으며, SQLite가 operational state authority다. 토큰 효율 때문에 full rendered document ingestion은 피한다.",
+      "attribution": {
+        "attribution": {
+          "legal_regulatory": {
+            "value": "No public or multi-user claims; personal local workflow only. Source evidence must remain auditable because documents can be business/legal/regulatory in nature.",
+            "confidence": 0.85
+          },
+          "budget": {
+            "value": "Avoid repeated query-time RAG over large binaries/rendered DOCX/PDF; keep LLM inputs compact through canonical text, chunking, summaries, and manifest read order.",
+            "confidence": 0.95
+          },
+          "security_privacy": {
+            "value": "Raw bundles are immutable; LLM adapters cannot mutate raw/** or SQLite directly; allowlist remains the Telegram access boundary; no secrets in tracked schema/docs.",
+            "confidence": 0.95
+          }
+        },
+        "rationale": "PO-proxy attribution for iter-2 constraints"
+      },
+      "crossDimensionSignals": [],
+      "timestamp": "2026-04-27T06:03:13.795Z"
+    },
+    {
+      "roundNumber": 7,
+      "dimensionId": "success_metric",
+      "questions": [
+        "[Questions were synthesized by the Orchestrator from the prior prompt; exact text was not echoed back to the engine.]"
+      ],
+      "answer": "성공 기준은 wiki ingest가 rendered output 없이 canonical inputs만으로 동작하고, source.md/manifest가 충분히 LLM-readable하며, output 삭제나 manual raw/wiki 삭제가 silent desync를 만들지 않는 것이다.",
+      "attribution": {
+        "attribution": {
+          "acceptance_criteria": {
+            "value": "A new mixed source job produces manifest schema v2 wiki_inputs, source.md read order, canonical extracted artifacts, and wiki adapter prompt/schema that forbids runtime output ingestion. Reconcile dry-run reports missing/orphaned raw/wiki/output state deterministically.",
+            "confidence": 0.95
+          },
+          "kpi": {
+            "value": "Zero wiki citations to runtime/outputs or _translated deliverables; each wiki page claim can trace to a canonical_text wiki_input or original evidence path; dry-run reconcile performs no writes.",
+            "confidence": 0.9
+          }
+        },
+        "rationale": "PO-proxy attribution for iter-2 success_metric"
+      },
+      "crossDimensionSignals": [],
+      "timestamp": "2026-04-27T06:03:13.905Z"
+    },
+    {
+      "roundNumber": 8,
+      "dimensionId": "platform",
+      "questions": [
+        "[Questions were synthesized by the Orchestrator from the prior prompt; exact text was not echoed back to the engine.]"
+      ],
+      "answer": "플랫폼은 기존 Node 24 TypeScript worker, SQLite state, Obsidian vault filesystem, Telegram Local Bot API Server다. 브라우저 앱이나 public API가 아니라 local CLI/worker integration이다.",
+      "attribution": {
+        "attribution": {
+          "platform_type": {
+            "value": "Local-first worker and CLI over filesystem Obsidian vault, not a web frontend.",
+            "confidence": 0.95
+          },
+          "runtime_constraints": {
+            "value": "Must preserve raw immutability, use Node/SQLite boundaries, run under Linux/WSL, and keep runtime outputs disposable while raw/wiki state is durable.",
+            "confidence": 0.95
+          }
+        },
+        "rationale": "PO-proxy attribution for iter-2 platform"
+      },
+      "crossDimensionSignals": [],
+      "timestamp": "2026-04-27T06:03:14.008Z"
+    }
+  ],
+  "ambiguityTrace": [
+    0.8765432098765432,
+    0.7592592592592592,
+    0.6537037037037037,
+    0.5509259259259258,
+    0.45092592592592584,
+    0.3603909465020575,
+    0.2690329218106994,
+    0.18693415637860056
+  ],
+  "terminatedAt": "2026-04-27T06:03:14.008Z",
+  "terminationReason": "ambiguity",
+  "outputPath": "/home/tony/workspace/telegram-local-ingest/.vibe/interview-log/iter-2.json",
+  "meta": {
+    "orchestratorModel": {
+      "provider": "claude-opus",
+      "familyAlias": "claude-opus",
+      "apiId": "claude-opus",
+      "legacy": true
+    },
+    "interviewMode": "iterate",
+    "carryoverIterationId": "iter-1",
+    "priorIterationCarryover": "## Prior iteration carryover\n\nCarryover iteration: iter-1\n\nRecent session entries:\n- 2026-04-27T05:25:08.000Z [utility] [stt-output] Corrected STT transcript download format after review found the restored output was still Markdown-only. RTZR/SenseVoice raw artifacts remain `*.transcript.md` for bundle traceability and preprocessing, but the worker now renders user-facing transcript downloads as `<source-stem>_transcript.docx` through `pandoc` when available, records the output as `stt_transcript`, keeps Markdown only as a renderer fallback, and preserves the `전사 스크립트` Telegram button label. Verification: `npm run typecheck`, focused `test/worker.test.ts` (`27`), full `npm test` (`443` passed, `1` skipped), `npm run build`, `git diff --check`, and UTF-8/mojibake checks passed.\n- 2026-04-27T05:06:58.365Z [audit-clear] resolved=0 note=Acknowledged app LOC threshold INFO for mature downstream app; no blocking risk for Sprint 13.\n- 2026-04-27T05:05:04.427Z [sprint-complete] sprint-12-utility-cleanup-polish -> passed. Sprint 12 live validation completed; restored STT transcript downloads for audio uploads before closing. LOC +161/-11 (net +150)\n- 2026-04-27T04:54:04.000Z [checkpoint] [git] Committed and pushed the Linux setup plus Telegram `/start` onboarding work to `main` as `cf22182 Add Linux setup and Telegram start onboarding`, then pushed `main` to `origin/main`. Verification before push: focused Telegram/operator/worker tests passed (`41`), `npm run typecheck` passed, full `npm test` passed (`442` passed, `1` skipped), `npm run build` passed, `git diff --check` passed, UTF-8/mojibake checks passed, and `npm run ops:restart` passed with readiness OK.\n- 2026-04-27T04:39:13.000Z [utility] [telegram] Added `/start` support for Telegram onboarding and allowlist debugging. `/start` now parses as a first-class command, bypasses allowlist gating only far enough to reply with the sender's Telegram user id, displays `이 봇은 인증된 사용자만이 사용가능합니다.`, and shows authenticated/unauthenticated status plus next-step guidance. Authorized users also see the available operator commands. The local stack was restarted so the running worker picks up the route. Verification: focused Telegram/operator/worker tests passed (`41`), `npm run typecheck` passed, full `npm test` passed (`442` passed, `1` skipped), `npm run build` passed, `git diff --check` passed, UTF-8/mojibake checks passed, and `npm run ops:restart` passed with readiness OK.\n- 2026-04-27T04:19:29.000Z [ops] [linux-setup] Added a Linux bootstrap path for portable workstation setup. New `npm run setup:linux` installs/checks ffmpeg, SQLite, Python venv/pip/build prerequisites, pandoc, poppler-utils, Tesseract OCR with current default OCR language packs, fontconfig, and Noto CJK fonts, then fills empty safe `.env` tool paths including `PDF_FONT_PATH`. `npm run setup:linux:sensevoice` chains the same system setup with the heavier SenseVoice CPU virtualenv/model prewarm. `.env.example`, README, agent postprocess docs, and context dependency notes now describe the Linux/Noto CJK setup, and machine-specific `/home/tony/...` defaults were removed from `.env.example`. Verification: `bash -n` setup scripts passed; `npm run setup:linux -- --help` passed; `bash scripts/setup-linux-dependencies.sh --skip-apt --no-env` passed without mutating `.env`; `git diff --check` passed; UTF-8/mojibake checks passed; `npm run typecheck` passed; full `npm test` passed (`440` passed, `1` skipped); `npm run build` passed.\n- 2026-04-26T19:18:36.000Z [checkpoint] [git] Committed and pushed the current Sprint 12 document/image output work to `main` as `8d9d505 Add OCR image overlay translation outputs`, then pushed `main` to `origin/main`. The working tree remained clean except local ignored `.env`; `.env` includes the operator-local `PDF_FONT_PATH=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc` setting and is intentionally not tracked.\n- 2026-04-26T16:03:59.000Z [utility] [document-output] Compacted worker-created output metadata after live output showed the auto-generated `번역문`, `Job`, and `Generated` block as too prominent. Pandoc-bound Markdown no longer uses `%` title blocks, direct PDF renderers no longer draw a large `번역문 + 원문` title plus two metadata lines, and DOCX/PDF outputs now use a single small left-aligned `Job: <job_id> (<generated KST time>)` line. Template-preserved DOCX output inserts the same small WordprocessingML metadata paragraph before support/translated content. Verification: `npm run typecheck`, focused worker document/image output tests (`25`), `npm run build`, full `npm test` (`440` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T15:40:49.000Z [utility] [image-output] Refined translated image overlay labels after live review found the glowing boxes visually too tall and outlined, and mixed Chinese/English image text left English phrases untranslated. The worker now sizes overlay backgrounds to the rendered one-line text line-height, removes the outline stroke, and still uses the two-pass translucent-background-then-text rendering path. The structured image/DOCX prompt now explicitly requires ordinary mixed-language natural text inside every block, including embedded English/Latin-script phrases, to be translated into the target language while preserving true names, product codes, URLs, units, and formulas. Verification: `node --import tsx --test test/agent-adapter.test.ts` (`10`), focused image overlay worker test (`25`), `npm run typecheck`, `npm run build`, full `npm test` (`440` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T15:30:07.000Z [utility] [image-output] Hardened translated image overlay layout after live output showed text/opaque-box overlap. The worker now precomputes overlay boxes, expands tiny OCR boxes enough for translated text, shifts overlapping boxes downward when possible, draws all translucent backgrounds first, and draws translated text as the final layer so a later background cannot hide earlier translated text. The image overlay regression fixture now includes overlapping OCR lines. Verification: `npm run typecheck`, focused image overlay worker test (`25`), `npm run build`, full `npm test` (`439` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T15:14:51.000Z [utility] [image-output] Added structured PNG/JPEG image translation overlay output. Image preprocessing now runs Tesseract TSV OCR, writes line-level `.blocks.json` coordinates beside extracted OCR text, and prompts agents to create `translations.json` for structured image artifacts. The worker renders `<source-stem>_translated.pdf` by placing translated text boxes over the original image and appends `[원문]` as the untouched source image page; if structured image translations are unavailable, it falls back to the existing text PDF path. Verification: `npm run typecheck`, focused preprocessor/agent-adapter/worker tests (`43`), `npm run build`, full `npm test` (`439` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T14:53:12.000Z [utility] [document-output] Removed duplicate generic headings from worker-rendered translation outputs. Pandoc temp Markdown still carries the title block metadata (`번역문`, job id, generated time), but no longer adds a second body `# 번역문` or the generic `## translated.md` heading; the direct PDF path also omits the internal `translated.md` label. Added regression coverage that inspects `translation.md` for those headings. Verification: `npm run typecheck`, focused worker PDF/document tests (`24`), `npm run build`, full `npm test` (`438` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T14:45:20.000Z [utility] [document-output] Changed PDF source `[원문]` composition from extracted text to original page snapshots. PDF uploads still use `pdftotext`/OCR text for language detection and agent translation, but final DOCX output now renders original PDF pages with `pdftoppm`, embeds them under `word/media/original-pdf-page-*.png`, wires document relationships/content types, and inserts the page images below `[원문]` so source visual layout is reviewable. Added optional `PDF_ORIGINAL_RENDER_DPI` and `PDF_ORIGINAL_MAX_PAGES`. Verification: `npm run typecheck`, focused worker PDF tests (`24`), `npm run build`, full `npm test` (`438` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T14:29:13.000Z [utility] [document-output] Extended metadata/glossary table rendering beyond the structured DOCX path. Pandoc-generated DOCX outputs for PDF/EML/HWP-family and fallback DOCX sources now get worker-normalized table borders, fixed width, cell margins, and shaded header cells before `[원문]` composition; non-document PDF outputs now parse Markdown pipe tables and draw actual PDF tables instead of flattening glossary rows as plain text. Verification: `npm run typecheck`, full `npm test` (`438` passed, `1` skipped), `npm run build`, `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T13:30:27.000Z [utility] [document-output] Fixed support-section table formatting for template-preserved DOCX output. Markdown tables in `translated.md` support sections are now rendered as real WordprocessingML tables with borders, fixed widths, cell margins, and shaded bold header cells instead of flattened tab-separated paragraphs; regression coverage now asserts `<w:tbl>`, borders, header shading, and separated glossary cells. Verification: `npm run typecheck`, focused `test/worker.test.ts` (`24`), `npm run build`, full `npm test` (`438` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T13:20:02.000Z [utility] [document-output] Restored translation metadata/glossary preservation for template-preserved DOCX output. Structured DOCX rendering now uses `translations.json` only for original-template body replacement, then extracts support sections from `translated.md` so translation metadata, glossary/terminology sections, and translator notes are inserted around the preserved DOCX body before the worker-appended `[원문]` section. The structured DOCX prompt now explicitly tells agents that these support sections remain in `translated.md` and are preserved by the worker. Verification: `npm run typecheck`, focused `test/agent-adapter.test.ts test/worker.test.ts` (`33`), `npm run build`, full `npm test` (`438` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T13:06:59.000Z [utility] [agent-output] Fixed the Claude postprocess permission failure exposed by live job `tg_5985744318_161`. Prepared preprocessing artifacts (`translated source .txt` and DOCX `.blocks.json`) are now staged under the job-scoped `.agent-work/.../artifacts/` directory before prompt generation, so the prompt references only paths inside the agent's allowed workspace instead of `runtime/extracted/...`; structured DOCX prompts still require both `translated.md` and `translations.json` directly in the output directory. Verification: `npm run typecheck`, focused `test/agent-adapter.test.ts test/worker.test.ts` (`33`), `npm run build`, full `npm test` (`438` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run vibe:checkpoint`, and `npm run ops:restart` with readiness passing.\n- 2026-04-26T12:53:05.000Z [utility] [agent-output] Fixed the structured DOCX agent prompt and empty-output diagnostics after live job `tg_5985744318_161` showed Claude exiting successfully without creating files. Structured DOCX prompts now say text output files only (`translated.md` plus `translations.json`) instead of the conflicting \"Markdown only\" wording, require both files directly in the output directory, and worker failures now record `agent.postprocess.failed` with provider, reason, command, args, prompt path, output dir, stdout, and stderr when an agent exits without outputs. Verification: `npm run typecheck`, focused `test/agent-adapter.test.ts test/worker.test.ts` (`32`), `npm run build`, full `npm test` (`437` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run ops:restart` with readiness passing, and `npm run vibe:checkpoint`.\n- 2026-04-26T12:38:57.000Z [utility] [document-output] Added a DOCX template-preserved post-process path. DOCX preprocessing now writes deterministic body paragraph block ids, the agent prompt requires `translations.json` for structured DOCX artifacts, and the worker clones the original DOCX package to replace text inside `word/document.xml` before appending `[원문]`; PDF/EML/HWP-family sources keep the Markdown-to-DOCX fallback path. The DOCX regression test now fails if `pandoc` is called on the structured template-preserved path. Verification: `npm run typecheck`, focused `test/preprocessors.test.ts test/agent-adapter.test.ts test/worker.test.ts` (`40`), `npm run build`, full `npm test` (`436` passed, `1` skipped), `git diff --check`, UTF-8/mojibake checks, `npm run ops:restart` with readiness passing, and `npm run vibe:checkpoint`.\n- 2026-04-26T12:13:05.000Z [utility] [document-output] Changed document post-processing to worker-owned rendering. Agents are now prompted to create only `translated.md` and not DOCX/PDF/HWP/HWPX/ZIP/binary deliverables; the worker ignores agent-created document binaries, renders DOCX through `pandoc`, validates required DOCX package entries, appends `[원문]`, and removes intermediate agent files. Added regression coverage for ignoring a corrupt agent-created DOCX containing sandbox-log text. Verification: `npm run typecheck`, focused `test/agent-adapter.test.ts test/worker.test.ts` (`30`), `npm run build`, full `npm test` (`435` passed, `1` skipped), `git diff --check`, `npm run ops:restart` with readiness passing, and `npm run vibe:checkpoint`.\n\nHandoff snapshot:\n# Orchestrator Handoff\n\n## Identity\n\n- **repo**: `telegram-local-ingest`\n- **path**: `/home/tony/workspace/telegram-local-ingest`\n- **current iteration**: `iter-1`\n- **current sprint**: `idle` (next: `sprint-13-vault-reconcile-retention`)\n- **harnessVersion**: `1.6.11`\n\n## Status\n\n### Sprint 12 Closed — 2026-04-27\n\nSprint 12 live validation is complete and `sprint-12-utility-cleanup-polish` is marked `passed`. During closeout, a regression was found and fixed for audio uploads: RTZR/SenseVoice still produced `*.transcript.md` artifacts, but Korean transcript jobs skipped agent translation and therefore had no Telegram download output. The worker now renders transcript Markdown into user-facing `<source-stem>_transcript.docx` outputs when `pandoc` is available, registers them as `stt_transcript` runtime outputs, falls back to Markdown only when DOCX rendering is unavailable, sends an `음성 전사` completion message with a `전사 스크립트` download button, and treats audio-like document uploads (`audio/*` MIME or audio extension) as STT jobs that require preset selection.\n\n### Push Checkpoint — 2026-04-27\n\nCommitted and pushed the current Linux setup plus Telegram `/start` onboarding work to `origin/main` as `cf22182 Add Linux setup and Telegram start onboarding`. The working product code is now on `main`; only this context checkpoint remains local until it is committed and pushed.\n\n### Telegram Start Onboarding — 2026-04-27\n\n`/start` is now a first-class Telegram command. The worker handles it before normal allowlist gating so unknown users can see their Telegram user id and request registration, but the response still states that the bot is available only to authenticated users. Authorized users see their authenticated status and the available operator commands. The local stack was restarted after this change, so the running worker has the new `/start` behavior.\n\n\nMilestones:\n(missing)\n\nRoadmap pointer:\n# Sprint Roadmap\n\n<!-- BEGIN:VIBE:CURRENT-SPRINT -->\n> **Current**: idle (next: sprint-13-vault-reconcile-retention)\n> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish\n> **Pending**: sprint-13-vault-reconcile-retention\n<!-- END:VIBE:CURRENT-SPRINT -->\n\n## Background\n\nThis roadmap implements the Telegram-first local ingest pipeline discussed in the imported planning transcript. Dropbox is intentionally excluded from V1. Large file handling is based on Telegram Local Bot API Server running in `--local` mode.\n\n```text\nTelegram mobile/desktop\n  -> Telegram Local Bot API Server\n  -> local TypeScript worker\n\nIteration history:\n{\n  \"$schema\": \"./iteration-history.schema.json\",\n  \"currentIteration\": null,\n  \"iterations\": [\n    {\n      \"id\": \"iter-1\",\n      \"label\": \"telegram-local-ingest-mvp\",\n      \"startedAt\": \"2026-04-22T00:00:00.000Z\",\n      \"completedAt\": \"2026-04-22T09:14:36.164Z\",\n      \"goal\": \"Build a Telegram Local Bot API Server based local ingest worker that writes immutable Obsidian raw bundles and triggers a constrained LLM wiki ingest adapter.\",\n      \"plannedSprints\": [\n        \"sprint-0-phase0-seed\",\n        \"sprint-1-telegram-local-baseline\",\n        \"sprint-2-sqlite-job-model\",\n        \"sprint-3-telegram-capture\",\n        \"sprint-4-local-file-import\",\n        \"sprint-5-vault-bundle-writer\",\n        \"sprint-6-rtzr-stt\",\n        \"sprint-7-wiki-ingest-adapter\",\n        \"sprint-8-status-retry-cancel\"\n      ],\n      \"completedSprints\": [\n        \"sprint-0-phase0-seed\",\n        \"sprint-1-telegram-local-baseline\",\n        \"sprint-2-sqlite-job-model\",\n        \"sprint-3-telegram-capture\",\n        \"sprint-4-local-file-import\",\n        \"sprint-5-vault-bundle-writer\",\n        \"sprint-6-rtzr-stt\",\n        \"sprint-7-wiki-ingest-adapter\",\n        \"sprint-8-status-retry-cancel\"\n      ],\n      \"milestoneProgress\": {},\n      \"summary\": \"Completed. Sprint 0 seeded the downstream project from vibe-doctor. Sprint 1 added the Telegram Local Bot API baseline, startup checks, tests, and operator setup docs. Sprint 2 added SQLite schema, repository functions, state transitions, retry eligibility, and event history. Sprint 3 added Telegram update parsing, command parsing, allowlist checks, durable offset polling, and /ingest job creation. Sprint 4 added controlled Telegram file import into runtime staging/archive with hashing, duplicate detection, max size policy, and path safety. Sprint 5 added immutable Obsidian raw bundle writing with manifest/source/log files and finalized overwrite protection. Sprint 6 added RTZR STT auth, submit/poll, transcript artifacts, 429 backoff, and ffmpeg helpers. Sp\n\nPrior report text signals:\n(missing)"
+  },
+  "pending": null
+}
