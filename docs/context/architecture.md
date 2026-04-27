@@ -192,5 +192,10 @@ Vault reconcile work should extend the DB boundary with tombstone/drift metadata
 - BotFather bot token
 - SQLite
 - ffmpeg
+- pandoc
+- poppler-utils (`pdftotext`, `pdftoppm`)
+- tesseract OCR with `eng`, `kor`, `chi_sim`, and `jpn` language data
+- Noto CJK fonts for Korean/Chinese/Japanese PDF rendering
 - RTZR STT API credentials
+- Optional local SenseVoice CPU STT Python environment
 - Obsidian vault directory

@@ -74,6 +74,9 @@ test("parseTelegramCommand supports ingest metadata and control command targets"
   assert.equal(retry?.name, "retry");
   assert.equal(retry?.targetJobId, "job-123");
 
+  const start = parseTelegramCommand("/start");
+  assert.equal(start?.name, "start");
+
   const unknown = parseTelegramCommand("/dance now");
   assert.equal(unknown?.name, "unknown");
 });

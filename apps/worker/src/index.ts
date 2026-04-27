@@ -45,6 +45,7 @@ import {
 } from "@telegram-local-ingest/db";
 import { cleanupTelegramSourceFiles, importTelegramJobFiles, resolveRuntimePath } from "@telegram-local-ingest/importer";
 import {
+  buildStartResponse,
   buildJobCompletionMessage,
   buildJobFailureMessage,
   sendOperatorCommandResponse,
@@ -419,8 +420,17 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
 
     const parsed = parseTelegramUpdate(update);
     try {
-      if (parsed && isTelegramUserAllowed(parsed.userId, context.config.telegram.allowedUserIds)) {
+      if (parsed) {
         const command = getMessageCommand(parsed);
+        const isAllowed = isTelegramUserAllowed(parsed.userId, context.config.telegram.allowedUserIds);
+        if (command?.name === "start") {
+          await context.telegram.sendMessage(parsed.chatId, buildStartResponse(parsed, isAllowed));
+          operatorCommandsHandled += 1;
+          continue;
+        }
+        if (!isAllowed) {
+          continue;
+        }
         if (parsed.files.length === 0 && command && command.name !== "ingest" && command.name !== "unknown") {
           const result = await sendOperatorCommandResponse(context.db, context.telegram, parsed);
           operatorCommandsHandled += result.handled ? 1 : 0;

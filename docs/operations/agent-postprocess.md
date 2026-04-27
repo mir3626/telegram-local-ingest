@@ -80,7 +80,7 @@ The worker runs expired-output cleanup when it starts and then repeats it on `WO
 
 For DOCX/PDF/EML/HWP-family uploads, the editable delivery baseline is DOCX. The agent contract is Markdown plus optional structured text only: the agent should create `translated.md` and must not create DOCX/PDF/HWP/HWPX/ZIP/binary deliverables. For uploaded DOCX sources, preprocessing writes a block-id structure file beside the extracted text; the agent also writes `translations.json` with the exact block ids, and the worker clones the original DOCX package, replaces text-bearing body paragraphs in `word/document.xml`, validates the DOCX package, and appends the source section itself. This preserves the uploaded DOCX template better than `pandoc --reference-doc` because the original document XML stays in place. If structured replacement is missing or invalid, the worker falls back to rendering `<source-stem>_translated.docx` from `translated.md` with `pandoc`. PDF sources are also rendered to DOCX from translated Markdown, but their `[원문]` section uses `pdftoppm` page-image snapshots of the original PDF instead of extracted text, so visual layout is preserved for review. EML/HWP/HWPX sources still append extracted source text because there is no page-renderable PDF original. EML uploads are parsed into mail headers plus the preferred text body before language detection and agent translation. When the original section is included after the translation, it must be labeled `[원문]`, not appendix/`부록`.
 
-For non-document uploads, the worker converts the agent's translated Markdown/text result plus the preprocessed original text into one mobile-friendly `<source-stem>_translated.pdf`. For Korean/CJK PDF rendering, WSL normally auto-detects the Windows Malgun Gothic font at `/mnt/c/Windows/Fonts/malgun.ttf`. Set `PDF_FONT_PATH` when running on a host with a different font location. PDF source uploads use `pdftotext` from poppler-utils when a text layer exists, and fall back to `pdftoppm` plus `tesseract` OCR for scanned PDFs. The same `pdftoppm` binary renders original PDF page snapshots for the DOCX `[원문]` section. PNG/JPEG image uploads use `tesseract` TSV OCR before language detection and translation; when OCR block coordinates and `translations.json` are available, the worker renders a PDF page from the original image with translated text overlaid on the recorded OCR boxes, then appends `[원문]` as the untouched original image page. If structured image translations are unavailable, the worker falls back to the existing text-based PDF renderer.
+For non-document uploads, the worker converts the agent's translated Markdown/text result plus the preprocessed original text into one mobile-friendly `<source-stem>_translated.pdf`. For Korean/CJK PDF rendering on Linux, install Noto CJK fonts through `npm run setup:linux` and keep `PDF_FONT_PATH` pointed at the detected `NotoSansCJK-Regular.ttc` path. PDF source uploads use `pdftotext` from poppler-utils when a text layer exists, and fall back to `pdftoppm` plus `tesseract` OCR for scanned PDFs. The same `pdftoppm` binary renders original PDF page snapshots for the DOCX `[원문]` section. PNG/JPEG image uploads use `tesseract` TSV OCR before language detection and translation; when OCR block coordinates and `translations.json` are available, the worker renders a PDF page from the original image with translated text overlaid on the recorded OCR boxes, then appends `[원문]` as the untouched original image page. If structured image translations are unavailable, the worker falls back to the existing text-based PDF renderer.
 
 Optional tool overrides:
 
@@ -89,6 +89,7 @@ PANDOC_BIN=/usr/bin/pandoc
 PDFTOTEXT_BIN=/usr/bin/pdftotext
 PDFTOPPM_BIN=/usr/bin/pdftoppm
 TESSERACT_BIN=/usr/bin/tesseract
+PDF_FONT_PATH=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 OCR_LANGUAGES=kor+eng+chi_sim+jpn
 OCR_PSM=3
 PDF_OCR_MAX_PAGES=10
@@ -97,10 +98,16 @@ PDF_ORIGINAL_RENDER_DPI=150
 PDF_ORIGINAL_MAX_PAGES=
 ```
 
-Install/update document and OCR tools with:
+Install/update Linux document, OCR, font, and media tools with:
 
 ```bash
-npm run setup:docx-rendering
+npm run setup:linux
+```
+
+Install optional local CPU SenseVoice STT dependencies and model cache with:
+
+```bash
+npm run setup:linux:sensevoice
 ```
 
 ## Boundaries

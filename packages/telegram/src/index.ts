@@ -122,7 +122,7 @@ export interface ParsedTelegramCallback {
   data?: string;
 }
 
-export type TelegramCommandName = "ingest" | "status" | "retry" | "cancel" | "unknown";
+export type TelegramCommandName = "ingest" | "status" | "retry" | "cancel" | "start" | "unknown";
 
 export interface ParsedTelegramCommand {
   name: TelegramCommandName;
@@ -558,7 +558,7 @@ function fileFromPayload(kind: ParsedTelegramFileKind, payload: TelegramFilePayl
 }
 
 function toCommandName(value: string): TelegramCommandName {
-  if (value === "ingest" || value === "status" || value === "retry" || value === "cancel") {
+  if (value === "ingest" || value === "status" || value === "retry" || value === "cancel" || value === "start") {
     return value;
   }
   return "unknown";

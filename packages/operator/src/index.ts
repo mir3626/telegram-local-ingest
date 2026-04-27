@@ -25,10 +25,37 @@ export interface OperatorCommandResult {
   job?: StoredJob;
 }
 
+export function buildStartResponse(message: ParsedTelegramMessage, allowed: boolean): string {
+  return [
+    "[안내] 🤖 Telegram Local Ingest Bot",
+    "",
+    "🔐 이 봇은 인증된 사용자만이 사용가능합니다.",
+    `🆔 사용자 ID: ${message.userId ?? "확인 불가"}`,
+    `인증 상태: ${allowed ? "✅ 인증됨" : "❌ 미인증"}`,
+    allowed
+      ? "📎 파일을 업로드하면 자동으로 ingest 작업을 생성합니다."
+      : "📝 관리자에게 위 사용자 ID를 전달해 화이트리스트 등록을 요청하세요.",
+    allowed ? "" : undefined,
+    allowed ? "[사용 가능 명령어]" : undefined,
+    allowed ? "📋 /status - 최근 작업 목록과 처리 상태를 확인합니다." : undefined,
+    allowed ? "🔎 /status <job_id> - 특정 작업의 상세 상태와 결과 파일을 확인합니다." : undefined,
+    allowed ? "🔁 /retry <job_id> - 실패한 작업을 다시 처리합니다." : undefined,
+    allowed ? "🛑 /cancel <job_id> - 진행 중인 작업을 취소합니다." : undefined,
+  ].filter((line): line is string => line !== undefined).join("\n");
+}
+
 export function handleOperatorCommand(db: DatabaseSync, message: ParsedTelegramMessage, now?: string): OperatorCommandResult {
   const command = getMessageCommand(message);
   if (!command || command.name === "ingest" || command.name === "unknown") {
     return { handled: false, chatId: message.chatId };
+  }
+
+  if (command.name === "start") {
+    return {
+      handled: true,
+      chatId: message.chatId,
+      text: buildStartResponse(message, true),
+    };
   }
 
   if (command.name === "status") {

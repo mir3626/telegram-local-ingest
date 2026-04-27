@@ -1318,6 +1318,35 @@ test("runWorkerOnce handles operator status without creating a job", async () =>
   }
 });
 
+test("runWorkerOnce answers /start with user id before allowlist gating", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.telegram.allowedUserIds = ["999"];
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/start", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.match(sentMessages[0]?.text ?? "", /사용자 ID: 400/);
+    assert.match(sentMessages[0]?.text ?? "", /인증된 사용자만이 사용가능합니다/);
+    assert.match(sentMessages[0]?.text ?? "", /인증 상태: ❌ 미인증/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("processRunnableJobs claims multiple jobs while limiting STT concurrency", async () => {
   const fixture = createFixture();
   const firstAudio = writeFile(fixture.runtimeDir, "staging/job-a/file-a/call-a.m4a", "fake audio a");
@@ -1887,7 +1916,7 @@ function mockTelegramFetch(
               date: 1_777_000_001,
               chat: { id: 300, type: "private" },
               from: { id: 400, is_bot: false, first_name: "Tony" },
-              ...(text !== undefined ? { caption: text } : {}),
+              ...(text !== undefined ? (filePath ? { caption: text } : { text }) : {}),
               ...(filePath
                 ? {
                     document: {

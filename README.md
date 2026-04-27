@@ -42,28 +42,40 @@ docs/plans/sprint-roadmap.md
 
 - Node.js 24+
 - npm 11+
+- Linux host with `apt-get` for the bundled setup script
 - Telegram bot token from BotFather
 - Telegram `api_id` and `api_hash` from `my.telegram.org`
 - Telegram Local Bot API Server from `tdlib/telegram-bot-api`
 - SQLite
-- ffmpeg
+- ffmpeg for audio preprocessing
+- pandoc for DOCX rendering
+- poppler-utils for PDF text/page extraction
+- tesseract OCR with English, Korean, Simplified Chinese, and Japanese language packs
+- Noto CJK fonts for Korean/Chinese/Japanese PDF rendering
 - RTZR API credentials
 - Obsidian vault path
 
 ## Setup
 
-```powershell
+```bash
 npm install
-Copy-Item .env.example .env
+cp .env.example .env
+npm run setup:linux
 ```
 
 Fill `.env` with local values. Keep `.env` out of git.
+
+For optional local CPU SenseVoice STT, run the heavier model setup separately:
+
+```bash
+npm run setup:linux:sensevoice
+```
 
 See [Telegram Local Bot API Server Setup](docs/operations/telegram-local-bot-api-server.md) before starting the worker.
 
 Run the current scaffold:
 
-```powershell
+```bash
 npm run typecheck
 npm test
 npm run build
@@ -75,10 +87,11 @@ npm run worker:dev
 1. Start Telegram Local Bot API Server in `--local` mode.
 2. Move the bot session to the local server with the documented `logOut` flow.
 3. Start the worker with `npm run worker:dev`.
-4. Send `/ingest project:<name> tag:<tag>` with files or captions from an allowlisted Telegram user.
-5. Use `/status` or `/status <job_id>` to inspect progress.
-6. Use `/retry <job_id>` only for failed jobs.
-7. Use `/cancel <job_id>` for active jobs that should stop.
+4. Send `/start` to confirm the Telegram user id and allowlist status.
+5. Send `/ingest project:<name> tag:<tag>` with files or captions from an allowlisted Telegram user.
+6. Use `/status` or `/status <job_id>` to inspect progress.
+7. Use `/retry <job_id>` only for failed jobs.
+8. Use `/cancel <job_id>` for active jobs that should stop.
 
 Operational state is in SQLite at `SQLITE_DB_PATH`. This is sufficient for the later dashboard because jobs, files, source bundles, Telegram offsets, and append-only events are all queryable without scraping logs.
 

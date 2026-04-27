@@ -14,6 +14,12 @@ fi
 if ! command -v tesseract >/dev/null 2>&1; then
   missing_packages+=("tesseract-ocr")
 fi
+if ! command -v fc-match >/dev/null 2>&1; then
+  missing_packages+=("fontconfig")
+fi
+if [[ ! -f "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc" && ! -f "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc" ]]; then
+  missing_packages+=("fonts-noto-cjk")
+fi
 if command -v tesseract >/dev/null 2>&1; then
   available_langs="$(tesseract --list-langs 2>/dev/null || true)"
   grep -qx "eng" <<<"$available_langs" || missing_packages+=("tesseract-ocr-eng")
@@ -25,12 +31,12 @@ else
 fi
 
 if [[ ${#missing_packages[@]} -eq 0 ]]; then
-  echo "Document processing tools are already installed."
+  echo "Document, OCR, and CJK font tools are already installed."
   exit 0
 fi
 
 mapfile -t missing_packages < <(printf '%s\n' "${missing_packages[@]}" | sort -u)
-echo "Installing document processing tools: ${missing_packages[*]}"
+echo "Installing document, OCR, and CJK font tools: ${missing_packages[*]}"
 sudo apt-get update
 sudo apt-get install -y "${missing_packages[@]}"
 
@@ -47,4 +53,7 @@ fi
 if command -v tesseract >/dev/null 2>&1; then
   tesseract --version | head -1
   tesseract --list-langs 2>/dev/null | sed 's/^/  /'
+fi
+if command -v fc-match >/dev/null 2>&1; then
+  fc-match 'Noto Sans CJK KR' | sed 's/^/  /'
 fi

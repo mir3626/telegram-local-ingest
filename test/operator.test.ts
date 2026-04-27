@@ -14,6 +14,7 @@ import {
   buildDailyFailedJobsReport,
   buildJobCompletionMessage,
   buildJobFailureMessage,
+  buildStartResponse,
   buildStatusResponse,
   handleOperatorCommand,
   sendOperatorCommandResponse,
@@ -21,6 +22,23 @@ import {
 import { TelegramBotApiClient, type FetchLike, type ParsedTelegramMessage } from "@telegram-local-ingest/telegram";
 
 const NOW = "2026-04-22T12:00:00.000Z";
+
+test("buildStartResponse shows user id and allowlist guidance", () => {
+  const unauthorized = buildStartResponse(message("/start"), false);
+  assert.match(unauthorized, /\[안내\]/);
+  assert.match(unauthorized, /인증된 사용자만이 사용가능합니다/);
+  assert.match(unauthorized, /사용자 ID: 400/);
+  assert.match(unauthorized, /인증 상태: ❌ 미인증/);
+  assert.match(unauthorized, /화이트리스트 등록/);
+
+  const authorized = buildStartResponse(message("/start"), true);
+  assert.match(authorized, /인증 상태: ✅ 인증됨/);
+  assert.match(authorized, /\[사용 가능 명령어\]/);
+  assert.match(authorized, /📋 \/status - 최근 작업 목록과 처리 상태를 확인합니다/);
+  assert.match(authorized, /🔎 \/status <job_id> - 특정 작업의 상세 상태와 결과 파일을 확인합니다/);
+  assert.match(authorized, /🔁 \/retry <job_id> - 실패한 작업을 다시 처리합니다/);
+  assert.match(authorized, /🛑 \/cancel <job_id> - 진행 중인 작업을 취소합니다/);
+});
 
 test("buildStatusResponse lists recent jobs and details one job", () => {
   const handle = openIngestDatabase(":memory:");

@@ -69,7 +69,7 @@ These product review items should stay visible as separate product work or valid
 - LLM agent access is constrained to wiki ingest, not capture, file import, queue state, or retry decisions.
 - Downloadable generated outputs are stored outside the vault, have explicit expiry metadata, and can be deleted without losing source evidence.
 - Local agent automation is for personal/operator use only; future paid or multi-user service variants must use official API credentials instead of routing other users through a personal OAuth session.
-- MVP can run on one local Windows machine with Node 24+, SQLite, ffmpeg, Telegram Local Bot API Server, and an Obsidian vault path.
+- MVP can run on one local operator workstation with Node 24+, SQLite, ffmpeg, Telegram Local Bot API Server, and an Obsidian vault path. Linux dependency setup is scripted for document rendering, PDF extraction/OCR, image OCR, CJK PDF fonts, and optional SenseVoice CPU STT.
 
 ## Non-Goals For V1
 
