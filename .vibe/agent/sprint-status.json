@@ -95,13 +95,20 @@
     {
       "id": "sprint-12-utility-cleanup-polish",
       "name": "Utility Cleanup And Bot Separation Prep",
-      "status": "in_progress",
-      "startedAt": "2026-04-23T08:20:44.000Z"
+      "status": "passed",
+      "startedAt": "2026-04-23T08:20:44.000Z",
+      "completedAt": "2026-04-27T05:05:04.427Z",
+      "actualLoc": {
+        "added": 161,
+        "deleted": 11,
+        "net": 150,
+        "filesChanged": 2
+      }
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-12-utility-cleanup-polish",
-    "lastActionSummary": "Sprint 12 implementation advanced with scheduled output cleanup cadence, /status output state reporting, OCR preprocessing, and operator-only OAuth/API migration docs; live Telegram validation remains before closing the sprint.",
+    "currentSprintId": "idle",
+    "lastActionSummary": "Sprint 12 live validation completed; restored STT transcript downloads for audio uploads before closing.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -115,7 +122,7 @@
       "Prefer official Anthropic skills for document tasks when a suitable official skill exists"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-24T15:18:22.000Z"
+    "updatedAt": "2026-04-27T05:05:04.427Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -126,12 +133,38 @@
       "npm run build"
     ]
   },
-  "pendingRisks": [],
-  "lastSprintScope": [],
-  "lastSprintScopeGlob": [],
+  "pendingRisks": [
+    {
+      "id": "lightweight-audit-sprint-12-utility-cleanup-polish",
+      "raisedBy": "vibe-audit-lightweight",
+      "targetSprint": "*",
+      "text": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "status": "acknowledged",
+      "createdAt": "2026-04-27T05:05:04.736Z",
+      "level": "INFO",
+      "code": "LOC_THRESHOLD_BREACH",
+      "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled"
+    }
+  ],
+  "lastSprintScope": [
+    "apps/worker/src/index.ts",
+    "test/worker.test.ts",
+    "docs/plans/sprint-roadmap.md",
+    ".vibe/agent/sprint-status.json",
+    ".vibe/agent/handoff.md",
+    ".vibe/agent/session-log.md"
+  ],
+  "lastSprintScopeGlob": [
+    "apps/worker/src/index.ts",
+    "test/worker.test.ts",
+    "docs/plans/sprint-roadmap.md",
+    ".vibe/agent/sprint-status.json",
+    ".vibe/agent/handoff.md",
+    ".vibe/agent/session-log.md"
+  ],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-24T15:18:22.000Z",
-  "verifiedAt": "2026-04-24T15:18:22.000Z",
+  "stateUpdatedAt": "2026-04-27T05:06:58.365Z",
+  "verifiedAt": "2026-04-27T05:05:35.000Z",
   "verificationCommands": [
     {
       "id": "typecheck",

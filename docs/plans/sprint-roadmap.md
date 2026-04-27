@@ -1,8 +1,8 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-12-utility-cleanup-polish
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess
+> **Current**: idle (next: sprint-13-vault-reconcile-retention)
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish
 > **Pending**: sprint-13-vault-reconcile-retention
 <!-- END:VIBE:CURRENT-SPRINT -->
 

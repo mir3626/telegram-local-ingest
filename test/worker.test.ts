@@ -832,6 +832,35 @@ test("runWorkerOnce asks for RTZR preset on audio uploads and queues after callb
   }
 });
 
+test("runWorkerOnce asks for STT preset when an audio file is uploaded as a document", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const answeredCallbacks: unknown[] = [];
+  try {
+    migrate(dbHandle.db);
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockAudioPresetFetch(sentMessages, answeredCallbacks, "ko", true),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsCreated, 1);
+    assert.equal(result.jobsProcessed, 0);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "RECEIVED");
+    assert.match(sentMessages[0]?.text ?? "", /🎧 음성 파일 업로드/);
+    assert.match(JSON.stringify(sentMessages[0]?.reply_markup), /stt:meeting/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles artifacts", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
@@ -867,8 +896,19 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     assert.match(manifest, /call\.rtzr\.json/);
     assert.match(manifest, /call\.transcript\.md/);
     assert.match(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
-    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "rtzr.transcribed"));
-    const languageEvent = listJobEvents(dbHandle.db, "tg_300_21").find((event) => event.type === "language.detected");
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.kind, "stt_transcript");
+    assert.equal(outputs[0]?.fileName, "call.transcript.md");
+    assert.equal(outputs[0]?.mimeType, "text/markdown");
+    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /회의 내용입니다/);
+    assert.match(sentMessages.at(-1)?.text ?? "", /음성 전사가 완료되었습니다/);
+    assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /download:/);
+    assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /전사 스크립트 다운로드/);
+    const events = listJobEvents(dbHandle.db, "tg_300_21");
+    assert.ok(events.some((event) => event.type === "rtzr.transcribed"));
+    assert.ok(events.some((event) => event.type === "stt.transcript_output_registered"));
+    const languageEvent = events.find((event) => event.type === "language.detected");
     assert.equal((languageEvent?.data as { primaryLanguage: string }).primaryLanguage, "ko");
     assert.equal((languageEvent?.data as { translationNeeded: boolean }).translationNeeded, false);
   } finally {
@@ -911,6 +951,11 @@ test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles arti
     assert.match(manifest, /call\.sensevoice\.json/);
     assert.match(manifest, /call\.transcript\.md/);
     assert.match(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "call.transcript.md"), "utf8"), /센스보이스 전사입니다/);
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.kind, "stt_transcript");
+    assert.equal(outputs[0]?.fileName, "call.transcript.md");
+    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /센스보이스 전사입니다/);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "sensevoice.transcribed"));
   } finally {
     dbHandle.close();
@@ -1405,6 +1450,7 @@ test("processRunnableJobs claims multiple jobs while limiting STT concurrency", 
     assert.equal(calls.length, 2);
     releaseSecond.resolve();
     await waitFor(() => getJob(dbHandle.db, "job-a")?.status === "COMPLETED" && getJob(dbHandle.db, "job-b")?.status === "COMPLETED");
+    await waitFor(() => (context.runtimeState?.runningJobIds.size ?? 0) === 0);
   } finally {
     releaseFirst.resolve();
     releaseSecond.resolve();
@@ -2005,6 +2051,7 @@ function mockAudioPresetFetch(
   sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }>,
   answeredCallbacks: unknown[],
   languageKey = "ko",
+  asDocument = false,
 ): FetchLike {
   return async (input, init) => {
     const method = input.split("/").at(-1);
@@ -2012,6 +2059,13 @@ function mockAudioPresetFetch(
     if (method === "getUpdates") {
       const offset = (body as { offset?: number }).offset;
       if (offset === undefined) {
+        const filePayload = {
+          file_id: "audio-file",
+          file_unique_id: "audio-unique",
+          file_name: "call.m4a",
+          mime_type: "audio/mp4",
+          file_size: 10,
+        };
         return jsonResponse({
           ok: true,
           result: [{
@@ -2021,13 +2075,7 @@ function mockAudioPresetFetch(
               date: 1_777_000_001,
               chat: { id: 300, type: "private" },
               from: { id: 400, is_bot: false, first_name: "Tony" },
-              audio: {
-                file_id: "audio-file",
-                file_unique_id: "audio-unique",
-                file_name: "call.m4a",
-                mime_type: "audio/mp4",
-                file_size: 10,
-              },
+              ...(asDocument ? { document: filePayload } : { audio: filePayload }),
             },
           }],
         });

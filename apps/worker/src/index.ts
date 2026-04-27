@@ -529,6 +529,10 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       if (audioFiles.length > 0) {
         logWorker(`STT phase started job=${job.id} provider=${context.config.stt.provider} files=${audioFiles.length}`, "info", "STT");
         await runWithSemaphore(context, "stt", () => runConfiguredSttTranscription(context, job));
+        const transcriptOutputs = await registerTranscriptOutputs(context, job);
+        if (transcriptOutputs.length > 0) {
+          logWorker(`transcript outputs registered job=${job.id} count=${transcriptOutputs.length}`, "info", "OUTPUT");
+        }
         const stopped = terminalJobIfStopped(context.db, job.id);
         if (stopped) {
           return stopped;
@@ -1496,8 +1500,15 @@ function buildCompletionNotification(job: StoredJob, files: StoredJobFile[], out
   if (outputs.length === 0) {
     return buildJobCompletionMessage(job, files);
   }
+  const hasAgentTranslation = outputs.some((output) => output.kind === "agent_translation");
+  const hasTranscript = outputs.some((output) => output.kind === "stt_transcript");
+  const title = hasAgentTranslation && hasTranscript
+    ? "✅ 업로드한 파일의 전사/자동번역이 완료되었습니다"
+    : hasTranscript
+      ? "✅ 음성 전사가 완료되었습니다"
+      : "✅ 업로드한 파일의 자동번역이 완료되었습니다";
   return [
-    `✅ 업로드한 파일의 자동번역이 완료되었습니다: ${job.id}${job.project ? ` (${job.project})` : ""}`,
+    `${title}: ${job.id}${job.project ? ` (${job.project})` : ""}`,
     ...files.map((file) => `- ${file.originalName ?? file.id}`),
     "",
     "📎 결과 파일은 아래 만료 시각까지 다운로드할 수 있습니다.",
@@ -1668,6 +1679,82 @@ function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactI
   });
 }
 
+async function registerTranscriptOutputs(context: WorkerContext, job: StoredJob): Promise<StoredJobOutput[]> {
+  const events = listJobEvents(context.db, job.id);
+  const registeredSources = new Set(
+    events.flatMap((event) => {
+      if (event.type !== "stt.transcript_output_registered" || !isRecord(event.data) || typeof event.data.sourcePath !== "string") {
+        return [];
+      }
+      return [path.resolve(event.data.sourcePath)];
+    }),
+  );
+  const existingOutputNames = new Set(
+    listJobOutputs(context.db, job.id)
+      .filter((output) => output.kind === "stt_transcript" && !output.deletedAt)
+      .map((output) => output.fileName),
+  );
+  const outputs: StoredJobOutput[] = [];
+
+  for (const artifact of collectTranscriptOutputCandidates(events)) {
+    const sourcePath = path.resolve(artifact.sourcePath);
+    if (registeredSources.has(sourcePath) || existingOutputNames.has(artifact.fileName)) {
+      continue;
+    }
+    try {
+      await fs.access(sourcePath);
+    } catch {
+      appendJobEvent(context.db, job.id, "stt.transcript_output_skipped", artifact.fileName, {
+        provider: artifact.provider,
+        sourcePath,
+        reason: "source_missing",
+      });
+      continue;
+    }
+    const output = await createRuntimeOutput({
+      db: context.db,
+      jobId: job.id,
+      runtimeDir: context.config.runtime.runtimeDir,
+      sourcePath,
+      kind: "stt_transcript",
+      fileName: artifact.fileName,
+      mimeType: "text/markdown",
+    });
+    appendJobEvent(context.db, job.id, "stt.transcript_output_registered", artifact.fileName, {
+      provider: artifact.provider,
+      sourcePath,
+      outputId: output.id,
+      fileName: output.fileName,
+      expiresAt: output.expiresAt,
+    });
+    registeredSources.add(sourcePath);
+    existingOutputNames.add(output.fileName);
+    outputs.push(output);
+  }
+
+  return outputs;
+}
+
+function collectTranscriptOutputCandidates(events: StoredJobEvent[]): Array<{ provider: string; sourcePath: string; fileName: string }> {
+  return events.flatMap((event) => {
+    if (!isTranscriptionEvent(event.type) || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
+      return [];
+    }
+    const provider = event.type === "sensevoice.transcribed" ? "sensevoice" : "rtzr";
+    return event.data.artifacts.flatMap((artifact) => {
+      if (!isRecord(artifact) || typeof artifact.sourcePath !== "string") {
+        return [];
+      }
+      const kind = typeof artifact.kind === "string" ? artifact.kind : "";
+      const name = typeof artifact.name === "string" ? artifact.name : path.basename(artifact.sourcePath);
+      if (kind !== "transcript_markdown" && !name.toLowerCase().endsWith(".transcript.md")) {
+        return [];
+      }
+      return [{ provider, sourcePath: artifact.sourcePath, fileName: name }];
+    });
+  });
+}
+
 function parseSttEnvironmentCallbackData(data: string | undefined): { presetKey: string; jobId: string } | null {
   const match = /^(?:rtzr|stt):([a-z0-9_-]+):(.+)$/.exec(data ?? "");
   if (!match?.[1] || !match[2]) {
@@ -1725,7 +1812,19 @@ function isTranscriptionEvent(type: string): boolean {
 }
 
 function hasAudioOrVoice(files: ParsedTelegramFile[]): boolean {
-  return files.some((file) => file.kind === "audio" || file.kind === "voice");
+  return files.some((file) => isAudioParsedFile(file));
+}
+
+function isAudioParsedFile(file: ParsedTelegramFile): boolean {
+  if (file.kind === "audio" || file.kind === "voice") {
+    return true;
+  }
+  const mimeType = file.mimeType?.toLowerCase();
+  if (mimeType?.startsWith("audio/")) {
+    return true;
+  }
+  const extension = path.extname(file.fileName ?? "").toLowerCase();
+  return [".mp4", ".m4a", ".mp3", ".amr", ".flac", ".wav", ".ogg", ".opus"].includes(extension);
 }
 
 function isAudioJobFile(file: StoredJobFile): boolean {
@@ -4038,6 +4137,9 @@ function truncateButtonLabel(value: string): string {
 
 function downloadTypeLabel(fileName: string): string {
   const extension = path.extname(fileName).toLowerCase();
+  if (fileName.toLowerCase().endsWith(".transcript.md")) {
+    return "전사 스크립트";
+  }
   switch (extension) {
     case ".pdf":
       return "PDF";
