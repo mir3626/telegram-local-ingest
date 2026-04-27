@@ -10,6 +10,10 @@
 
 ## Status
 
+### Push Checkpoint — 2026-04-27
+
+Committed and pushed the current Linux setup plus Telegram `/start` onboarding work to `origin/main` as `cf22182 Add Linux setup and Telegram start onboarding`. The working product code is now on `main`; only this context checkpoint remains local until it is committed and pushed.
+
 ### Telegram Start Onboarding — 2026-04-27
 
 `/start` is now a first-class Telegram command. The worker handles it before normal allowlist gating so unknown users can see their Telegram user id and request registration, but the response still states that the bot is available only to authenticated users. Authorized users see their authenticated status and the available operator commands. The local stack was restarted after this change, so the running worker has the new `/start` behavior.
@@ -135,6 +139,7 @@ Continue from /home/tony/workspace/telegram-local-ingest. Read .vibe/agent/hando
 
 ## Latest Verification
 
+- Latest push checkpoint: committed and pushed `cf22182 Add Linux setup and Telegram start onboarding` on `main` to `origin/main`. Verification before push: focused Telegram/operator/worker tests passed (`41`), `npm run typecheck` passed, full `npm test` passed (`442` passed, `1` skipped), `npm run build` passed, `git diff --check` passed, UTF-8/mojibake checks passed, and `npm run ops:restart` passed with readiness OK.
 - Latest verification after Telegram `/start` onboarding: focused tests `node --import tsx --test test/telegram-capture.test.ts test/operator.test.ts test/worker.test.ts` passed (`41`); `npm run typecheck` passed; full `npm test` passed (`442` passed, `1` skipped); `npm run build` passed; `git diff --check` passed; UTF-8/mojibake checks passed; `npm run ops:restart` passed and readiness reported jobs=10/stt=10/agent=10, RTZR, Claude postprocess, pandoc, PDF tools, OCR tools, and Telegram Local Bot API Server ready.
 - Latest verification after Linux dependency bootstrap: `bash -n scripts/setup-linux-dependencies.sh scripts/setup-docx-template-rendering.sh scripts/setup-sensevoice-cpu.sh` passed; `npm run setup:linux -- --help` passed; `bash scripts/setup-linux-dependencies.sh --skip-apt --no-env` passed without mutating `.env` and detected Node 24.15.0, npm 11.12.1, ffmpeg, pandoc, poppler-utils, Tesseract OCR languages `chi_sim`, `eng`, `jpn`, `kor`, and Noto CJK; `git diff --check` passed; UTF-8/mojibake checks passed; `npm run typecheck` passed; full `npm test` passed (`440` passed, `1` skipped); `npm run build` passed. The actual apt install path was not re-run because the packages are already present locally and the dry/safe path was enough to validate script behavior.
 - Latest git checkpoint: committed and pushed `8d9d505 Add OCR image overlay translation outputs` on `main` to `origin/main`. The only local follow-up state outside git is ignored `.env`, where `PDF_FONT_PATH=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc` was set for local Noto CJK PDF rendering.
