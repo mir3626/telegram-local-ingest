@@ -22,6 +22,7 @@ export interface RawBundlePathInput {
 }
 
 export interface RawBundleArtifactInput {
+  id?: string;
   sourcePath: string;
   name?: string;
   kind?: string;
@@ -208,6 +209,7 @@ async function copyArtifacts(
       name: path.basename(destinationPath),
       relativePath: `${relativeDir}/${path.basename(destinationPath)}`,
     };
+    assignDefined(record, "id", artifact.id);
     assignDefined(record, "kind", artifact.kind);
     assignDefined(record, "sha256", artifact.sha256);
     assignDefined(record, "mimeType", artifact.mimeType);
@@ -359,6 +361,18 @@ function yamlFileRecords(records: BundleFileRecord[], kind: string): string[] {
     ];
     if (record.id) {
       lines.push(`    id: ${yamlScalar(record.id)}`);
+    }
+    if (record.kind) {
+      lines.push(`    artifact_kind: ${yamlScalar(record.kind)}`);
+    }
+    if (record.sourceFileId) {
+      lines.push(`    source_file_id: ${yamlScalar(record.sourceFileId)}`);
+    }
+    if (record.derivedFromPath) {
+      lines.push(`    derived_from: ${yamlScalar(record.derivedFromPath)}`);
+    }
+    if (record.wikiRole) {
+      lines.push(`    wiki_role: ${yamlScalar(record.wikiRole)}`);
     }
     if (record.sha256) {
       lines.push(`    sha256: ${yamlScalar(record.sha256)}`);

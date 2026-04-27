@@ -40,6 +40,10 @@ Rendered convenience files such as `_translated.docx`, `_translated.pdf`, image 
 - The wiki agent should cite canonical input ids or source paths in wiki pages.
 - Low-confidence OCR/STT content should be marked as derived or uncertain instead of becoming an unqualified fact.
 
+## Ingest Contract
+
+The provider-neutral ingest contract is versioned as `telegram-local-ingest.llmwiki.v1` and documented in `docs/schemas/llmwiki.md`. The worker-side adapter loads `manifest.yaml`, resolves declared `wiki_inputs`, passes those inputs to the configured wiki command, and requires the command to update `wiki/index.md` plus `wiki/log.md`. The adapter keeps raw bundle snapshot checks before and after execution so wiki commands can add/update `wiki/**` but cannot mutate `raw/**`.
+
 ## Operational Rule
 
-Preprocessing that creates canonical wiki text must happen before raw bundle finalization or be copied into the finalized raw bundle before wiki ingest. Runtime-only preprocessing artifacts are not sufficient for LLMwiki because they are not durable source evidence.
+Preprocessing that creates canonical wiki text must happen before raw bundle finalization or be copied into the finalized raw bundle before wiki ingest. Runtime-only preprocessing artifacts are not sufficient for LLMwiki because they are not durable source evidence. Current worker flow extracts text/DOCX/PDF/EML/image canonical artifacts before `writeRawBundle`, copies them into `raw/**/extracted/`, and points `preprocess.completed` at those finalized raw paths. STT transcript Markdown is copied from STT events into the same raw extracted layer and cleaned before language scoring.

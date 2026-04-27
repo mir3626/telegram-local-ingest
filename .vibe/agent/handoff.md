@@ -5,7 +5,7 @@
 - **repo**: `telegram-local-ingest`
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-2`
-- **current sprint**: `idle` (next: `sprint-15-prebundle-canonical-artifacts`)
+- **current sprint**: `idle` (next: `sprint-13-vault-reconcile-retention`)
 - **harnessVersion**: `1.6.11`
 
 ## Status
@@ -19,6 +19,14 @@ Iteration 2 planned sprint order is now `sprint-14-wiki-raw-input-schema`, `spri
 ### Sprint 14 Closed — 2026-04-27
 
 Sprint 14 is marked `passed`. New raw bundles now write `schema_version: 2`, a `wiki_policy` block, and manifest `wiki_inputs` entries with roles `canonical_text`, `translation_aid`, `evidence_original`, and `structure`. `source.md` now starts with an LLMwiki read-order and authority policy, and STT transcript artifacts carry kind/source-file metadata into the raw bundle so transcript Markdown is canonical text while provider JSON is structure. Runtime outputs and rendered translated files remain excluded from wiki authority.
+
+### Sprint 15 Closed — 2026-04-27
+
+Sprint 15 is marked `passed`. Deterministic text, DOCX, PDF text/OCR, image OCR, and EML preprocessing now runs before raw bundle finalization and copies canonical artifacts plus structure metadata into finalized `raw/**/extracted/` files. STT transcript Markdown remains the canonical audio input and is copied from STT events into the same extracted layer. `preprocess.completed`, language detection, and agent post-processing now consume finalized raw paths, while retries reuse existing finalized bundles.
+
+### Sprint 16 Closed — 2026-04-27
+
+Sprint 16 is marked `passed`. The wiki adapter now loads schema v2 `manifest.yaml`, resolves manifest-declared `wiki_inputs`, passes a provider-neutral `telegram-local-ingest.llmwiki.v1` contract with source/manifest/wiki-input/citation/index/log arguments to the configured command, rejects rendered outputs as wiki source inputs, requires `wiki/index.md` and `wiki/log.md` outputs, and keeps raw bundle snapshot checks before and after command execution. `docs/schemas/llmwiki.md` defines page, citation, and output rules, and fake-command tests cover index/log writes plus raw immutability.
 
 ### Sprint 12 Closed — 2026-04-27
 
@@ -139,7 +147,7 @@ Image overlay labels are now single-line-height boxes without strokes. The worke
 
 ## Next Action
 
-MVP roadmap plus Sprint 9, Sprint 10, Sprint 11, Sprint 12, and Sprint 14 are complete. Iteration 2 is active on the `llm-wiki-integration` branch. The next planned sprint is `sprint-15-prebundle-canonical-artifacts`. Start by moving or copying deterministic PDF/DOCX/EML/image/text preprocessing artifacts into finalized raw bundles before wiki ingest, while keeping user-facing DOCX/PDF downloads runtime-only.
+MVP roadmap plus Sprint 9, Sprint 10, Sprint 11, Sprint 12, Sprint 14, Sprint 15, and Sprint 16 are complete. Iteration 2 is active on the `llm-wiki-integration` branch. The next planned sprint is `sprint-13-vault-reconcile-retention`. Start by adding deterministic reconcile/drift reporting for raw bundles, wiki references, runtime outputs, and SQLite source bundle state; LLMwiki lint is a wiki graph signal only, not SQLite authority.
 
 ```text
 Current utility flow target: local Telegram server -> upload file -> SQLite job -> SQLite job claim -> bounded background processing pool -> import -> STT transcript output when applicable -> raw bundle -> preprocessing -> translation-needed check -> configured agent postprocess when needed -> worker-normalized `<source-stem>_translated` deliverable -> worker-appended `[원문]` source section with translation first -> output store -> Telegram download button with actual expiry -> hidden output lifecycle callbacks.
@@ -150,7 +158,7 @@ Current utility flow target: local Telegram server -> upload file -> SQLite job 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, and .vibe/interview-log/iter-2.json first. Sprint 14 is passed and iter-2 `llmwiki-foundation` is active. Core decision: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority. Next planned work is Sprint 15: make deterministic preprocessing artifacts durable in finalized raw bundles before LLMwiki ingest.
+Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, and .vibe/interview-log/iter-2.json first. Sprint 14, Sprint 15, and Sprint 16 are passed and iter-2 `llmwiki-foundation` is active. Core decision: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority. Next planned work is Sprint 13 carryover: vault reconcile and retention with SQLite-owned tombstone/drift state.
 ```
 
 ## Latest Verification

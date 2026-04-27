@@ -121,27 +121,43 @@
     },
     {
       "id": "sprint-15-prebundle-canonical-artifacts",
-      "name": "Pre-Bundle Canonical Artifacts",
-      "status": "planned",
+      "name": "sprint-15-prebundle-canonical-artifacts",
+      "status": "passed",
       "startedAt": "2026-04-27T06:04:05.000Z",
-      "planPromptPath": "docs/prompts/sprint-sprint-15-prebundle-canonical-artifacts-plan.md"
+      "planPromptPath": "docs/prompts/sprint-sprint-15-prebundle-canonical-artifacts-plan.md",
+      "completedAt": "2026-04-27T06:51:06.260Z",
+      "actualLoc": {
+        "added": 380,
+        "deleted": 40,
+        "net": 340,
+        "filesChanged": 13
+      }
     },
     {
       "id": "sprint-16-llmwiki-ingest-contract",
-      "name": "LLMwiki Ingest Contract",
-      "status": "planned",
-      "startedAt": "2026-04-27T06:04:05.000Z"
+      "name": "sprint-16-llmwiki-ingest-contract",
+      "status": "passed",
+      "startedAt": "2026-04-27T06:04:05.000Z",
+      "planPromptPath": "docs/prompts/sprint-sprint-16-llmwiki-ingest-contract-plan.md",
+      "completedAt": "2026-04-27T06:57:07.962Z",
+      "actualLoc": {
+        "added": 378,
+        "deleted": 8,
+        "net": 370,
+        "filesChanged": 6
+      }
     },
     {
       "id": "sprint-13-vault-reconcile-retention",
       "name": "Vault Reconcile And Retention",
       "status": "planned",
-      "startedAt": "2026-04-27T06:04:05.000Z"
+      "startedAt": "2026-04-27T06:04:05.000Z",
+      "planPromptPath": "docs/prompts/sprint-sprint-13-vault-reconcile-retention-plan.md"
     }
   ],
   "handoff": {
     "currentSprintId": "idle",
-    "lastActionSummary": "Closed Sprint 14 with raw bundle schema v2 wiki_inputs; next is Sprint 15 pre-bundle canonical artifacts.",
+    "lastActionSummary": "Added provider-neutral LLMwiki ingest contract loading manifest schema v2 wiki_inputs, command arguments for source/manifest/citations/index/log, required wiki index/log outputs, rendered-output rejection, and schema documentation.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -156,7 +172,7 @@
       "Prefer official Anthropic skills for document tasks when a suitable official skill exists"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-27T06:18:40.683Z"
+    "updatedAt": "2026-04-27T06:57:07.962Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -194,6 +210,32 @@
       "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
       "acknowledgedAt": "2026-04-27T06:16:31.491Z",
       "acknowledgement": "App LOC threshold is an INFO-level mature-downstream signal; Sprint 14 scope was reviewed and no blocking risk remains for Sprint 15."
+    },
+    {
+      "id": "lightweight-audit-sprint-15-prebundle-canonical-artifacts",
+      "raisedBy": "vibe-audit-lightweight",
+      "targetSprint": "*",
+      "text": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "status": "acknowledged",
+      "createdAt": "2026-04-27T06:51:06.555Z",
+      "level": "INFO",
+      "code": "LOC_THRESHOLD_BREACH",
+      "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "acknowledgedAt": "2026-04-27T06:58:22.001Z",
+      "acknowledgement": "INFO-level mature-downstream LOC signal; Sprint 15 scope was reviewed through typecheck, full tests, and build with no blocking risk."
+    },
+    {
+      "id": "lightweight-audit-sprint-16-llmwiki-ingest-contract",
+      "raisedBy": "vibe-audit-lightweight",
+      "targetSprint": "*",
+      "text": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "status": "acknowledged",
+      "createdAt": "2026-04-27T06:57:08.250Z",
+      "level": "INFO",
+      "code": "LOC_THRESHOLD_BREACH",
+      "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "acknowledgedAt": "2026-04-27T06:58:22.001Z",
+      "acknowledgement": "INFO-level mature-downstream LOC signal; Sprint 16 added a narrow adapter contract and tests without broad app refactoring."
     }
   ],
   "lastSprintScope": [
@@ -208,7 +250,12 @@
     "docs/context/llmwiki.md",
     "docs/context/architecture.md",
     "docs/context/conventions.md",
-    ".vibe/agent/iteration-history.json"
+    ".vibe/agent/iteration-history.json",
+    "packages/preprocessors/src/index.ts",
+    "packages/wiki-adapter/src/index.ts",
+    "test/wiki-adapter.test.ts",
+    "docs/schemas/llmwiki.md",
+    "docs/prompts/sprint-sprint-16-llmwiki-ingest-contract-plan.md"
   ],
   "lastSprintScopeGlob": [
     "apps/worker/src/index.ts",
@@ -222,10 +269,15 @@
     "docs/context/llmwiki.md",
     "docs/context/architecture.md",
     "docs/context/conventions.md",
-    ".vibe/agent/iteration-history.json"
+    ".vibe/agent/iteration-history.json",
+    "packages/preprocessors/src/index.ts",
+    "packages/wiki-adapter/src/index.ts",
+    "test/wiki-adapter.test.ts",
+    "docs/schemas/llmwiki.md",
+    "docs/prompts/sprint-sprint-16-llmwiki-ingest-contract-plan.md"
   ],
-  "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-27T06:18:40.683Z",
+  "sprintsSinceLastAudit": 2,
+  "stateUpdatedAt": "2026-04-27T06:57:07.962Z",
   "verifiedAt": "2026-04-27T06:18:40.683Z",
   "verificationCommands": [
     {

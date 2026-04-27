@@ -46,15 +46,16 @@
         "sprint-13-vault-reconcile-retention"
       ],
       "completedSprints": [
-        "sprint-14-wiki-raw-input-schema"
+        "sprint-14-wiki-raw-input-schema",
+        "sprint-15-prebundle-canonical-artifacts",
+        "sprint-16-llmwiki-ingest-contract"
       ],
       "milestoneProgress": {},
       "summary": "Started through vibe-iterate. Carryover: Sprint 12 is passed; STT transcript downloads now render DOCX while raw transcript Markdown remains canonical. New decision: rendered user deliverables are not wiki raw. LLMwiki reads raw bundle source.md, manifest.yaml, and declared canonical wiki_inputs only. Runtime outputs, _translated files, overlay PDFs, and transcript DOCX files are convenience outputs, not source authority. Existing Sprint 13 reconcile/retention remains in scope but is scheduled after the wiki raw/input contract so reconcile can understand wiki_inputs and citations.",
-      "carryoverSummary": "Prior work provides Telegram capture, immutable raw bundle writing, STT, deterministic preprocessing, agent postprocess outputs, and wiki adapter boundaries. The unresolved LLMwiki gap is that canonical DOCX/PDF/EML/image preprocessing currently happens after raw finalization and may remain runtime-only; iter-2 makes canonical text durable in raw/** before wiki ingest.",
+      "carryoverSummary": "Prior work provides Telegram capture, immutable raw bundle writing, STT, deterministic preprocessing, agent postprocess outputs, durable raw/** canonical wiki inputs, and the provider-neutral LLMwiki ingest contract. Remaining carryover is reconcile/retention: detecting manual raw/wiki/output drift and recording explicit tombstone/deletion state through worker/CLI-owned SQLite boundaries.",
       "openRisks": [
         "OCR and STT artifacts may contain recognition errors; wiki schema must mark confidence/source basis.",
         "Large documents require chunking/read-order policy to avoid wasting tokens.",
-        "Existing runtime output files must remain excluded from wiki source authority even when they are easier for humans to read.",
         "Manual raw/wiki deletion still needs deterministic reconcile and tombstone state."
       ]
     }

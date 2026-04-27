@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: idle (next: sprint-15-prebundle-canonical-artifacts)
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema
-> **Pending**: sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-13-vault-reconcile-retention
+> **Current**: idle (next: sprint-13-vault-reconcile-retention)
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract
+> **Pending**: sprint-13-vault-reconcile-retention
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -296,7 +296,7 @@ This iteration turns the completed Telegram ingest utility into a Karpathy-style
   - DOCX/PDF/EML/image canonical text no longer exists only under runtime-only preprocess directories.
   - Retrying a job does not rewrite finalized raw evidence.
   - Translation/output rendering still works while wiki ingest sees only canonical text inputs.
-- **status**: planned.
+- **status**: completed. Deterministic text, DOCX, PDF text/OCR, image OCR, and EML preprocessing now runs before raw bundle finalization and copies canonical artifacts plus structure metadata into finalized `raw/**/extracted/` files. STT transcript Markdown remains the canonical audio input and is copied from STT events into the same extracted layer. `preprocess.completed`, language detection, and agent post-processing now consume finalized raw paths, while retries reuse existing finalized bundles.
 
 ### Sprint 16 — LLMwiki Ingest Contract
 
@@ -312,7 +312,7 @@ This iteration turns the completed Telegram ingest utility into a Karpathy-style
   - LLMwiki can ingest one finalized bundle into `wiki/**` with index/log/citations.
   - The adapter fails if it attempts to mutate `raw/**`.
   - Wiki output remains provider-neutral and can be driven by Claude, Codex, or a custom LLMwiki CLI.
-- **status**: planned.
+- **status**: completed. The wiki adapter now loads schema v2 `manifest.yaml`, resolves manifest-declared `wiki_inputs`, passes a provider-neutral `telegram-local-ingest.llmwiki.v1` contract with source/manifest/wiki-input/citation/index/log arguments to the configured command, rejects rendered outputs as wiki source inputs, requires `wiki/index.md` and `wiki/log.md` outputs, and keeps raw bundle snapshot checks before and after command execution. `docs/schemas/llmwiki.md` defines page, citation, and output rules, and fake-command tests cover index/log writes plus raw immutability.
 
 ### Sprint 13 Carryover — Vault Reconcile And Retention
 

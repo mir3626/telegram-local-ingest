@@ -22,6 +22,26 @@ export interface WikiIngestAdapterResult {
   stderr: string;
 }
 
+export type WikiInputRole = "canonical_text" | "translation_aid" | "evidence_original" | "structure";
+
+export interface WikiIngestContractInput {
+  id: string;
+  role: WikiInputRole;
+  relativePath: string;
+  absolutePath: string;
+  name: string;
+  sourceKind?: string;
+  readByDefault: boolean;
+}
+
+export interface WikiIngestContract {
+  version: "telegram-local-ingest.llmwiki.v1";
+  manifestPath: string;
+  sourceMarkdownPath: string;
+  inputs: WikiIngestContractInput[];
+  defaultInputs: WikiIngestContractInput[];
+}
+
 export interface CommandResult {
   exitCode: number;
   stdout: string;
@@ -43,8 +63,9 @@ export async function runWikiIngestAdapter(
 ): Promise<WikiIngestAdapterResult> {
   validateAdapterPaths(input);
   return withWikiWriteLock(input.lockPath, async () => {
+    const contract = await loadWikiIngestContract(input.bundlePath);
     const beforeRaw = await snapshotTree(input.rawRoot, input.bundlePath);
-    const command = buildWikiIngestCommand(input);
+    const command = buildWikiIngestCommand(input, contract);
     const result = await runner(command.command, command.args);
     const afterRaw = await snapshotTree(input.rawRoot, input.bundlePath);
     const rawDiff = diffSnapshots(beforeRaw, afterRaw);
@@ -54,6 +75,7 @@ export async function runWikiIngestAdapter(
     if (result.exitCode !== 0) {
       throw new WikiAdapterError(`Wiki ingest adapter failed: ${result.stderr || result.stdout}`);
     }
+    await assertRequiredWikiOutputs(input.wikiRoot);
     return {
       command: command.command,
       args: command.args,
@@ -63,7 +85,7 @@ export async function runWikiIngestAdapter(
   });
 }
 
-export function buildWikiIngestCommand(input: WikiIngestAdapterInput): { command: string; args: string[] } {
+export function buildWikiIngestCommand(input: WikiIngestAdapterInput, contract?: WikiIngestContract): { command: string; args: string[] } {
   const [command, ...baseArgs] = parseCommandLine(input.command);
   if (!command) {
     throw new WikiAdapterError("WIKI_INGEST_COMMAND is required");
@@ -79,6 +101,33 @@ export function buildWikiIngestCommand(input: WikiIngestAdapterInput): { command
     "--job-id",
     input.jobId,
   ];
+  if (contract) {
+    args.push(
+      "--contract-version",
+      contract.version,
+      "--source",
+      contract.sourceMarkdownPath,
+      "--manifest",
+      contract.manifestPath,
+      "--require-citations",
+      "canonical_input_id_or_path",
+      "--index",
+      path.join(path.resolve(input.wikiRoot), "index.md"),
+      "--log",
+      path.join(path.resolve(input.wikiRoot), "log.md"),
+    );
+    for (const wikiInput of contract.inputs) {
+      args.push("--wiki-input", JSON.stringify({
+        id: wikiInput.id,
+        role: wikiInput.role,
+        path: wikiInput.absolutePath,
+        relativePath: wikiInput.relativePath,
+        name: wikiInput.name,
+        readByDefault: wikiInput.readByDefault,
+        ...(wikiInput.sourceKind ? { sourceKind: wikiInput.sourceKind } : {}),
+      }));
+    }
+  }
   if (input.project) {
     args.push("--project", input.project);
   }
@@ -89,6 +138,29 @@ export function buildWikiIngestCommand(input: WikiIngestAdapterInput): { command
     args.push("--instructions", input.instructions);
   }
   return { command, args };
+}
+
+export async function loadWikiIngestContract(bundlePath: string): Promise<WikiIngestContract> {
+  const resolvedBundle = path.resolve(bundlePath);
+  const manifestPath = path.join(resolvedBundle, "manifest.yaml");
+  const sourceMarkdownPath = path.join(resolvedBundle, "source.md");
+  const [manifest] = await Promise.all([
+    fs.readFile(manifestPath, "utf8"),
+    fs.access(sourceMarkdownPath),
+  ]);
+  if (!/^schema_version:\s*2\s*$/m.test(manifest)) {
+    throw new WikiAdapterError(`Raw bundle manifest must use schema_version: 2: ${manifestPath}`);
+  }
+
+  const inputs = parseWikiInputs(manifest).map((record) => resolveWikiInputRecord(resolvedBundle, record));
+  const defaultInputs = inputs.filter((record) => record.readByDefault);
+  return {
+    version: "telegram-local-ingest.llmwiki.v1",
+    manifestPath,
+    sourceMarkdownPath,
+    inputs,
+    defaultInputs,
+  };
 }
 
 export async function withWikiWriteLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
@@ -140,6 +212,77 @@ export function parseCommandLine(value: string): string[] {
   return tokens;
 }
 
+interface RawWikiInputRecord {
+  id?: string;
+  role?: string;
+  path?: string;
+  name?: string;
+  source_kind?: string;
+  read_by_default?: string;
+}
+
+function parseWikiInputs(manifest: string): RawWikiInputRecord[] {
+  const lines = manifest.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => line.trim() === "wiki_inputs:");
+  if (startIndex === -1) {
+    return [];
+  }
+
+  const records: RawWikiInputRecord[] = [];
+  let current: RawWikiInputRecord | null = null;
+  for (const line of lines.slice(startIndex + 1)) {
+    if (/^\S/.test(line) && line.trim().length > 0) {
+      break;
+    }
+    const itemMatch = line.match(/^\s*-\s+([a-z_]+):\s*(.+)$/);
+    if (itemMatch) {
+      current = { [itemMatch[1] ?? ""]: parseYamlScalar(itemMatch[2] ?? "") };
+      records.push(current);
+      continue;
+    }
+    const fieldMatch = line.match(/^\s{4}([a-z_]+):\s*(.+)$/);
+    if (fieldMatch && current) {
+      current[fieldMatch[1] as keyof RawWikiInputRecord] = parseYamlScalar(fieldMatch[2] ?? "");
+    }
+  }
+  return records;
+}
+
+function resolveWikiInputRecord(bundlePath: string, record: RawWikiInputRecord): WikiIngestContractInput {
+  if (!record.id || !record.role || !record.path || !record.name) {
+    throw new WikiAdapterError("Malformed wiki_inputs record in manifest.yaml");
+  }
+  if (!isWikiInputRole(record.role)) {
+    throw new WikiAdapterError(`Unsupported wiki input role: ${record.role}`);
+  }
+  if (path.isAbsolute(record.path) || record.path.split(/[\\/]+/).includes("..")) {
+    throw new WikiAdapterError(`Wiki input path must be bundle-relative: ${record.path}`);
+  }
+  if (isRenderedOutputPath(record.path) || isRenderedOutputPath(record.name)) {
+    throw new WikiAdapterError(`Rendered output cannot be a wiki source input: ${record.path}`);
+  }
+
+  const absolutePath = path.resolve(bundlePath, record.path);
+  if (!isPathInside(bundlePath, absolutePath)) {
+    throw new WikiAdapterError(`Wiki input path escapes bundle: ${record.path}`);
+  }
+
+  const readByDefault = record.read_by_default === "true";
+  if (readByDefault && record.role !== "canonical_text") {
+    throw new WikiAdapterError(`Only canonical_text inputs may be read by default: ${record.id}`);
+  }
+
+  return {
+    id: record.id,
+    role: record.role,
+    relativePath: record.path.replace(/\\/g, "/"),
+    absolutePath,
+    name: record.name,
+    ...(record.source_kind ? { sourceKind: record.source_kind } : {}),
+    readByDefault,
+  };
+}
+
 export async function snapshotTree(root: string, scopeRoot = root): Promise<Map<string, string>> {
   const resolvedRoot = path.resolve(root);
   const resolvedScopeRoot = path.resolve(scopeRoot);
@@ -165,6 +308,21 @@ function validateAdapterPaths(input: WikiIngestAdapterInput): void {
   }
   if (isPathInside(rawRoot, wikiRoot) || isPathInside(wikiRoot, rawRoot)) {
     throw new WikiAdapterError("wikiRoot and rawRoot must not overlap");
+  }
+}
+
+async function assertRequiredWikiOutputs(wikiRoot: string): Promise<void> {
+  const root = path.resolve(wikiRoot);
+  const missing: string[] = [];
+  for (const name of ["index.md", "log.md"]) {
+    try {
+      await fs.access(path.join(root, name));
+    } catch {
+      missing.push(name);
+    }
+  }
+  if (missing.length > 0) {
+    throw new WikiAdapterError(`Wiki ingest adapter did not update required wiki files: ${missing.join(", ")}`);
   }
 }
 
@@ -210,6 +368,31 @@ async function sha256File(filePath: string): Promise<string> {
 function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isWikiInputRole(value: string): value is WikiInputRole {
+  return value === "canonical_text" || value === "translation_aid" || value === "evidence_original" || value === "structure";
+}
+
+function isRenderedOutputPath(value: string): boolean {
+  const normalized = value.replace(/\\/g, "/").toLowerCase();
+  return normalized.includes("runtime/outputs/")
+    || normalized.includes("_translated.")
+    || normalized.endsWith(".transcript.docx")
+    || normalized.endsWith("_transcript.docx");
+}
+
+function parseYamlScalar(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return typeof parsed === "string" ? parsed : String(parsed);
+    } catch {
+      return trimmed.slice(1, trimmed.endsWith('"') ? -1 : undefined);
+    }
+  }
+  return trimmed;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

@@ -70,16 +70,24 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
     assert.equal(fs.existsSync(path.join(fixture.botRoot, "documents", "lead.txt")), false);
     const bundle = mustGetSourceBundleForJob(dbHandle.db, "tg_300_21");
+    const manifest = fs.readFileSync(bundle.manifestPath, "utf8");
     assert.ok(fs.existsSync(bundle.manifestPath));
     assert.equal(bundle.sourceMarkdownPath.endsWith("source.md"), true);
+    assert.equal(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "lead.txt"), "utf8"), "This customer contract requires translation.");
+    assert.match(manifest, /schema_version: 2/);
+    assert.match(manifest, /role: "canonical_text"/);
+    assert.match(manifest, /path: "extracted\/lead\.txt"/);
+    assert.match(manifest, /derived_from: "original\/lead\.txt"/);
     assert.deepEqual(sentMessages.map((message) => message.text), [
       "📥 접수했어요: tg_300_21\n- lead.txt",
       "✅ 처리 완료: tg_300_21 (sales)\n- lead.txt",
     ]);
     const events = listJobEvents(dbHandle.db, "tg_300_21");
     const languageEvent = events.find((event) => event.type === "language.detected");
+    const preprocessEvent = events.find((event) => event.type === "preprocess.completed");
     assert.ok(events.some((event) => event.type === "preprocess.completed"));
     assert.ok(languageEvent);
+    assert.match(JSON.stringify(preprocessEvent?.data), /raw\/2026-04-27\/tg_300_21\/extracted\/lead\.txt/);
     assert.equal((languageEvent.data as { primaryLanguage: string }).primaryLanguage, "en");
     assert.equal((languageEvent.data as { translationNeeded: boolean }).translationNeeded, true);
     assert.ok(events.some((event) => event.type === "wiki.skipped"));
@@ -156,6 +164,7 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
     assert.equal(agentInputs[0]?.targetLanguage, "ko");
     assert.equal(agentInputs[0]?.defaultRelation, "business");
     assert.ok(agentInputs[0]?.artifacts.some((artifact) => artifact.fileName === "lead.txt"));
+    assert.match(agentInputs[0]?.artifacts[0]?.sourcePath ?? "", /vault\/raw\/2026-04-27\/tg_300_21\/extracted\/lead\.txt$/);
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.kind, "agent_translation");

@@ -56,7 +56,13 @@ import {
   discardRuntimeOutput,
   resolveDownloadableOutput,
 } from "@telegram-local-ingest/output-store";
-import { collectPreprocessedTextArtifacts } from "@telegram-local-ingest/preprocessors";
+import {
+  collectPreprocessedTextArtifacts,
+  normalizeTranscriptMarkdownForTextProcessing,
+  type PreprocessedArtifactKind,
+  type PreprocessedTextArtifact,
+  type PreprocessJobResult,
+} from "@telegram-local-ingest/preprocessors";
 import { detectLanguageAcrossArtifacts, type DetectedLanguage } from "@telegram-local-ingest/language-detector";
 import {
   ensureRtzrSupportedAudio,
@@ -84,7 +90,11 @@ import {
   type ParsedTelegramCallback,
   type ParsedTelegramFile,
 } from "@telegram-local-ingest/telegram";
-import { type RawBundleArtifactInput, writeRawBundle } from "@telegram-local-ingest/vault";
+import {
+  type BundleFileRecord,
+  type RawBundleArtifactInput,
+  writeRawBundle,
+} from "@telegram-local-ingest/vault";
 import { runWikiIngestAdapter } from "@telegram-local-ingest/wiki-adapter";
 
 const execFileAsync = promisify(execFile);
@@ -561,15 +571,24 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       } else {
       logWorker(`writing raw bundle job=${job.id}`, "info", "BUNDLE");
       const events = listJobEvents(context.db, job.id);
+      const preBundlePreprocessing = await collectPreprocessedTextArtifacts({
+        job,
+        files: listJobFiles(context.db, job.id),
+        artifactRoot: resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, "canonical"),
+        includeBundledTranscripts: false,
+      });
       const bundle = await writeRawBundle({
         vaultPath: context.config.vault.obsidianVaultPath,
         rawRoot: context.config.vault.rawRoot,
         job,
         files: listJobFiles(context.db, job.id),
         events,
-        extractedArtifacts: collectExtractedArtifacts(events),
+        extractedArtifacts: [
+          ...collectExtractedArtifacts(events),
+          ...preprocessedArtifactsToRawBundleInputs(preBundlePreprocessing.artifacts),
+        ],
       });
-      createSourceBundle(context.db, {
+      const storedBundle = createSourceBundle(context.db, {
         id: bundle.id,
         jobId: job.id,
         bundlePath: bundle.paths.root,
@@ -577,6 +596,19 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
         sourceMarkdownPath: bundle.paths.sourceMarkdown,
         finalizedAt: bundle.finalizedAt,
       });
+      const bundledTranscripts = await collectPreprocessedTextArtifacts({
+        job,
+        files: [],
+        sourceBundle: storedBundle,
+      });
+      appendPreprocessCompletedEvent(
+        context,
+        job,
+        mergePreprocessingResults(
+          preBundlePreprocessingToRawPaths(preBundlePreprocessing, bundle.paths.root, bundle.extractedFiles),
+          bundledTranscripts,
+        ),
+      );
       logWorker(`bundle written job=${job.id} path=${bundle.paths.root}`, "info", "BUNDLE");
       transitionJob(context.db, job.id, "INGESTING", { message: "Raw bundle ready for wiki ingest" });
       job = mustGetJob(context.db, job.id);
@@ -1401,28 +1433,7 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
     return;
   }
 
-  const bundle = mustGetSourceBundleForJob(context.db, job.id);
-  const preprocessing = await collectPreprocessedTextArtifacts({
-    job,
-    files: listJobFiles(context.db, job.id),
-    sourceBundle: bundle,
-    artifactRoot: resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, "preprocess"),
-  });
-  appendJobEvent(context.db, job.id, "preprocess.completed", "Preprocessing text collection completed", {
-    artifactCount: preprocessing.artifacts.length,
-    skippedCount: preprocessing.skippedFiles.length,
-    artifacts: preprocessing.artifacts.map((artifact) => ({
-      id: artifact.id,
-      kind: artifact.kind,
-      fileId: artifact.fileId,
-      fileName: artifact.fileName,
-      sourcePath: artifact.sourcePath,
-      structurePath: artifact.structurePath,
-      charCount: artifact.charCount,
-      truncated: artifact.truncated,
-    })),
-    skippedFiles: preprocessing.skippedFiles,
-  });
+  const preprocessing = await readOrCreatePreprocessingResult(context, job, events);
   logWorker(
     `text artifacts collected job=${job.id} count=${preprocessing.artifacts.length} skipped=${preprocessing.skippedFiles.length}`,
     "info",
@@ -1454,6 +1465,99 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
     "info",
     "LANGUAGE",
   );
+}
+
+async function readOrCreatePreprocessingResult(
+  context: WorkerContext,
+  job: StoredJob,
+  events: StoredJobEvent[],
+): Promise<PreprocessJobResult> {
+  const existingEvent = [...events].reverse().find((event) => event.type === "preprocess.completed");
+  if (existingEvent) {
+    return readPreprocessingResultFromEvent(job.id, existingEvent);
+  }
+
+  const bundle = mustGetSourceBundleForJob(context.db, job.id);
+  const preprocessing = await collectPreprocessedTextArtifacts({
+    job,
+    files: listJobFiles(context.db, job.id),
+    sourceBundle: bundle,
+    artifactRoot: resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, "preprocess"),
+  });
+  appendPreprocessCompletedEvent(context, job, preprocessing);
+  return preprocessing;
+}
+
+async function readPreprocessingResultFromEvent(jobId: string, event: StoredJobEvent): Promise<PreprocessJobResult> {
+  if (!isRecord(event.data)) {
+    return { jobId, artifacts: [], skippedFiles: [] };
+  }
+  const artifacts = Array.isArray(event.data.artifacts) ? event.data.artifacts : [];
+  const skippedFiles = Array.isArray(event.data.skippedFiles)
+    ? event.data.skippedFiles.flatMap((file) => {
+      if (!isRecord(file) || typeof file.fileName !== "string" || typeof file.reason !== "string") {
+        return [];
+      }
+      return [{
+        ...(typeof file.fileId === "string" ? { fileId: file.fileId } : {}),
+        fileName: file.fileName,
+        reason: file.reason,
+      }];
+    })
+    : [];
+
+  return {
+    jobId,
+    artifacts: await Promise.all(artifacts.flatMap((artifact) => {
+      if (
+        !isRecord(artifact) ||
+        typeof artifact.id !== "string" ||
+        typeof artifact.kind !== "string" ||
+        typeof artifact.fileName !== "string" ||
+        typeof artifact.sourcePath !== "string"
+      ) {
+        return [];
+      }
+      return [readPreprocessedArtifactFromEvent(artifact)];
+    })),
+    skippedFiles,
+  };
+}
+
+async function readPreprocessedArtifactFromEvent(artifact: Record<string, unknown>): Promise<PreprocessedTextArtifact> {
+  const rawText = await fs.readFile(String(artifact.sourcePath), "utf8");
+  const text = artifact.kind === "transcript_markdown"
+    ? normalizeTranscriptMarkdownForTextProcessing(rawText)
+    : rawText;
+  return {
+    id: String(artifact.id),
+    kind: artifact.kind as PreprocessedArtifactKind,
+    ...(typeof artifact.fileId === "string" ? { fileId: artifact.fileId } : {}),
+    fileName: String(artifact.fileName),
+    sourcePath: String(artifact.sourcePath),
+    ...(typeof artifact.structurePath === "string" ? { structurePath: artifact.structurePath } : {}),
+    text,
+    charCount: typeof artifact.charCount === "number" ? artifact.charCount : text.length,
+    truncated: typeof artifact.truncated === "boolean" ? artifact.truncated : false,
+  };
+}
+
+function appendPreprocessCompletedEvent(context: WorkerContext, job: StoredJob, preprocessing: PreprocessJobResult): void {
+  appendJobEvent(context.db, job.id, "preprocess.completed", "Preprocessing text collection completed", {
+    artifactCount: preprocessing.artifacts.length,
+    skippedCount: preprocessing.skippedFiles.length,
+    artifacts: preprocessing.artifacts.map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      fileId: artifact.fileId,
+      fileName: artifact.fileName,
+      sourcePath: artifact.sourcePath,
+      structurePath: artifact.structurePath,
+      charCount: artifact.charCount,
+      truncated: artifact.truncated,
+    })),
+    skippedFiles: preprocessing.skippedFiles,
+  });
 }
 
 function findBlockingPreprocessSkip(skippedFiles: Array<{ fileName: string; reason: string }>): { fileName: string; reason: string } | null {
@@ -1673,14 +1777,19 @@ function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactI
       if (!isRecord(artifact) || typeof artifact.sourcePath !== "string") {
         return [];
       }
+      const kind = typeof artifact.kind === "string" ? artifact.kind : undefined;
       const result: RawBundleArtifactInput = {
         sourcePath: artifact.sourcePath,
       };
+      if (typeof data.fileId === "string" && kind) {
+        result.id = `${data.fileId}:${kind}`;
+      }
       if (typeof artifact.name === "string") {
         result.name = artifact.name;
       }
-      if (typeof artifact.kind === "string") {
-        result.kind = artifact.kind;
+      if (kind) {
+        result.kind = kind;
+        result.wikiRole = kind === "transcript_markdown" ? "canonical_text" : "structure";
       }
       if (typeof data.fileId === "string") {
         result.sourceFileId = data.fileId;
@@ -1688,6 +1797,69 @@ function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactI
       return [result];
     });
   });
+}
+
+function preprocessedArtifactsToRawBundleInputs(artifacts: PreprocessedTextArtifact[]): RawBundleArtifactInput[] {
+  return artifacts.flatMap((artifact) => {
+    const textInput: RawBundleArtifactInput = {
+      id: artifact.id,
+      sourcePath: artifact.sourcePath,
+      name: artifact.fileName,
+      kind: artifact.kind,
+      wikiRole: "canonical_text",
+    };
+    if (artifact.fileId) {
+      textInput.sourceFileId = artifact.fileId;
+    }
+    const inputs: RawBundleArtifactInput[] = [textInput];
+    if (artifact.structurePath) {
+      const structureInput: RawBundleArtifactInput = {
+        id: `${artifact.id}:structure`,
+        sourcePath: artifact.structurePath,
+        name: path.basename(artifact.structurePath),
+        kind: `${artifact.kind}_structure`,
+        wikiRole: "structure",
+      };
+      if (artifact.fileId) {
+        structureInput.sourceFileId = artifact.fileId;
+      }
+      inputs.push(structureInput);
+    }
+    return inputs;
+  });
+}
+
+function preBundlePreprocessingToRawPaths(
+  preprocessing: PreprocessJobResult,
+  bundleRoot: string,
+  extractedFiles: BundleFileRecord[],
+): PreprocessJobResult {
+  const extractedById = new Map(extractedFiles.flatMap((record) => record.id ? [[record.id, record]] : []));
+  return {
+    ...preprocessing,
+    artifacts: preprocessing.artifacts.map((artifact) => {
+      const rawText = extractedById.get(artifact.id);
+      const rawStructure = extractedById.get(`${artifact.id}:structure`);
+      if (!rawText) {
+        return artifact;
+      }
+      return {
+        ...artifact,
+        fileName: rawText.name,
+        sourcePath: path.join(bundleRoot, rawText.relativePath),
+        ...(rawStructure ? { structurePath: path.join(bundleRoot, rawStructure.relativePath) } : {}),
+      };
+    }),
+  };
+}
+
+function mergePreprocessingResults(...results: PreprocessJobResult[]): PreprocessJobResult {
+  const [first] = results;
+  return {
+    jobId: first?.jobId ?? "unknown",
+    artifacts: results.flatMap((result) => result.artifacts),
+    skippedFiles: results.flatMap((result) => result.skippedFiles),
+  };
 }
 
 async function registerTranscriptOutputs(context: WorkerContext, job: StoredJob): Promise<StoredJobOutput[]> {
