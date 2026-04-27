@@ -1698,7 +1698,11 @@ async function registerTranscriptOutputs(context: WorkerContext, job: StoredJob)
 
   for (const artifact of collectTranscriptOutputCandidates(events)) {
     const sourcePath = path.resolve(artifact.sourcePath);
-    if (registeredSources.has(sourcePath) || existingOutputNames.has(artifact.fileName)) {
+    if (
+      registeredSources.has(sourcePath)
+      || existingOutputNames.has(artifact.fileName)
+      || existingOutputNames.has(buildTranscriptOutputFileName(artifact.fileName))
+    ) {
       continue;
     }
     try {
@@ -1711,18 +1715,21 @@ async function registerTranscriptOutputs(context: WorkerContext, job: StoredJob)
       });
       continue;
     }
+    const downloadSource = await createTranscriptDownloadSource(context, job, artifact);
     const output = await createRuntimeOutput({
       db: context.db,
       jobId: job.id,
       runtimeDir: context.config.runtime.runtimeDir,
-      sourcePath,
+      sourcePath: downloadSource.sourcePath,
       kind: "stt_transcript",
-      fileName: artifact.fileName,
-      mimeType: "text/markdown",
+      fileName: downloadSource.fileName,
+      mimeType: downloadSource.mimeType,
     });
     appendJobEvent(context.db, job.id, "stt.transcript_output_registered", artifact.fileName, {
       provider: artifact.provider,
       sourcePath,
+      renderedPath: downloadSource.sourcePath,
+      format: downloadSource.format,
       outputId: output.id,
       fileName: output.fileName,
       expiresAt: output.expiresAt,
@@ -1735,7 +1742,102 @@ async function registerTranscriptOutputs(context: WorkerContext, job: StoredJob)
   return outputs;
 }
 
-function collectTranscriptOutputCandidates(events: StoredJobEvent[]): Array<{ provider: string; sourcePath: string; fileName: string }> {
+interface TranscriptOutputCandidate {
+  provider: string;
+  sourcePath: string;
+  fileName: string;
+}
+
+interface TranscriptDownloadSource {
+  sourcePath: string;
+  fileName: string;
+  mimeType: string;
+  format: "docx" | "markdown";
+}
+
+async function createTranscriptDownloadSource(
+  context: WorkerContext,
+  job: StoredJob,
+  artifact: TranscriptOutputCandidate,
+): Promise<TranscriptDownloadSource> {
+  const pandocBin = await findExecutable(process.env.PANDOC_BIN, "pandoc");
+  if (!pandocBin) {
+    appendJobEvent(context.db, job.id, "stt.transcript_docx_skipped", artifact.fileName, {
+      provider: artifact.provider,
+      sourcePath: artifact.sourcePath,
+      reason: "pandoc_missing",
+    });
+    logWorker(`transcript docx render skipped job=${job.id} reason=missing_tool pandoc=missing source=${artifact.fileName}`, "warn", "OUTPUT");
+    return {
+      sourcePath: artifact.sourcePath,
+      fileName: artifact.fileName,
+      mimeType: "text/markdown",
+      format: "markdown",
+    };
+  }
+
+  const renderDir = resolveRuntimePath(context.config.runtime.runtimeDir, "rendered-transcripts", job.id);
+  await fs.mkdir(renderDir, { recursive: true });
+  const docxName = buildTranscriptOutputFileName(artifact.fileName);
+  const markdownPath = path.join(renderDir, `${path.parse(docxName).name}.md`);
+  const docxPath = path.join(renderDir, docxName);
+  const transcriptMarkdown = await fs.readFile(artifact.sourcePath, "utf8");
+  await fs.writeFile(markdownPath, renderTranscriptDownloadMarkdown(job, transcriptMarkdown), "utf8");
+
+  try {
+    await execFileAsync(pandocBin, [
+      markdownPath,
+      "--from",
+      "markdown+raw_tex",
+      "--to",
+      "docx",
+      "--output",
+      docxPath,
+    ], {
+      timeout: COMMAND_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    await normalizeDocxOutputFormatting(docxPath);
+    await validateDocxOutput(docxPath);
+    return {
+      sourcePath: docxPath,
+      fileName: docxName,
+      mimeType: DOCX_MIME_TYPE,
+      format: "docx",
+    };
+  } catch (error) {
+    appendJobEvent(context.db, job.id, "stt.transcript_docx_failed", artifact.fileName, {
+      provider: artifact.provider,
+      sourcePath: artifact.sourcePath,
+      docxPath,
+      error: errorMessage(error),
+    });
+    logWorker(`transcript docx render failed job=${job.id} source=${artifact.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
+    return {
+      sourcePath: artifact.sourcePath,
+      fileName: artifact.fileName,
+      mimeType: "text/markdown",
+      format: "markdown",
+    };
+  }
+}
+
+function renderTranscriptDownloadMarkdown(job: StoredJob, transcriptMarkdown: string): string {
+  return [
+    formatOutputJobMetadata(job),
+    "",
+    normalizeMarkdownText(transcriptMarkdown),
+    "",
+  ].join("\n");
+}
+
+function buildTranscriptOutputFileName(transcriptFileName: string): string {
+  const parsed = path.parse(path.basename(transcriptFileName).replace(/\u0000/g, ""));
+  const stem = sanitizeOutputFileStem(parsed.name.replace(/\.transcript$/i, "") || parsed.name || "transcript");
+  return `${stem}_transcript.docx`;
+}
+
+function collectTranscriptOutputCandidates(events: StoredJobEvent[]): TranscriptOutputCandidate[] {
   return events.flatMap((event) => {
     if (!isTranscriptionEvent(event.type) || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
       return [];
@@ -4137,7 +4239,7 @@ function truncateButtonLabel(value: string): string {
 
 function downloadTypeLabel(fileName: string): string {
   const extension = path.extname(fileName).toLowerCase();
-  if (fileName.toLowerCase().endsWith(".transcript.md")) {
+  if (isTranscriptOutputFileName(fileName)) {
     return "전사 스크립트";
   }
   switch (extension) {
@@ -4154,6 +4256,11 @@ function downloadTypeLabel(fileName: string): string {
     default:
       return "파일";
   }
+}
+
+function isTranscriptOutputFileName(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  return lower.endsWith(".transcript.md") || lower.endsWith(".transcript.docx") || lower.endsWith("_transcript.docx");
 }
 
 function resolveProjectRelativePath(value: string): string {

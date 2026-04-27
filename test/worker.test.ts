@@ -40,6 +40,8 @@ import {
   type WorkerContext,
 } from "../apps/worker/src/index.js";
 
+const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 test("runWorkerOnce captures, imports, bundles, completes, and notifies", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "documents/lead.txt", "This customer contract requires translation.");
@@ -864,11 +866,14 @@ test("runWorkerOnce asks for STT preset when an audio file is uploaded as a docu
 test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles artifacts", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
+  const fakePandoc = writeFakePandoc(path.join(fixture.root, "tools"), "회의 내용입니다");
+  const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const answeredCallbacks: unknown[] = [];
   const rtzrCalls: Array<{ filePath: string; config: RtzrTranscribeConfig; waitOptions: WaitForTranscriptionOptions }> = [];
   try {
+    process.env.PANDOC_BIN = fakePandoc;
     migrate(dbHandle.db);
     const context: WorkerContext = {
       config: configFixture(fixture),
@@ -899,9 +904,10 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.kind, "stt_transcript");
-    assert.equal(outputs[0]?.fileName, "call.transcript.md");
-    assert.equal(outputs[0]?.mimeType, "text/markdown");
-    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /회의 내용입니다/);
+    assert.equal(outputs[0]?.fileName, "call_transcript.docx");
+    assert.equal(outputs[0]?.mimeType, DOCX_MIME_TYPE);
+    const outputDocumentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(outputDocumentXml, /회의 내용입니다/);
     assert.match(sentMessages.at(-1)?.text ?? "", /음성 전사가 완료되었습니다/);
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /download:/);
     assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /전사 스크립트 다운로드/);
@@ -912,6 +918,7 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     assert.equal((languageEvent?.data as { primaryLanguage: string }).primaryLanguage, "ko");
     assert.equal((languageEvent?.data as { translationNeeded: boolean }).translationNeeded, false);
   } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
     dbHandle.close();
   }
 });
@@ -919,11 +926,14 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
 test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles artifacts", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
+  const fakePandoc = writeFakePandoc(path.join(fixture.root, "tools"), "센스보이스 전사입니다");
+  const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const answeredCallbacks: unknown[] = [];
   const senseVoiceCalls: Array<{ filePath: string; options: SenseVoiceTranscribeOptions }> = [];
   try {
+    process.env.PANDOC_BIN = fakePandoc;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.stt.provider = "sensevoice";
@@ -954,10 +964,13 @@ test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles arti
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.kind, "stt_transcript");
-    assert.equal(outputs[0]?.fileName, "call.transcript.md");
-    assert.match(fs.readFileSync(outputs[0]?.filePath ?? "", "utf8"), /센스보이스 전사입니다/);
+    assert.equal(outputs[0]?.fileName, "call_transcript.docx");
+    assert.equal(outputs[0]?.mimeType, DOCX_MIME_TYPE);
+    const outputDocumentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(outputDocumentXml, /센스보이스 전사입니다/);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "sensevoice.transcribed"));
   } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
     dbHandle.close();
   }
 });
