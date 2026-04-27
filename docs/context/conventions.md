@@ -33,6 +33,7 @@
 
 - `raw/**` is immutable after finalization.
 - `manifest.yaml` is the machine-readable source of truth.
+- New bundles use schema version 2 and declare `wiki_inputs` roles: `canonical_text`, `translation_aid`, `evidence_original`, and `structure`.
 - `source.md` is the LLM-readable ingest entrypoint.
 - Derived text goes under `extracted/`.
 - Converted media or normalized documents go under `normalized/`.

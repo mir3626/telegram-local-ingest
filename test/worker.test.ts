@@ -897,9 +897,15 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     assert.equal(rtzrCalls[0]?.config.use_diarization, true);
     assert.equal(rtzrCalls[0]?.waitOptions.pollIntervalMs, 5000);
     assert.match(manifest, /language:/);
+    assert.match(manifest, /schema_version: 2/);
+    assert.match(manifest, /wiki_inputs:/);
+    assert.match(manifest, /role: "canonical_text"/);
+    assert.match(manifest, /role: "structure"/);
+    assert.match(manifest, /derived_from: "original\/call\.m4a"/);
     assert.match(manifest, /model_name: "whisper"/);
     assert.match(manifest, /call\.rtzr\.json/);
     assert.match(manifest, /call\.transcript\.md/);
+    assert.match(fs.readFileSync(bundle.sourceMarkdownPath, "utf8"), /## LLMwiki Read Order/);
     assert.match(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);

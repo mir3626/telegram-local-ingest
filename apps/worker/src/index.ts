@@ -1664,7 +1664,12 @@ function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactI
     if (!isTranscriptionEvent(event.type) || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
       return [];
     }
-    return event.data.artifacts.flatMap((artifact) => {
+    const data = event.data;
+    const artifacts = data.artifacts;
+    if (!Array.isArray(artifacts)) {
+      return [];
+    }
+    return artifacts.flatMap((artifact: unknown) => {
       if (!isRecord(artifact) || typeof artifact.sourcePath !== "string") {
         return [];
       }
@@ -1673,6 +1678,12 @@ function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactI
       };
       if (typeof artifact.name === "string") {
         result.name = artifact.name;
+      }
+      if (typeof artifact.kind === "string") {
+        result.kind = artifact.kind;
+      }
+      if (typeof data.fileId === "string") {
+        result.sourceFileId = data.fileId;
       }
       return [result];
     });

@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: idle (next: sprint-14-wiki-raw-input-schema)
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish
-> **Pending**: sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-13-vault-reconcile-retention
+> **Current**: idle (next: sprint-15-prebundle-canonical-artifacts)
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema
+> **Pending**: sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-13-vault-reconcile-retention
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -241,7 +241,7 @@ Telegram mobile/desktop
   - Utility concerns are isolated from wiki/raw capture concerns.
   - Expired output cleanup is repeatable after worker restart.
   - Public/multi-user service constraints are documented.
-- **status**: in progress, implementation-complete except live validation. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent. Current polish also added OCR preprocessing for scanned PDF and image uploads through `pdftoppm` plus `tesseract`, while leaving the existing language preset scope unchanged. The worker now performs expired-output cleanup on startup and then on `WORKER_OUTPUT_CLEANUP_INTERVAL_MS`, and `/status` reports output downloadability, expiry, and discard state. Operator docs record the personal-OAuth-only boundary and API migration path for any future public/multi-user service. User-facing regenerate/discard controls are deliberately parked as low-priority follow-up work.
+- **status**: completed. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent. Current polish also added OCR preprocessing for scanned PDF and image uploads through `pdftoppm` plus `tesseract`, while leaving the existing language preset scope unchanged. The worker now performs expired-output cleanup on startup and then on `WORKER_OUTPUT_CLEANUP_INTERVAL_MS`, and `/status` reports output downloadability, expiry, and discard state. Operator docs record the personal-OAuth-only boundary and API migration path for any future public/multi-user service. User-facing regenerate/discard controls are deliberately parked as low-priority follow-up work.
 
 ## Sprint 13 — Vault Reconcile And Retention
 
@@ -280,7 +280,7 @@ This iteration turns the completed Telegram ingest utility into a Karpathy-style
   - A raw bundle declares canonical wiki inputs without requiring the LLM to inspect rendered DOCX/PDF deliverables.
   - Every wiki input links back to an original file or extracted deterministic artifact.
   - `source.md` gives the wiki agent a concise read order and authority policy.
-- **status**: planned.
+- **status**: completed. Raw bundles now write `schema_version: 2`, `wiki_policy`, and manifest `wiki_inputs` records for canonical text, structure, translation aids, and evidence originals. `source.md` now gives LLMwiki a concise read order and authority policy, and tests cover direct vault writes plus STT transcript artifact classification.
 
 ### Sprint 15 — Pre-Bundle Canonical Artifacts
 

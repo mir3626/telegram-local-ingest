@@ -13,7 +13,7 @@ This project follows the LLMwiki pattern described by Andrej Karpathy: raw sourc
 
 ## Wiki Input Roles
 
-Future raw bundle schema version 2 should expose `wiki_inputs`:
+Raw bundle schema version 2 exposes `wiki_inputs`:
 
 - `canonical_text`: primary LLM-readable source text derived deterministically from an original file.
 - `translation_aid`: optional translated text that may help Korean wiki writing but is not primary authority.

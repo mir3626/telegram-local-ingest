@@ -108,15 +108,23 @@
     {
       "id": "sprint-14-wiki-raw-input-schema",
       "name": "Wiki Raw Input Schema",
-      "status": "planned",
+      "status": "passed",
       "startedAt": "2026-04-27T06:04:05.000Z",
-      "planPromptPath": "docs/prompts/sprint-sprint-14-wiki-raw-input-schema-plan.md"
+      "planPromptPath": "docs/prompts/sprint-sprint-14-wiki-raw-input-schema-plan.md",
+      "completedAt": "2026-04-27T06:14:50.748Z",
+      "actualLoc": {
+        "added": 319,
+        "deleted": 37,
+        "net": 282,
+        "filesChanged": 12
+      }
     },
     {
       "id": "sprint-15-prebundle-canonical-artifacts",
       "name": "Pre-Bundle Canonical Artifacts",
       "status": "planned",
-      "startedAt": "2026-04-27T06:04:05.000Z"
+      "startedAt": "2026-04-27T06:04:05.000Z",
+      "planPromptPath": "docs/prompts/sprint-sprint-15-prebundle-canonical-artifacts-plan.md"
     },
     {
       "id": "sprint-16-llmwiki-ingest-contract",
@@ -133,7 +141,7 @@
   ],
   "handoff": {
     "currentSprintId": "idle",
-    "lastActionSummary": "Started iter-2 llmwiki-foundation with wiki raw/input schema policy and planned Sprint 14-16 plus Sprint 13 carryover.",
+    "lastActionSummary": "Closed Sprint 14 with raw bundle schema v2 wiki_inputs; next is Sprint 15 pre-bundle canonical artifacts.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -148,15 +156,18 @@
       "Prefer official Anthropic skills for document tasks when a suitable official skill exists"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-27T06:04:05.000Z"
+    "updatedAt": "2026-04-27T06:18:40.683Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
     "sessionLogPath": ".vibe/agent/session-log.md",
     "verificationCommands": [
       "npm run typecheck",
+      "node --import tsx --test test/vault.test.ts test/worker.test.ts",
       "npm test",
-      "npm run build"
+      "npm run build",
+      "node scripts/vibe-preflight.mjs",
+      "npm run ops:restart"
     ]
   },
   "pendingRisks": [
@@ -170,6 +181,19 @@
       "level": "INFO",
       "code": "LOC_THRESHOLD_BREACH",
       "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled"
+    },
+    {
+      "id": "lightweight-audit-sprint-14-wiki-raw-input-schema",
+      "raisedBy": "vibe-audit-lightweight",
+      "targetSprint": "*",
+      "text": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "status": "acknowledged",
+      "createdAt": "2026-04-27T06:14:51.043Z",
+      "level": "INFO",
+      "code": "LOC_THRESHOLD_BREACH",
+      "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "acknowledgedAt": "2026-04-27T06:16:31.491Z",
+      "acknowledgement": "App LOC threshold is an INFO-level mature-downstream signal; Sprint 14 scope was reviewed and no blocking risk remains for Sprint 15."
     }
   ],
   "lastSprintScope": [
@@ -178,7 +202,13 @@
     "docs/plans/sprint-roadmap.md",
     ".vibe/agent/sprint-status.json",
     ".vibe/agent/handoff.md",
-    ".vibe/agent/session-log.md"
+    ".vibe/agent/session-log.md",
+    "packages/vault/src/index.ts",
+    "test/vault.test.ts",
+    "docs/context/llmwiki.md",
+    "docs/context/architecture.md",
+    "docs/context/conventions.md",
+    ".vibe/agent/iteration-history.json"
   ],
   "lastSprintScopeGlob": [
     "apps/worker/src/index.ts",
@@ -186,15 +216,25 @@
     "docs/plans/sprint-roadmap.md",
     ".vibe/agent/sprint-status.json",
     ".vibe/agent/handoff.md",
-    ".vibe/agent/session-log.md"
+    ".vibe/agent/session-log.md",
+    "packages/vault/src/index.ts",
+    "test/vault.test.ts",
+    "docs/context/llmwiki.md",
+    "docs/context/architecture.md",
+    "docs/context/conventions.md",
+    ".vibe/agent/iteration-history.json"
   ],
   "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-27T06:04:05.000Z",
-  "verifiedAt": "2026-04-27T05:25:08.000Z",
+  "stateUpdatedAt": "2026-04-27T06:18:40.683Z",
+  "verifiedAt": "2026-04-27T06:18:40.683Z",
   "verificationCommands": [
     {
       "id": "typecheck",
       "command": "npm run typecheck"
+    },
+    {
+      "id": "focused-tests",
+      "command": "node --import tsx --test test/vault.test.ts test/worker.test.ts"
     },
     {
       "id": "test",
@@ -203,6 +243,14 @@
     {
       "id": "build",
       "command": "npm run build"
+    },
+    {
+      "id": "preflight",
+      "command": "node scripts/vibe-preflight.mjs"
+    },
+    {
+      "id": "ops-restart",
+      "command": "npm run ops:restart"
     }
   ]
 }

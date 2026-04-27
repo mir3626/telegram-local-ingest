@@ -5,7 +5,7 @@
 - **repo**: `telegram-local-ingest`
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-2`
-- **current sprint**: `idle` (next: `sprint-14-wiki-raw-input-schema`)
+- **current sprint**: `idle` (next: `sprint-15-prebundle-canonical-artifacts`)
 - **harnessVersion**: `1.6.11`
 
 ## Status
@@ -15,6 +15,10 @@
 `vibe-iterate` started `iter-2` as `llmwiki-foundation`. The interview log is `.vibe/interview-log/iter-2.json` and terminates with high coverage for the new LLMwiki direction. Durable decision: wiki raw is the finalized raw bundle plus deterministic canonical text projections declared by `manifest.yaml` `wiki_inputs`; rendered user deliverables are not wiki source authority. `_translated.*`, image overlay PDFs, transcript DOCX files, and `runtime/outputs/**` remain convenience outputs only.
 
 Iteration 2 planned sprint order is now `sprint-14-wiki-raw-input-schema`, `sprint-15-prebundle-canonical-artifacts`, `sprint-16-llmwiki-ingest-contract`, then carryover `sprint-13-vault-reconcile-retention`. This intentionally moves raw/schema work ahead of retention so reconcile can understand `wiki_inputs` and wiki citations.
+
+### Sprint 14 Closed — 2026-04-27
+
+Sprint 14 is marked `passed`. New raw bundles now write `schema_version: 2`, a `wiki_policy` block, and manifest `wiki_inputs` entries with roles `canonical_text`, `translation_aid`, `evidence_original`, and `structure`. `source.md` now starts with an LLMwiki read-order and authority policy, and STT transcript artifacts carry kind/source-file metadata into the raw bundle so transcript Markdown is canonical text while provider JSON is structure. Runtime outputs and rendered translated files remain excluded from wiki authority.
 
 ### Sprint 12 Closed — 2026-04-27
 
@@ -135,7 +139,7 @@ Image overlay labels are now single-line-height boxes without strokes. The worke
 
 ## Next Action
 
-MVP roadmap plus Sprint 9, Sprint 10, Sprint 11, and Sprint 12 utility foundations are complete. Iteration 2 is active on the `llm-wiki-integration` branch. The next planned sprint is `sprint-14-wiki-raw-input-schema`. Start by adding raw bundle manifest schema v2 `wiki_inputs`, source.md read-order guidance, and tests that exclude runtime outputs/rendered translated deliverables from wiki source authority.
+MVP roadmap plus Sprint 9, Sprint 10, Sprint 11, Sprint 12, and Sprint 14 are complete. Iteration 2 is active on the `llm-wiki-integration` branch. The next planned sprint is `sprint-15-prebundle-canonical-artifacts`. Start by moving or copying deterministic PDF/DOCX/EML/image/text preprocessing artifacts into finalized raw bundles before wiki ingest, while keeping user-facing DOCX/PDF downloads runtime-only.
 
 ```text
 Current utility flow target: local Telegram server -> upload file -> SQLite job -> SQLite job claim -> bounded background processing pool -> import -> STT transcript output when applicable -> raw bundle -> preprocessing -> translation-needed check -> configured agent postprocess when needed -> worker-normalized `<source-stem>_translated` deliverable -> worker-appended `[원문]` source section with translation first -> output store -> Telegram download button with actual expiry -> hidden output lifecycle callbacks.
@@ -146,11 +150,12 @@ Current utility flow target: local Telegram server -> upload file -> SQLite job 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, and .vibe/interview-log/iter-2.json first. Sprint 12 is passed and iter-2 `llmwiki-foundation` is active. Core decision: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority. Next planned work is Sprint 14: implement raw bundle schema v2/wiki_inputs and source.md read-order guidance before moving canonical preprocessing into raw finalization in Sprint 15.
+Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, and .vibe/interview-log/iter-2.json first. Sprint 14 is passed and iter-2 `llmwiki-foundation` is active. Core decision: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority. Next planned work is Sprint 15: make deterministic preprocessing artifacts durable in finalized raw bundles before LLMwiki ingest.
 ```
 
 ## Latest Verification
 
+- Latest verification after Sprint 14 LLMwiki raw input schema: focused `node --import tsx --test test/vault.test.ts test/worker.test.ts` passed (`30` worker/vault tests in the focused run); `npm run typecheck` passed; full `npm test` passed (`443` passed, `1` skipped); `npm run build` passed; `node scripts/vibe-preflight.mjs` passed; `npm run ops:restart` passed with readiness OK and restarted the local Bot API server plus worker.
 - Latest verification after Sprint 12 closeout and STT transcript output fix: `node --import tsx --test test/worker.test.ts` passed (`27`), `npm run typecheck` passed, full `npm test` passed (`443` passed, `1` skipped), `npm run build` passed, and `git diff --check` passed. Live log review of job `tg_5985744318_288` confirmed RTZR transcription was running and writing artifacts; the bug was that transcript Markdown was not registered as a Telegram-downloadable output when no translation was needed.
 - Latest push checkpoint: committed and pushed `cf22182 Add Linux setup and Telegram start onboarding` on `main` to `origin/main`. Verification before push: focused Telegram/operator/worker tests passed (`41`), `npm run typecheck` passed, full `npm test` passed (`442` passed, `1` skipped), `npm run build` passed, `git diff --check` passed, UTF-8/mojibake checks passed, and `npm run ops:restart` passed with readiness OK.
 - Latest verification after Telegram `/start` onboarding: focused tests `node --import tsx --test test/telegram-capture.test.ts test/operator.test.ts test/worker.test.ts` passed (`41`); `npm run typecheck` passed; full `npm test` passed (`442` passed, `1` skipped); `npm run build` passed; `git diff --check` passed; UTF-8/mojibake checks passed; `npm run ops:restart` passed and readiness reported jobs=10/stt=10/agent=10, RTZR, Claude postprocess, pandoc, PDF tools, OCR tools, and Telegram Local Bot API Server ready.

@@ -24,9 +24,13 @@ export interface RawBundlePathInput {
 export interface RawBundleArtifactInput {
   sourcePath: string;
   name?: string;
+  kind?: string;
   sha256?: string;
   mimeType?: string;
   sizeBytes?: number;
+  sourceFileId?: string;
+  wikiRole?: RawBundleWikiInputRole;
+  derivedFromPath?: string;
 }
 
 export interface RawBundleWriteInput {
@@ -46,6 +50,7 @@ export interface RawBundleWriteResult {
   originalFiles: BundleFileRecord[];
   normalizedFiles: BundleFileRecord[];
   extractedFiles: BundleFileRecord[];
+  wikiInputs: RawBundleWikiInputRecord[];
   finalizedAt: string;
 }
 
@@ -53,6 +58,26 @@ export interface BundleFileRecord {
   id?: string;
   name: string;
   relativePath: string;
+  kind?: string;
+  sha256?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  sourceFileId?: string;
+  wikiRole?: RawBundleWikiInputRole;
+  derivedFromPath?: string;
+}
+
+export type RawBundleWikiInputRole = "canonical_text" | "translation_aid" | "evidence_original" | "structure";
+
+export interface RawBundleWikiInputRecord {
+  id: string;
+  role: RawBundleWikiInputRole;
+  name: string;
+  path: string;
+  sourceKind: "original" | "normalized" | "extracted";
+  readByDefault: boolean;
+  sourceFileId?: string;
+  derivedFrom?: string;
   sha256?: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -84,27 +109,23 @@ export async function writeRawBundle(input: RawBundleWriteInput): Promise<RawBun
   const originalFiles = await copyJobFiles(input.files, paths.originalDir, "original");
   const normalizedFiles = await copyArtifacts(input.normalizedArtifacts ?? [], paths.normalizedDir, "normalized");
   const extractedFiles = await copyArtifacts(input.extractedArtifacts ?? [], paths.extractedDir, "extracted");
-
-  await fs.writeFile(paths.manifest, renderManifest(input, {
+  const wikiInputs = buildWikiInputs(originalFiles, normalizedFiles, extractedFiles);
+  const result = {
     id: sourceId,
     paths,
     originalFiles,
     normalizedFiles,
     extractedFiles,
+    wikiInputs,
     finalizedAt,
-  }), "utf8");
-  await fs.writeFile(paths.sourceMarkdown, renderSourceMarkdown(input.job, sourceId, originalFiles, normalizedFiles, extractedFiles), "utf8");
+  };
+
+  await fs.writeFile(paths.manifest, renderManifest(input, result), "utf8");
+  await fs.writeFile(paths.sourceMarkdown, renderSourceMarkdown(input.job, sourceId, originalFiles, normalizedFiles, extractedFiles, wikiInputs), "utf8");
   await fs.writeFile(paths.logMarkdown, renderLogMarkdown(input.events ?? []), "utf8");
   await fs.writeFile(paths.finalizedMarker, `finalized_at=${finalizedAt}\n`, "utf8");
 
-  return {
-    id: sourceId,
-    paths,
-    originalFiles,
-    normalizedFiles,
-    extractedFiles,
-    finalizedAt,
-  };
+  return result;
 }
 
 export function buildRawBundlePaths(input: RawBundlePathInput): RawBundlePaths {
@@ -187,9 +208,13 @@ async function copyArtifacts(
       name: path.basename(destinationPath),
       relativePath: `${relativeDir}/${path.basename(destinationPath)}`,
     };
+    assignDefined(record, "kind", artifact.kind);
     assignDefined(record, "sha256", artifact.sha256);
     assignDefined(record, "mimeType", artifact.mimeType);
     assignDefined(record, "sizeBytes", artifact.sizeBytes);
+    assignDefined(record, "sourceFileId", artifact.sourceFileId);
+    assignDefined(record, "wikiRole", artifact.wikiRole);
+    assignDefined(record, "derivedFromPath", artifact.derivedFromPath);
     records.push(record);
   }
   return records;
@@ -210,7 +235,7 @@ function uniqueDestinationPath(destinationDir: string, name: string, usedNames: 
 function renderManifest(input: RawBundleWriteInput, result: RawBundleWriteResult): string {
   const processingContext = buildProcessingContext(input.events ?? []);
   const lines = [
-    "schema_version: 1",
+    "schema_version: 2",
     `bundle_id: ${yamlScalar(result.id)}`,
     `job_id: ${yamlScalar(input.job.id)}`,
     `source: ${yamlScalar(input.job.source)}`,
@@ -226,6 +251,10 @@ function renderManifest(input: RawBundleWriteInput, result: RawBundleWriteResult
     ...yamlFileRecords(result.normalizedFiles, "normalized"),
     "extracted:",
     ...yamlFileRecords(result.extractedFiles, "extracted"),
+    "wiki_policy:",
+    ...yamlWikiPolicy(),
+    "wiki_inputs:",
+    ...yamlWikiInputs(result.wikiInputs),
     "processing_context:",
     ...yamlProcessingContext(processingContext),
   ];
@@ -238,6 +267,7 @@ function renderSourceMarkdown(
   originalFiles: BundleFileRecord[],
   normalizedFiles: BundleFileRecord[],
   extractedFiles: BundleFileRecord[],
+  wikiInputs: RawBundleWikiInputRecord[],
 ): string {
   const lines = [
     "---",
@@ -249,6 +279,38 @@ function renderSourceMarkdown(
     "---",
     "",
     `# Source ${job.id}`,
+    "",
+    "## LLMwiki Read Order",
+    "",
+    "1. Read `manifest.yaml` for schema, provenance, and the `wiki_inputs` contract.",
+    "2. Read `wiki_inputs` entries with `role=canonical_text` as the default knowledge source.",
+    "3. Use `role=structure` entries only to map text back to document regions or blocks.",
+    "4. Use `role=evidence_original` entries for audit or visual verification, not as the default token source.",
+    "5. Treat rendered Telegram downloads and translated deliverables as out of scope for wiki authority.",
+    "",
+    "## Wiki Authority Policy",
+    "",
+    "- Wiki raw is this finalized bundle plus deterministic canonical text projections declared in `manifest.yaml`.",
+    "- Do not use `runtime/outputs/**`, `_translated.*`, image overlay PDFs, or transcript DOCX files as wiki source authority.",
+    "- Cite `wiki_inputs` ids or paths when writing wiki pages.",
+    "",
+    "## Wiki Inputs",
+    "",
+    "### Canonical Text",
+    "",
+    ...markdownWikiInputList(wikiInputs, "canonical_text"),
+    "",
+    "### Translation Aids",
+    "",
+    ...markdownWikiInputList(wikiInputs, "translation_aid"),
+    "",
+    "### Structure",
+    "",
+    ...markdownWikiInputList(wikiInputs, "structure"),
+    "",
+    "### Evidence Originals",
+    "",
+    ...markdownWikiInputList(wikiInputs, "evidence_original"),
     "",
     "## Instructions",
     "",
@@ -297,6 +359,133 @@ function yamlFileRecords(records: BundleFileRecord[], kind: string): string[] {
     ];
     if (record.id) {
       lines.push(`    id: ${yamlScalar(record.id)}`);
+    }
+    if (record.sha256) {
+      lines.push(`    sha256: ${yamlScalar(record.sha256)}`);
+    }
+    if (record.mimeType) {
+      lines.push(`    mime_type: ${yamlScalar(record.mimeType)}`);
+    }
+    if (record.sizeBytes !== undefined) {
+      lines.push(`    size_bytes: ${record.sizeBytes}`);
+    }
+    return lines;
+  });
+}
+
+function buildWikiInputs(
+  originalFiles: BundleFileRecord[],
+  normalizedFiles: BundleFileRecord[],
+  extractedFiles: BundleFileRecord[],
+): RawBundleWikiInputRecord[] {
+  const originalByFileId = new Map(originalFiles.flatMap((record) => record.id ? [[record.id, record]] : []));
+  return [
+    ...originalFiles.map((record) => buildWikiInput(record, "original", originalByFileId)),
+    ...normalizedFiles.map((record) => buildWikiInput(record, "normalized", originalByFileId)),
+    ...extractedFiles.map((record) => buildWikiInput(record, "extracted", originalByFileId)),
+  ];
+}
+
+function buildWikiInput(
+  record: BundleFileRecord,
+  sourceKind: RawBundleWikiInputRecord["sourceKind"],
+  originalByFileId: Map<string, BundleFileRecord>,
+): RawBundleWikiInputRecord {
+  const role = inferWikiRole(record, sourceKind);
+  const originalSource = record.sourceFileId ? originalByFileId.get(record.sourceFileId) : undefined;
+  const wikiInput: RawBundleWikiInputRecord = {
+    id: wikiInputId(sourceKind, record),
+    role,
+    name: record.name,
+    path: record.relativePath,
+    sourceKind,
+    readByDefault: role === "canonical_text",
+  };
+  assignDefined(wikiInput, "sourceFileId", record.sourceFileId ?? record.id);
+  assignDefined(wikiInput, "derivedFrom", record.derivedFromPath ?? originalSource?.relativePath);
+  assignDefined(wikiInput, "sha256", record.sha256);
+  assignDefined(wikiInput, "mimeType", record.mimeType);
+  assignDefined(wikiInput, "sizeBytes", record.sizeBytes);
+  return wikiInput;
+}
+
+function wikiInputId(sourceKind: RawBundleWikiInputRecord["sourceKind"], record: BundleFileRecord): string {
+  const stablePart = record.id ?? record.relativePath;
+  return `${sourceKind}:${sanitizePathSegment(stablePart.replace(/[\\/]+/g, ":"))}`;
+}
+
+function inferWikiRole(
+  record: BundleFileRecord,
+  sourceKind: RawBundleWikiInputRecord["sourceKind"],
+): RawBundleWikiInputRole {
+  if (record.wikiRole) {
+    return record.wikiRole;
+  }
+  if (sourceKind === "original") {
+    return "evidence_original";
+  }
+
+  const name = record.name.toLowerCase();
+  const mimeType = record.mimeType?.toLowerCase() ?? "";
+  const kind = record.kind?.toLowerCase() ?? "";
+  if (kind.includes("translation")) {
+    return "translation_aid";
+  }
+  if (
+    kind.includes("block") ||
+    kind.includes("json") ||
+    name.endsWith(".json") ||
+    name.endsWith(".blocks.json")
+  ) {
+    return "structure";
+  }
+  if (
+    mimeType.startsWith("text/") ||
+    name.endsWith(".md") ||
+    name.endsWith(".txt") ||
+    name.endsWith(".csv") ||
+    name.endsWith(".tsv") ||
+    name.endsWith(".srt") ||
+    name.endsWith(".vtt")
+  ) {
+    return "canonical_text";
+  }
+  return "evidence_original";
+}
+
+function yamlWikiPolicy(): string[] {
+  return [
+    `  source_authority: ${yamlScalar("finalized_raw_bundle")}`,
+    "  default_read_order:",
+    `    - ${yamlScalar("source.md")}`,
+    `    - ${yamlScalar("manifest.yaml")}`,
+    `    - ${yamlScalar("wiki_inputs[role=canonical_text]")}`,
+    "  rendered_outputs_excluded:",
+    `    - ${yamlScalar("runtime/outputs/**")}`,
+    `    - ${yamlScalar("**/*_translated.*")}`,
+    `    - ${yamlScalar("**/*.transcript.docx")}`,
+    `    - ${yamlScalar("**/*_transcript.docx")}`,
+  ];
+}
+
+function yamlWikiInputs(records: RawBundleWikiInputRecord[]): string[] {
+  if (records.length === 0) {
+    return ["  []"];
+  }
+  return records.flatMap((record) => {
+    const lines = [
+      `  - id: ${yamlScalar(record.id)}`,
+      `    role: ${yamlScalar(record.role)}`,
+      `    path: ${yamlScalar(record.path)}`,
+      `    name: ${yamlScalar(record.name)}`,
+      `    source_kind: ${yamlScalar(record.sourceKind)}`,
+      `    read_by_default: ${record.readByDefault ? "true" : "false"}`,
+    ];
+    if (record.sourceFileId) {
+      lines.push(`    source_file_id: ${yamlScalar(record.sourceFileId)}`);
+    }
+    if (record.derivedFrom) {
+      lines.push(`    derived_from: ${yamlScalar(record.derivedFrom)}`);
     }
     if (record.sha256) {
       lines.push(`    sha256: ${yamlScalar(record.sha256)}`);
@@ -419,6 +608,20 @@ function markdownFileList(records: BundleFileRecord[]): string[] {
     return ["- None"];
   }
   return records.map((record) => `- [${record.name}](${record.relativePath.replace(/\\/g, "/")})`);
+}
+
+function markdownWikiInputList(records: RawBundleWikiInputRecord[], role: RawBundleWikiInputRole): string[] {
+  const matchingRecords = records.filter((record) => record.role === role);
+  if (matchingRecords.length === 0) {
+    return ["- None"];
+  }
+  return matchingRecords.map((record) => {
+    const details = [`id=${record.id}`, `path=${record.path.replace(/\\/g, "/")}`];
+    if (record.derivedFrom) {
+      details.push(`derived_from=${record.derivedFrom.replace(/\\/g, "/")}`);
+    }
+    return `- [${record.name}](${record.path.replace(/\\/g, "/")}) (${details.join("; ")})`;
+  });
 }
 
 function yamlScalar(value: string): string {
