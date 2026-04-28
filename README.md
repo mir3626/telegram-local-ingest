@@ -114,7 +114,7 @@ npm run ops:dashboard
 
 Run logs are stored under `runtime/automation/runs/<run_id>/`. Scheduled jobs use a single dispatcher/timer rather than a resident process per automation; `timer install` writes user-level systemd unit files and prints the `systemctl --user` activation command.
 
-`npm run ops:dashboard` starts a product-owned localhost dashboard, separate from the `vibe-doctor` harness dashboard. It shows module readiness without secret values, enable/disable controls, manual run/dispatch actions, and run log/result viewers. By default it binds to `127.0.0.1`; set `OPS_DASHBOARD_TOKEN` to require a local admin token for write actions.
+`npm run ops:dashboard` starts a product-owned localhost dashboard, separate from the `vibe-doctor` harness dashboard. It shows module readiness without secret values, enable/disable controls, manual run/dispatch actions, and run log/result viewers. `npm run ops:start` also starts this dashboard with the Telegram Local Bot API Server and worker. By default it binds to `127.0.0.1`; set `OPS_DASHBOARD_TOKEN` to require a local admin token for write actions only.
 
 The first bundled module is `fx.koreaexim.daily`. Set `FX_KOREAEXIM_AUTHKEY`, optionally tune `FX_CURRENCIES`, then enable it:
 

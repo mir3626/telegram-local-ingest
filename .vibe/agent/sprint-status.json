@@ -203,7 +203,7 @@
   ],
   "handoff": {
     "currentSprintId": "sprint-21-bootstrap-packaging",
-    "lastActionSummary": "Completed Sprint 20 local ops dashboard, fixed the CLI server lifecycle, and verified live localhost API; next is Sprint 21 bootstrap packaging.",
+    "lastActionSummary": "Localized the ops dashboard UI, integrated it into local stack start/stop, and restarted Bot API/worker/dashboard successfully; next is Sprint 21 bootstrap packaging.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -219,7 +219,7 @@
       "Prefer official Anthropic skills for document tasks when a suitable official skill exists"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-28T05:47:11.000Z"
+    "updatedAt": "2026-04-28T06:02:53.000Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -360,7 +360,7 @@
     "test/ops-dashboard.test.ts"
   ],
   "sprintsSinceLastAudit": 1,
-  "stateUpdatedAt": "2026-04-28T05:47:11.000Z",
+  "stateUpdatedAt": "2026-04-28T06:02:53.000Z",
   "verifiedAt": "2026-04-27T13:32:38.571Z",
   "verificationCommands": [
     {

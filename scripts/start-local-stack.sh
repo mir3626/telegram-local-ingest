@@ -4,15 +4,35 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+load_env_file() {
+  local env_file="$1"
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    line="${line#export }"
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      fi
+      export "$key=$value"
+    fi
+  done < "$env_file"
+}
+
 if [[ ! -f .env ]]; then
   echo "Missing .env in $ROOT_DIR"
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1091
-. ./.env
-set +a
+load_env_file ./.env
 
 resolve_path() {
   local value="$1"
@@ -129,6 +149,37 @@ start_worker() {
   echo "telegram-local-ingest worker started: pid=$(cat "$WORKER_PID"), log=$WORKER_LOG"
 }
 
+start_ops_dashboard() {
+  local dashboard_pid
+  dashboard_pid="$(pid_from_file "$OPS_DASHBOARD_PID")"
+  if is_alive "$dashboard_pid"; then
+    echo "ops dashboard already running: pid=$dashboard_pid"
+    return
+  fi
+  rm -f "$OPS_DASHBOARD_PID"
+
+  local dashboard_host="${OPS_DASHBOARD_HOST:-127.0.0.1}"
+  local dashboard_port="${OPS_DASHBOARD_PORT:-58991}"
+  if command -v curl >/dev/null 2>&1 && curl -fsS "http://${dashboard_host}:${dashboard_port}/api/state" >/dev/null 2>&1; then
+    local existing_pid
+    existing_pid="$(pgrep -f "apps/ops-dashboard/src/index.ts" | head -n 1 || true)"
+    if [[ -n "$existing_pid" ]]; then
+      write_pid "$OPS_DASHBOARD_PID" "$existing_pid"
+      echo "ops dashboard already reachable; adopted pid=$existing_pid"
+    else
+      echo "ops dashboard already reachable; pid unknown"
+    fi
+    return
+  fi
+
+  echo "Starting ops dashboard..."
+  local started_pid
+  started_pid="$(start_detached "$OPS_DASHBOARD_LOG" bash -lc "cd '$ROOT_DIR' && if [ -f \"\$HOME/.nvm/nvm.sh\" ]; then . \"\$HOME/.nvm/nvm.sh\"; fi; exec node --import tsx apps/ops-dashboard/src/index.ts")"
+  wait_until_alive "ops dashboard" "$started_pid"
+  write_pid "$OPS_DASHBOARD_PID" "$started_pid"
+  echo "ops dashboard started: pid=$(cat "$OPS_DASHBOARD_PID"), url=http://${dashboard_host}:${dashboard_port}/, log=$OPS_DASHBOARD_LOG"
+}
+
 RUNTIME_DIR="$(resolve_path "${INGEST_RUNTIME_DIR:-./runtime}")"
 LOG_DIR="${INGEST_LOG_DIR:-$RUNTIME_DIR/logs}"
 PID_DIR="${INGEST_PID_DIR:-$RUNTIME_DIR/pids}"
@@ -141,15 +192,21 @@ BOT_API_HOST="${TELEGRAM_BOT_API_HOST:-127.0.0.1}"
 BOT_API_PORT="${TELEGRAM_BOT_API_PORT:-8081}"
 BOT_API_LOG="$LOG_DIR/bot-api.log"
 WORKER_LOG="$LOG_DIR/worker.log"
+OPS_DASHBOARD_LOG="${OPS_DASHBOARD_LOG:-$LOG_DIR/ops-dashboard.log}"
 BOT_API_PID="$PID_DIR/bot-api.pid"
 WORKER_PID="$PID_DIR/worker.pid"
+OPS_DASHBOARD_PID="${OPS_DASHBOARD_PID:-$PID_DIR/ops-dashboard.pid}"
 
 start_bot_api
 sleep 2
 start_worker
+start_ops_dashboard
 
 echo
 echo "Local ingest stack is running."
 echo "Logs:"
 echo "  Bot API: $BOT_API_LOG"
 echo "  Worker : $WORKER_LOG"
+echo "  Ops UI : $OPS_DASHBOARD_LOG"
+echo
+echo "Dashboard: http://${OPS_DASHBOARD_HOST:-127.0.0.1}:${OPS_DASHBOARD_PORT:-58991}/"

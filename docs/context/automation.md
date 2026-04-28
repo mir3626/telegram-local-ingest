@@ -49,9 +49,9 @@ Secrets remain in `.env` or the host secret store. The registry only records mis
 
 ## Local Ops Dashboard
 
-`apps/ops-dashboard` is a product-owned dashboard, separate from the `vibe-doctor` harness dashboard. It binds only to localhost by default (`OPS_DASHBOARD_HOST=127.0.0.1`, `OPS_DASHBOARD_PORT=58991`) and reads the same SQLite registry, run log paths, manifests, and automation-core readiness checks as `apps/ops-cli`.
+`apps/ops-dashboard` is a product-owned dashboard, separate from the `vibe-doctor` harness dashboard. It binds only to localhost by default (`OPS_DASHBOARD_HOST=127.0.0.1`, `OPS_DASHBOARD_PORT=58991`) and reads the same SQLite registry, run log paths, manifests, and automation-core readiness checks as `apps/ops-cli`. `scripts/start-local-stack.sh` starts it together with the Telegram Local Bot API Server and worker; `scripts/stop-local-stack.sh` stops it first.
 
-The dashboard shows module enabled/available state, readiness as present/missing env names only, next due time, recent runs, run result/log text, and links to raw bundle/wiki source paths when a module result records them. It supports enable/disable, manual run, and dispatch actions. If `OPS_DASHBOARD_TOKEN` is set, write actions require `x-ops-dashboard-token`, `Authorization: Bearer ...`, or the local token field in the page; the token itself is never shown in API state.
+The dashboard shows module enabled/available state, readiness as present/missing env names only, next due time, recent runs, run result/log text, and links to raw bundle/wiki source paths when a module result records them. It supports enable/disable, manual run, and dispatch actions. If `OPS_DASHBOARD_TOKEN` is set, write actions require `x-ops-dashboard-token`, `Authorization: Bearer ...`, or the local token field in the page; read-only status endpoints remain local GETs, and the token itself is never shown in API state.
 
 ## Scheduling Policy
 

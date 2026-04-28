@@ -72,6 +72,7 @@ interface RunArtifactLinks {
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 58991;
 const MAX_LOG_CHARS = 80_000;
+const RECENT_RUN_LIMIT = 100;
 
 export async function createOpsDashboardServer(options: OpsDashboardOptions = {}): Promise<StartedOpsDashboard> {
   const env = options.env ?? process.env;
@@ -189,7 +190,7 @@ async function readDashboardState(context: DashboardContext): Promise<unknown> {
         lastRunLinks: links,
       };
     }));
-    const runs = await Promise.all(listAutomationRuns(db, { limit: 50 }).map(async (run) => ({
+    const runs = await Promise.all(listAutomationRuns(db, { limit: RECENT_RUN_LIMIT }).map(async (run) => ({
       ...run,
       links: await readRunArtifactLinks(context, run),
     })));
@@ -635,7 +636,7 @@ function renderDashboardHtml(): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Telegram Local Ingest Ops</title>
+  <title>Telegram Local Ingest 운영 대시보드</title>
   <style>
     :root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f6f8; color: #17202a; }
     body { margin: 0; }
@@ -644,7 +645,8 @@ function renderDashboardHtml(): string {
     main { max-width: 1280px; margin: 0 auto; padding: 20px; }
     section { margin: 0 0 20px; }
     h2 { font-size: 16px; margin: 0 0 10px; }
-    button { border: 1px solid #94a3b8; background: #fff; color: #17202a; border-radius: 6px; padding: 7px 10px; cursor: pointer; font: inherit; }
+    button { border: 1px solid #94a3b8; background: #fff; color: #17202a; border-radius: 6px; padding: 7px 10px; cursor: default; font: inherit; }
+    button[data-run], button[data-enable], button[data-runmodule], #refresh, #dispatch { cursor: pointer; }
     button.primary { background: #0f766e; color: #fff; border-color: #0f766e; }
     button.danger { background: #b42318; color: #fff; border-color: #b42318; }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -658,7 +660,11 @@ function renderDashboardHtml(): string {
     .bad { background: #ffe4e6; color: #9f1239; }
     .warn { background: #fef3c7; color: #92400e; }
     .actions { display: flex; gap: 6px; flex-wrap: wrap; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e2e8f0; padding: 12px; overflow: auto; max-height: 380px; border-radius: 6px; }
+    .table-scroll { overflow: auto; border: 1px solid #d7dde5; background: #fff; }
+    .table-scroll table { border: 0; }
+    .table-scroll thead th { position: sticky; top: 0; z-index: 1; }
+    .runs-scroll { max-height: 720px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e2e8f0; padding: 12px; overflow: auto; max-height: 300px; border-radius: 6px; }
     .grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
     .panel { background: #fff; border: 1px solid #d7dde5; padding: 12px; border-radius: 8px; }
     input { padding: 7px 9px; border-radius: 6px; border: 1px solid #94a3b8; font: inherit; min-width: 240px; }
@@ -667,26 +673,26 @@ function renderDashboardHtml(): string {
 </head>
 <body>
   <header>
-    <h1>Telegram Local Ingest Ops</h1>
+    <h1>Telegram Local Ingest 운영 대시보드</h1>
     <div class="toolbar">
-      <input id="token" type="password" placeholder="OPS_DASHBOARD_TOKEN">
-      <button id="refresh">Refresh</button>
-      <button id="dispatch">Dispatch Due</button>
+      <input id="token" type="password" placeholder="관리 토큰">
+      <button id="refresh">새로고침</button>
+      <button id="dispatch">예약 실행 처리</button>
     </div>
   </header>
   <main>
     <section>
-      <h2>Automation Modules</h2>
+      <h2>자동화 모듈</h2>
       <div id="modules"></div>
     </section>
     <section>
-      <h2>Recent Runs</h2>
+      <h2>최근 실행 로그</h2>
       <div id="runs"></div>
     </section>
     <section class="grid">
       <div class="panel">
-        <h2>Run Detail</h2>
-        <div id="detail" class="muted">Select a run.</div>
+        <h2>실행 상세</h2>
+        <div id="detail" class="muted">실행 로그를 선택하세요.</div>
       </div>
     </section>
   </main>
@@ -711,45 +717,45 @@ function renderDashboardHtml(): string {
       renderRuns(state.runs || []);
     }
     function renderModules(modules) {
-      document.getElementById('modules').innerHTML = '<table><thead><tr><th>Module</th><th>State</th><th>Readiness</th><th>Schedule</th><th>Last Run</th><th>Actions</th></tr></thead><tbody>' +
+      document.getElementById('modules').innerHTML = '<div class="table-scroll"><table><thead><tr><th>모듈</th><th>상태</th><th>준비도</th><th>스케줄</th><th>최근 실행</th><th>작업</th></tr></thead><tbody>' +
         modules.map((m) => '<tr>' +
           '<td><strong>' + esc(m.title || m.id) + '</strong><br><span class="muted">' + esc(m.id) + '</span><br>' + esc(m.description || '') + '</td>' +
-          '<td><span class="status ' + (m.available ? (m.enabled ? 'ok' : 'warn') : 'bad') + '">' + (m.available ? (m.enabled ? 'enabled' : 'disabled') : 'missing') + '</span></td>' +
-          '<td>' + (m.readiness?.ready ? '<span class="status ok">ready</span>' : '<span class="status bad">missing env</span><br><span class="muted">' + esc((m.readiness?.missingEnv || []).join(', ')) + '</span>') + '</td>' +
-          '<td>' + esc(m.schedule?.type || '-') + '<br><span class="muted">next ' + esc(fmt(m.nextDueAt)) + '</span></td>' +
+          '<td><span class="status ' + (m.available ? (m.enabled ? 'ok' : 'warn') : 'bad') + '">' + (m.available ? (m.enabled ? '켜짐' : '꺼짐') : '파일 없음') + '</span></td>' +
+          '<td>' + (m.readiness?.ready ? '<span class="status ok">준비됨</span>' : '<span class="status bad">환경변수 누락</span><br><span class="muted">' + esc((m.readiness?.missingEnv || []).join(', ')) + '</span>') + '</td>' +
+          '<td>' + esc(m.schedule?.type || '-') + '<br><span class="muted">다음 ' + esc(fmt(m.nextDueAt)) + '</span></td>' +
           '<td>' + (m.lastRun ? '<button data-run="' + esc(m.lastRun.id) + '">' + esc(m.lastRun.status) + '</button><br><span class="muted">' + esc(fmt(m.lastRun.startedAt)) + '</span>' : '-') + '</td>' +
           '<td><div class="actions">' +
-            '<button data-enable="' + esc(m.id) + '">' + (m.enabled ? 'Disable' : 'Enable') + '</button>' +
-            '<button class="primary" data-runmodule="' + esc(m.id) + '">Run</button>' +
+            '<button data-enable="' + esc(m.id) + '">' + (m.enabled ? '끄기' : '켜기') + '</button>' +
+            '<button class="primary" data-runmodule="' + esc(m.id) + '">실행</button>' +
           '</div></td>' +
-        '</tr>').join('') + '</tbody></table>';
+        '</tr>').join('') + '</tbody></table></div>';
     }
     function renderRuns(runs) {
-      document.getElementById('runs').innerHTML = '<table><thead><tr><th>Status</th><th>Run</th><th>Module</th><th>Started</th><th>Links</th></tr></thead><tbody>' +
+      document.getElementById('runs').innerHTML = '<div class="table-scroll runs-scroll"><table><thead><tr><th>상태</th><th>실행 ID</th><th>모듈</th><th>시작</th><th>링크</th></tr></thead><tbody>' +
         runs.map((run) => '<tr>' +
           '<td><span class="status ' + (run.status === 'SUCCEEDED' ? 'ok' : run.status === 'FAILED' ? 'bad' : 'warn') + '">' + esc(run.status) + '</span></td>' +
           '<td><button data-run="' + esc(run.id) + '">' + esc(run.id) + '</button></td>' +
           '<td>' + esc(run.moduleId) + '</td>' +
           '<td>' + esc(fmt(run.startedAt)) + '</td>' +
           '<td>' + (run.links?.rawBundlePath ? '<span class="muted">raw</span> ' + esc(run.links.rawBundlePath) : '-') + '</td>' +
-        '</tr>').join('') + '</tbody></table>';
+        '</tr>').join('') + '</tbody></table></div>';
     }
     async function showRun(id) {
       const detail = await api('/api/runs/' + encodeURIComponent(id));
       document.getElementById('detail').innerHTML = '<div><strong>' + esc(id) + '</strong></div>' +
-        '<p>Status: ' + esc(detail.run.status) + ' / exit ' + esc(detail.run.exitCode ?? '-') + '</p>' +
+        '<p>상태: ' + esc(detail.run.status) + ' / exit ' + esc(detail.run.exitCode ?? '-') + '</p>' +
         (detail.links?.rawBundlePath ? '<p>Raw: ' + esc(detail.links.rawBundlePath) + '</p>' : '') +
         (detail.links?.wikiPagePath ? '<p>Wiki: ' + esc(detail.links.wikiPagePath) + '</p>' : '') +
-        '<h2>result.json</h2><pre>' + esc(detail.resultText || '') + '</pre>' +
-        '<h2>stdout.log</h2><pre>' + esc(detail.stdout || '') + '</pre>' +
-        '<h2>stderr.log</h2><pre>' + esc(detail.stderr || '') + '</pre>';
+        '<h2>결과 (result.json)</h2><pre>' + esc(detail.resultText || '') + '</pre>' +
+        '<h2>표준 출력 (stdout.log)</h2><pre>' + esc(detail.stdout || '') + '</pre>' +
+        '<h2>오류 출력 (stderr.log)</h2><pre>' + esc(detail.stderr || '') + '</pre>';
     }
     document.addEventListener('click', async (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       if (target.dataset.run) await showRun(target.dataset.run);
       if (target.dataset.enable) {
-        const state = target.textContent === 'Enable' ? 'enable' : 'disable';
+        const state = target.textContent === '켜기' ? 'enable' : 'disable';
         await api('/api/modules/' + encodeURIComponent(target.dataset.enable) + '/' + state, {method:'POST', body:'{}'});
         await load();
       }
