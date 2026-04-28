@@ -184,8 +184,15 @@
     {
       "id": "sprint-20-ops-dashboard-automation",
       "name": "Ops Dashboard Automation Controls",
-      "status": "planned",
-      "startedAt": "2026-04-27T13:06:28.000Z"
+      "status": "passed",
+      "startedAt": "2026-04-27T13:06:28.000Z",
+      "completedAt": "2026-04-28T05:29:36.568Z",
+      "actualLoc": {
+        "added": 993,
+        "deleted": 0,
+        "net": 993,
+        "filesChanged": 8
+      }
     },
     {
       "id": "sprint-21-bootstrap-packaging",
@@ -195,8 +202,8 @@
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-20-ops-dashboard-automation",
-    "lastActionSummary": "Completed Sprint 19 Korea Eximbank daily FX automation module; next is product ops dashboard automation controls.",
+    "currentSprintId": "sprint-21-bootstrap-packaging",
+    "lastActionSummary": "Completed Sprint 20 local ops dashboard; next is Sprint 21 bootstrap packaging.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -212,7 +219,7 @@
       "Prefer official Anthropic skills for document tasks when a suitable official skill exists"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-27T13:32:38.571Z"
+    "updatedAt": "2026-04-28T05:38:18.000Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -289,6 +296,19 @@
       "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
       "acknowledgedAt": "2026-04-27T13:34:56.187Z",
       "acknowledgement": "INFO-level mature-downstream LOC signal; Sprint 17-19 changes were bounded to automation CLI/module paths and passed focused/full verification."
+    },
+    {
+      "id": "lightweight-audit-sprint-20-ops-dashboard-automation",
+      "raisedBy": "vibe-audit-lightweight",
+      "targetSprint": "*",
+      "text": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "status": "acknowledged",
+      "createdAt": "2026-04-28T05:29:36.846Z",
+      "level": "INFO",
+      "code": "LOC_THRESHOLD_BREACH",
+      "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "acknowledgedAt": "2026-04-28T05:29:36.846Z",
+      "acknowledgement": "INFO-level mature-downstream LOC signal; Sprint 20 added a bounded ops-dashboard app with focused/full verification and no blocking risk."
     }
   ],
   "lastSprintScope": [
@@ -310,7 +330,10 @@
     "packages/automation-core/package.json",
     "packages/automation-core/src/index.ts",
     "test/automation-core.test.ts",
-    ".vibe/agent/sprint-status.json"
+    ".vibe/agent/sprint-status.json",
+    "apps/ops-dashboard/package.json",
+    "apps/ops-dashboard/src/index.ts",
+    "test/ops-dashboard.test.ts"
   ],
   "lastSprintScopeGlob": [
     ".env.example",
@@ -331,10 +354,13 @@
     "packages/automation-core/package.json",
     "packages/automation-core/src/index.ts",
     "test/automation-core.test.ts",
-    ".vibe/agent/sprint-status.json"
+    ".vibe/agent/sprint-status.json",
+    "apps/ops-dashboard/package.json",
+    "apps/ops-dashboard/src/index.ts",
+    "test/ops-dashboard.test.ts"
   ],
-  "sprintsSinceLastAudit": 0,
-  "stateUpdatedAt": "2026-04-27T13:34:56.186Z",
+  "sprintsSinceLastAudit": 1,
+  "stateUpdatedAt": "2026-04-28T05:38:18.000Z",
   "verifiedAt": "2026-04-27T13:32:38.571Z",
   "verificationCommands": [
     {

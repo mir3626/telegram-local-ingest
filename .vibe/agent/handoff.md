@@ -5,7 +5,7 @@
 - **repo**: `telegram-local-ingest`
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-2`
-- **current sprint**: `sprint-20-ops-dashboard-automation`
+- **current sprint**: `sprint-21-bootstrap-packaging`
 - **harnessVersion**: `1.6.11`
 
 ## Status
@@ -25,6 +25,12 @@ Sprint 18 is marked `passed`. `npm run tlgi -- automation dispatch` now evaluate
 ### Sprint 19 Closed — 2026-04-27
 
 Sprint 19 is marked `passed`. `automations/fx-koreaexim-daily` adds the first bundled real automation module. It uses Korea Eximbank Open API AP01 (`exchangeJSON`, `data=AP01`) through `FX_KOREAEXIM_AUTHKEY`, optional `FX_SEARCH_DATE`, and `FX_CURRENCIES` filtering. It writes deterministic `fx_koreaexim_<YYYYMMDD>` raw bundles containing original API JSON evidence plus canonical `rates-<YYYYMMDD>.md` and `.csv` extracted artifacts declared as wiki inputs. If `WIKI_INGEST_COMMAND` is configured, the module invokes the existing wiki ingest adapter after bundle finalization; otherwise it records a skipped wiki result. Existing finalized bundles are treated as idempotent skips, and empty selected data exits successfully as a skipped module result rather than failed data.
+
+### Sprint 20 Closed — 2026-04-28
+
+Sprint 20 is marked `passed`. `apps/ops-dashboard` is now a product-owned local operations dashboard for automation modules, separate from the `vibe-doctor` harness dashboard. It binds only to loopback by default (`OPS_DASHBOARD_HOST=127.0.0.1`, `OPS_DASHBOARD_PORT=58991`) and uses the same automation-core and SQLite registry/run tables as `apps/ops-cli`.
+
+The dashboard shows module enabled/available state, readiness without secret values, schedule/next-due information, last and recent runs, durable `stdout.log`/`stderr.log`/`result.json` viewers, and raw bundle/wiki source links when a module result records them. It supports enable/disable, manual module run, and due-dispatch actions. If `OPS_DASHBOARD_TOKEN` is set, write actions require the token through `x-ops-dashboard-token`, Bearer auth, or the local token field; the token is never returned by `/api/state`.
 
 ### FX Korea Eximbank Parser Correction — 2026-04-28
 
@@ -46,7 +52,7 @@ Verification after this change: `npm run typecheck` passed; `node --import tsx -
 
 `vibe-iterate` started `iter-2` as `llmwiki-foundation`. The interview log is `.vibe/interview-log/iter-2.json` and terminates with high coverage for the new LLMwiki direction. Durable decision: wiki raw is the finalized raw bundle plus deterministic canonical text projections declared by `manifest.yaml` `wiki_inputs`; rendered user deliverables are not wiki source authority. `_translated.*`, image overlay PDFs, transcript DOCX files, and `runtime/outputs/**` remain convenience outputs only.
 
-Iteration 2 planned sprint order is now `sprint-14-wiki-raw-input-schema`, `sprint-15-prebundle-canonical-artifacts`, `sprint-16-llmwiki-ingest-contract`, then carryover `sprint-13-vault-reconcile-retention`. This intentionally moves raw/schema work ahead of retention so reconcile can understand `wiki_inputs` and wiki citations.
+Iteration 2 planned sprint order is now `sprint-14-wiki-raw-input-schema`, `sprint-15-prebundle-canonical-artifacts`, `sprint-16-llmwiki-ingest-contract`, the automation packaging path `sprint-17` through `sprint-21`, then carryover `sprint-13-vault-reconcile-retention`. This intentionally moves raw/schema work ahead of retention so reconcile can understand `wiki_inputs` and wiki citations, while the automation path gives LLMwiki repeatable batch ingestion and ops controls.
 
 ### Sprint 14 Closed — 2026-04-27
 
@@ -179,7 +185,7 @@ Image overlay labels are now single-line-height boxes without strokes. The worke
 
 ## Next Action
 
-MVP roadmap plus Sprint 9 through Sprint 12, Sprint 14 through Sprint 19, and the LLMwiki chat routing utility work are complete. Iteration 2 remains active on the `llm-wiki-integration` branch. The next planned automation sprint is `sprint-20-ops-dashboard-automation`: add a product-owned local ops dashboard for module readiness, enable/disable, dispatch/manual run controls, and run log/result viewing. Carryover `sprint-13-vault-reconcile-retention` remains planned after the automation packaging path unless deletion/drift work becomes urgent.
+MVP roadmap plus Sprint 9 through Sprint 12, Sprint 14 through Sprint 20, and the LLMwiki chat routing utility work are complete. Iteration 2 remains active on the `llm-wiki-integration` branch. The next planned automation sprint is `sprint-21-bootstrap-packaging`: package the local ingest, wiki, automation, and ops dashboard stack into a repeatable one-shot Linux setup path. Carryover `sprint-13-vault-reconcile-retention` remains planned after the automation packaging path unless deletion/drift work becomes urgent.
 
 ```text
 Current utility flow target: local Telegram server -> upload file -> SQLite job -> SQLite job claim -> bounded background processing pool -> import -> STT transcript output when applicable -> raw bundle -> preprocessing -> translation-needed check -> configured agent postprocess when needed -> worker-normalized `<source-stem>_translated` deliverable -> worker-appended `[원문]` source section with translation first -> output store -> Telegram download button with actual expiry -> hidden output lifecycle callbacks.
@@ -190,11 +196,12 @@ Current utility flow target: local Telegram server -> upload file -> SQLite job 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, docs/context/automation.md, and .vibe/interview-log/iter-2.json first. Sprint 19 is passed: automation manifests, SQLite registry/run/event/schedule-state tables, `npm run tlgi -- automation dispatch`, user-level systemd timer files, and `automations/fx-koreaexim-daily` are in place. Next planned work is Sprint 20: a product-owned local ops dashboard for module readiness, enable/disable, manual run/dispatch controls, and run log/result viewing. Core LLMwiki decision remains: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority.
+Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, docs/context/automation.md, and .vibe/interview-log/iter-2.json first. Sprint 20 is passed: automation manifests, SQLite registry/run/event/schedule-state tables, `npm run tlgi -- automation dispatch`, user-level systemd timer files, `automations/fx-koreaexim-daily`, and `apps/ops-dashboard` are in place. Next planned work is Sprint 21: package the local ingest, wiki, automation, and ops dashboard stack into a repeatable one-shot Linux setup path. Core LLMwiki decision remains: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority.
 ```
 
 ## Latest Verification
 
+- Latest verification after Sprint 20 ops dashboard: `git diff --check` passed; `npm run typecheck` passed; focused `node --import tsx --test test/ops-dashboard.test.ts` passed (`2`); `npm run build` passed; full `npm test` passed (`463` passed, `1` skipped). The implementation commit is `cf33809 Add automation ops dashboard`. No Telegram worker/server restart was required because Sprint 20 adds a separate localhost dashboard path.
 - Latest verification after FX two-year backfill: `node --import tsx --test test/automation-core.test.ts` passed (`10`); `node --check automations/fx-koreaexim-daily/run.mjs` passed; `npm run typecheck` passed; full `npm test` passed (`460` passed, `1` skipped); `git diff --check` passed; wiki wrapper syntax checks passed; touched-file UTF-8/mojibake checks passed. No worker/server restart was required because this is a one-shot automation module path.
 - Latest verification after FX Korea Eximbank parser correction and data regeneration: `node --import tsx --test test/automation-core.test.ts` passed (`9`); `node --check automations/fx-koreaexim-daily/run.mjs` passed; `npm run typecheck` passed; full `npm test` passed (`460` passed, `1` skipped); `git diff --check` passed; touched-file UTF-8/mojibake checks passed. The regenerated `/home/tony/workspace/yoni-llm-wiki/raw/2026-04-28/fx_koreaexim_20260428` bundle is finalized and its wiki source shows 23 source rows and 4 selected currencies. No worker/server restart was required because this is a one-shot automation module path.
 - Latest verification after Sprint 19 FX Korea Eximbank daily module: `node --import tsx --test test/automation-core.test.ts` passed (`7`); `node --check automations/fx-koreaexim-daily/run.mjs` passed; `npm run tlgi -- automation list` showed `fx.koreaexim.daily` registered and missing only `FX_KOREAEXIM_AUTHKEY`; `npm run typecheck` passed; `npm run build` passed; full `npm test` passed (`458` passed, `1` skipped); `git diff --check` passed. No worker/server restart was required because Sprint 19 added an automation module and one-shot CLI/test/docs paths.

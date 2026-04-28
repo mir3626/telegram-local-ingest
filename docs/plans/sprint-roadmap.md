@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-20-ops-dashboard-automation
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module
-> **Pending**: sprint-20-ops-dashboard-automation, sprint-21-bootstrap-packaging, sprint-13-vault-reconcile-retention
+> **Current**: sprint-21-bootstrap-packaging (not started, started 2026-04-28)
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation
+> **Pending**: sprint-21-bootstrap-packaging, sprint-13-vault-reconcile-retention
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -323,6 +323,7 @@ Telegram mobile/desktop
   - Dashboard does not depend on or edit harness `vibe-dashboard` files.
   - Secrets are never displayed; only present/missing status is shown.
   - UI actions call the same ops CLI/core boundaries used by tests.
+- **status**: completed. Added `apps/ops-dashboard`, a product-owned localhost-only automation dashboard backed by the same automation-core and SQLite registry/run tables as `apps/ops-cli`. It shows module enabled/available/readiness state, next due time, last/recent runs, durable stdout/stderr/result viewers, raw bundle/wiki source links when recorded, and local enable/disable/manual-run/dispatch controls with optional `OPS_DASHBOARD_TOKEN` admin guard.
 
 ## Sprint 21 — Bootstrap Packaging
 
@@ -392,6 +393,21 @@ This iteration turns the completed Telegram ingest utility into a Karpathy-style
   - The adapter fails if it attempts to mutate `raw/**`.
   - Wiki output remains provider-neutral and can be driven by Claude, Codex, or a custom LLMwiki CLI.
 - **status**: completed. The wiki adapter now loads schema v2 `manifest.yaml`, resolves manifest-declared `wiki_inputs`, passes a provider-neutral `telegram-local-ingest.llmwiki.v1` contract with source/manifest/wiki-input/citation/index/log arguments to the configured command, rejects rendered outputs as wiki source inputs, requires `wiki/index.md` and `wiki/log.md` outputs, and keeps raw bundle snapshot checks before and after command execution. `docs/schemas/llmwiki.md` defines page, citation, and output rules, and fake-command tests cover index/log writes plus raw immutability.
+
+### Automation Packaging Continuation
+
+The automation packaging sprints were added to the active iteration after the LLMwiki ingest contract. Full sprint details live in their roadmap sections above; this compact continuation keeps the iteration-scoped preflight order aligned with the current work queue.
+
+- **id**: `sprint-17-automation-registry-cli`
+- **status**: completed.
+- **id**: `sprint-18-automation-dispatch-scheduler`
+- **status**: completed.
+- **id**: `sprint-19-fx-koreaexim-daily-module`
+- **status**: completed.
+- **id**: `sprint-20-ops-dashboard-automation`
+- **status**: completed.
+- **id**: `sprint-21-bootstrap-packaging`
+- **status**: planned next.
 
 ### Sprint 13 Carryover — Vault Reconcile And Retention
 
