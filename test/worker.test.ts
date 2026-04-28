@@ -87,7 +87,7 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
     const preprocessEvent = events.find((event) => event.type === "preprocess.completed");
     assert.ok(events.some((event) => event.type === "preprocess.completed"));
     assert.ok(languageEvent);
-    assert.match(JSON.stringify(preprocessEvent?.data), /raw\/2026-04-27\/tg_300_21\/extracted\/lead\.txt/);
+    assert.match(JSON.stringify(preprocessEvent?.data), new RegExp(escapeRegExp(path.join(bundle.bundlePath, "extracted", "lead.txt"))));
     assert.equal((languageEvent.data as { primaryLanguage: string }).primaryLanguage, "en");
     assert.equal((languageEvent.data as { translationNeeded: boolean }).translationNeeded, true);
     assert.ok(events.some((event) => event.type === "wiki.skipped"));
@@ -164,7 +164,8 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
     assert.equal(agentInputs[0]?.targetLanguage, "ko");
     assert.equal(agentInputs[0]?.defaultRelation, "business");
     assert.ok(agentInputs[0]?.artifacts.some((artifact) => artifact.fileName === "lead.txt"));
-    assert.match(agentInputs[0]?.artifacts[0]?.sourcePath ?? "", /vault\/raw\/2026-04-27\/tg_300_21\/extracted\/lead\.txt$/);
+    const bundle = mustGetSourceBundleForJob(dbHandle.db, "tg_300_21");
+    assert.equal(agentInputs[0]?.artifacts[0]?.sourcePath, path.join(bundle.bundlePath, "extracted", "lead.txt"));
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.kind, "agent_translation");
@@ -1391,6 +1392,187 @@ test("runWorkerOnce handles operator status without creating a job", async () =>
   }
 });
 
+test("runWorkerOnce routes plain text messages to wiki chat and chunks long replies", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat.mjs", [
+    "const messageIndex = process.argv.indexOf('--message');",
+    "if (process.argv[messageIndex + 1] !== '제품 찾아줘') process.exit(2);",
+    "process.stdout.write('가'.repeat(3600) + '\\n\\n끝');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "제품 찾아줘", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 3);
+    assert.match(sentMessages[0]?.text ?? "", /위키 답변 준비 중/);
+    assert.match(sentMessages[1]?.text ?? "", /^\(1\/2\)/);
+    assert.match(sentMessages[2]?.text ?? "", /^\(2\/2\)/);
+    assert.match(sentMessages[2]?.text ?? "", /끝/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce routes unregistered slash text to wiki chat", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-unknown-slash.mjs", [
+    "const messageIndex = process.argv.indexOf('--message');",
+    "if (process.argv[messageIndex + 1] !== '/wiki 린트를 수행하고 1년 이상 경과된 데이터 삭제 대상 알려줘') process.exit(2);",
+    "process.stdout.write('agent-routed');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/wiki 린트를 수행하고 1년 이상 경과된 데이터 삭제 대상 알려줘", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 2);
+    assert.match(sentMessages[0]?.text ?? "", /위키 답변 준비 중/);
+    assert.equal(sentMessages[1]?.text, "agent-routed");
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce does not treat slash command prefixes as registered commands", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-command-prefix.mjs", [
+    "const messageIndex = process.argv.indexOf('--message');",
+    "if (process.argv[messageIndex + 1] !== '/statusfoo 최근 상태 알려줘') process.exit(2);",
+    "process.stdout.write('agent-routed');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/statusfoo 최근 상태 알려줘", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 2);
+    assert.match(sentMessages[0]?.text ?? "", /위키 답변 준비 중/);
+    assert.equal(sentMessages[1]?.text, "agent-routed");
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce keeps fileless /ingest as a registered command instead of wiki chat", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  try {
+    migrate(dbHandle.db);
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 1);
+    assert.match(sentMessages[0]?.text ?? "", /\/ingest는 파일과 함께/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce rejects wiki chat raw mutations", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-raw-mutation.mjs", [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const rawRoot = process.argv[process.argv.indexOf('--raw-root') + 1];",
+    "fs.mkdirSync(rawRoot, { recursive: true });",
+    "fs.writeFileSync(path.join(rawRoot, 'bad.txt'), 'bad', 'utf8');",
+    "process.stdout.write('bad');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  fs.mkdirSync(path.join(fixture.vaultPath, "raw"), { recursive: true });
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "raw 수정해봐", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 2);
+    assert.match(sentMessages[0]?.text ?? "", /위키 답변 준비 중/);
+    assert.match(sentMessages[1]?.text ?? "", /위키 채팅 처리에 실패했습니다/);
+    assert.match(sentMessages[1]?.text ?? "", /modified raw files/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce answers /start with user id before allowlist gating", async () => {
   const fixture = createFixture();
   const dbHandle = openIngestDatabase(":memory:");
@@ -1584,7 +1766,9 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
       maxSingleSegmentTimeMs: 30_000,
       timeoutMs: 60 * 60 * 1000,
     },
-    wiki: {},
+    wiki: {
+      chatTimeoutMs: 5 * 60 * 1000,
+    },
     translation: {
       defaultRelation: "business",
       targetLanguage: "ko",
@@ -2030,6 +2214,21 @@ function mockTelegramFetch(
         },
       });
     }
+    if (method === "editMessageText") {
+      sentMessages.push(body as { chat_id: string; text: string });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: (body as { message_id: number }).message_id,
+          date: 1,
+          chat: { id: Number((body as { chat_id: string }).chat_id), type: "private" },
+          text: (body as { text: string }).text,
+        },
+      });
+    }
+    if (method === "sendChatAction") {
+      return jsonResponse({ ok: true, result: true });
+    }
     return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
   };
 }
@@ -2391,6 +2590,10 @@ function mockRtzrTranscriber(
       };
     },
   };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

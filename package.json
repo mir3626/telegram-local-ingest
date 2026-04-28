@@ -24,6 +24,7 @@
     "setup:linux": "bash scripts/setup-linux-dependencies.sh",
     "setup:linux:sensevoice": "bash scripts/setup-linux-dependencies.sh --with-sensevoice",
     "setup:docx-rendering": "bash scripts/setup-docx-template-rendering.sh",
+    "tlgi": "npx tsx apps/ops-cli/src/index.ts",
     "ops:start": "bash scripts/start-local-stack.sh",
     "ops:stop": "bash scripts/stop-local-stack.sh",
     "ops:restart": "bash scripts/restart-local-stack.sh",

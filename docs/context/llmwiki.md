@@ -44,6 +44,10 @@ Rendered convenience files such as `_translated.docx`, `_translated.pdf`, image 
 
 The provider-neutral ingest contract is versioned as `telegram-local-ingest.llmwiki.v1` and documented in `docs/schemas/llmwiki.md`. The worker-side adapter loads `manifest.yaml`, resolves declared `wiki_inputs`, passes those inputs to the configured wiki command, and requires the command to update `wiki/index.md` plus `wiki/log.md`. The adapter keeps raw bundle snapshot checks before and after execution so wiki commands can add/update `wiki/**` but cannot mutate `raw/**`.
 
+## Chat Contract
+
+`WIKI_CHAT_COMMAND` is a separate natural-language wrapper for fileless Telegram messages. Registered bot/operator slash commands are handled before this wrapper; everything else, including ordinary text, unknown slash text, and compound requests, should go to the read-only wiki chat agent instead of regex-based intent matching. The wrapper must preserve the same raw immutability rule: `raw/**` is read-only and source changes must go through finalized raw bundles or explicit managed maintenance commands. The worker enforces this with raw tree snapshots and uses the shared wiki lock path to avoid overlapping wiki writes.
+
 ## Operational Rule
 
 Preprocessing that creates canonical wiki text must happen before raw bundle finalization or be copied into the finalized raw bundle before wiki ingest. Runtime-only preprocessing artifacts are not sufficient for LLMwiki because they are not durable source evidence. Current worker flow extracts text/DOCX/PDF/EML/image canonical artifacts before `writeRawBundle`, copies them into `raw/**/extracted/`, and points `preprocess.completed` at those finalized raw paths. STT transcript Markdown is copied from STT events into the same raw extracted layer and cleaned before language scoring.

@@ -41,6 +41,8 @@ Telegram clients
    - `packages/preprocessors`: Deterministic text/transcript collection boundary before agent execution.
    - `packages/language-detector`: Script-based primary-language and translation-needed check.
    - `packages/agent-adapter`: Local command adapter for Codex or Claude Code translation/formatting execution.
+   - `packages/automation-core`: Manifest discovery, readiness checks, and one-shot automation module execution.
+   - `apps/ops-cli`: Product-owned operator CLI for automation registry, enable/disable, manual runs, and logs.
 
 ## Runtime Directories
 
@@ -55,6 +57,8 @@ runtime/
     <job_id>/
       <output_id>/
   logs/
+  automation/
+    runs/
   wiki.lock
 ```
 
@@ -90,6 +94,14 @@ Sprint 12 starts output lifecycle separation. Hidden callback interfaces exist f
 
 Iteration 2 adds the LLMwiki raw policy. Wiki raw means the finalized raw bundle plus deterministic canonical text projections, not the rendered user deliverables. Raw bundle schema version 2 writes `wiki_inputs` entries classified as `canonical_text`, `translation_aid`, `evidence_original`, or `structure`. LLMwiki agents should read `source.md`, `manifest.yaml`, and declared canonical inputs by default; they must not treat `_translated.*`, image overlay PDFs, transcript DOCX files, or `runtime/outputs/**` as source authority. DOCX/PDF/EML/image/text canonical preprocessing now feeds finalized `raw/**/extracted/` artifacts before wiki ingest; retries reuse finalized bundles instead of rewriting source evidence.
 
+## Automation Runtime
+
+Product automations are registered by folder manifests under `automations/*` and operated through `npm run tlgi -- automation ...`. `package.json` should expose the stable CLI entrypoint, not one command per batch. Sprint 17 stores module snapshots and run history in SQLite tables `automation_modules`, `automation_runs`, and `automation_events`; run files live under `runtime/automation/runs/<run_id>/stdout.log`, `stderr.log`, and `result.json`. Sprint 18 adds `automation_schedule_state` for last due key, next due time, consecutive failure count, and retry-after metadata.
+
+Automation modules are one-shot processes. Scheduling is a single host timer that invokes `automation dispatch`; the dispatcher decides which enabled modules are due and exits. This keeps daily or periodic jobs like exchange-rate ingestion from requiring a 24-hour resident worker. The dispatcher uses schedule-window idempotency keys to avoid duplicate daily/interval runs, and `automation timer install` writes user-level systemd service/timer files without activating them implicitly. Modules that create knowledge inputs should write immutable raw bundles and call the existing wiki ingest adapter instead of bypassing raw/wiki boundaries.
+
+`fx.koreaexim.daily` is implemented as a manifest module under `automations/fx-koreaexim-daily`. It uses the same vault raw-bundle writer and wiki ingest adapter packages as Telegram jobs, but its source identity is deterministic (`fx_koreaexim_<YYYYMMDD>`) rather than Telegram-derived. API JSON is evidence; Markdown and CSV extracted artifacts are canonical wiki inputs.
+
 ## Obsidian Vault Layout
 
 ```text
@@ -113,6 +125,8 @@ Iteration 2 adds the LLMwiki raw policy. Wiki raw means the finalized raw bundle
 Raw bundles are append-only/finalized artifacts. The wiki ingest adapter may read `raw/**/source.md` and modify `wiki/**`, but must not rewrite `raw/**`.
 
 The wiki ingest adapter reads the bundle contract: `source.md`, `manifest.yaml`, and manifest-declared `wiki_inputs`. It passes contract version `telegram-local-ingest.llmwiki.v1`, source/manifest paths, JSON-encoded wiki input records, citation requirements, and required `wiki/index.md` plus `wiki/log.md` paths to the configured provider-neutral command. Original binaries remain available for audit through `evidence_original`, but the token-efficient default input is canonical text.
+
+Plain Telegram text messages that are not registered operator commands and contain no files run through `WIKI_CHAT_COMMAND` instead of creating a job. The worker passes `--message`, `--wiki-root`, `--raw-root`, `--job-id`, `--chat-id`, `--user-id`, and the shared wiki lock path to the command. Registered slash commands such as `/start`, `/status`, `/retry`, `/cancel`, and file-backed `/ingest` stay deterministic at the worker layer; ordinary text and unknown slash text go to the read-only wiki chat agent. The worker snapshots `raw/**` before and after execution and rejects the chat result if raw files changed. While the command is running, the bot sends periodic `typing` chat actions and a pending message; the final success or error replaces that pending message, and additional chunks are sent only when the answer is too long for one Telegram message.
 
 Deletion is a separate lifecycle concern from mutation. While present, finalized raw bundles remain immutable. If a source package is no longer valuable, the preferred path is a managed delete command that resolves the job/source bundle from SQLite, removes or tombstones related runtime outputs, delegates wiki note cleanup to the configured LLMwiki/wiki tool, and records a deletion event in SQLite. Manual filesystem deletion is supported only as drift to be detected by a deterministic reconcile command.
 

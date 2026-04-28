@@ -162,6 +162,12 @@ export interface SendMessageOptions {
   replyMarkup?: InlineKeyboardMarkup;
 }
 
+export type TelegramChatAction = "typing" | "upload_document";
+
+export interface EditMessageTextOptions {
+  replyMarkup?: InlineKeyboardMarkup;
+}
+
 export interface SendDocumentOptions {
   caption?: string;
   fileName?: string;
@@ -243,6 +249,27 @@ export class TelegramBotApiClient {
       chat_id: chatId,
       text,
       ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
+    });
+  }
+
+  async editMessageText(
+    chatId: string,
+    messageId: number,
+    text: string,
+    options: EditMessageTextOptions = {},
+  ): Promise<TelegramMessage | boolean> {
+    return this.request<TelegramMessage | boolean>("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
+    });
+  }
+
+  async sendChatAction(chatId: string, action: TelegramChatAction = "typing"): Promise<boolean> {
+    return this.request<boolean>("sendChatAction", {
+      chat_id: chatId,
+      action,
     });
   }
 

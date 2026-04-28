@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { IngestSource, JobStatus } from "@telegram-local-ingest/core";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 6;
 
 export interface DbHandle {
   db: DatabaseSync;
@@ -135,6 +135,87 @@ export interface JobClaim {
   expiresAt: string;
 }
 
+export type AutomationRunStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
+
+export interface AutomationModuleInput {
+  id: string;
+  manifest: unknown;
+  enabled: boolean;
+  now?: string;
+}
+
+export interface StoredAutomationModule {
+  id: string;
+  manifest: unknown;
+  enabled: boolean;
+  available: boolean;
+  installedAt: string;
+  updatedAt: string;
+}
+
+export interface CreateAutomationRunInput {
+  id: string;
+  moduleId: string;
+  trigger: string;
+  idempotencyKey?: string;
+  stdoutPath: string;
+  stderrPath: string;
+  resultPath: string;
+  now?: string;
+}
+
+export interface CompleteAutomationRunInput {
+  id: string;
+  status: Exclude<AutomationRunStatus, "RUNNING">;
+  exitCode?: number;
+  error?: string;
+  endedAt?: string;
+}
+
+export interface StoredAutomationRun {
+  id: string;
+  moduleId: string;
+  trigger: string;
+  status: AutomationRunStatus;
+  idempotencyKey?: string;
+  startedAt: string;
+  endedAt?: string;
+  exitCode?: number;
+  stdoutPath: string;
+  stderrPath: string;
+  resultPath: string;
+  error?: string;
+}
+
+export interface StoredAutomationEvent {
+  id: number;
+  runId: string;
+  level: string;
+  message: string;
+  data?: unknown;
+  createdAt: string;
+}
+
+export interface UpsertAutomationScheduleStateInput {
+  moduleId: string;
+  lastDueKey?: string;
+  lastDueAt?: string;
+  nextDueAt?: string;
+  consecutiveFailures?: number;
+  retryAfter?: string;
+  updatedAt?: string;
+}
+
+export interface StoredAutomationScheduleState {
+  moduleId: string;
+  lastDueKey?: string;
+  lastDueAt?: string;
+  nextDueAt?: string;
+  consecutiveFailures: number;
+  retryAfter?: string;
+  updatedAt: string;
+}
+
 export interface ClaimRunnableJobsInput {
   workerId: string;
   limit: number;
@@ -218,6 +299,18 @@ export function migrate(db: DatabaseSync): void {
       applyV3(db);
       recordMigration(db, 3);
     }
+    if (current < 4) {
+      applyV4(db);
+      recordMigration(db, 4);
+    }
+    if (current < 5) {
+      applyV5(db);
+      recordMigration(db, 5);
+    }
+    if (current < 6) {
+      applyV6(db);
+      recordMigration(db, 6);
+    }
     db.exec("COMMIT;");
   } catch (error) {
     db.exec("ROLLBACK;");
@@ -293,10 +386,10 @@ export function claimRunnableJobs(db: DatabaseSync, input: ClaimRunnableJobsInpu
     return [];
   }
 
-  const statusPlaceholders = statuses.map(() => "?").join(", ");
+  const statusPlaceholders = statuses.map(() => '?').join(", ");
   const excludeJobIds = input.excludeJobIds ?? [];
   const excludeClause = excludeJobIds.length > 0
-    ? `AND jobs.id NOT IN (${excludeJobIds.map(() => "?").join(", ")})`
+    ? `AND jobs.id NOT IN (${excludeJobIds.map(() => '?').join(", ")})`
     : "";
   const rows = db.prepare(`
     SELECT jobs.*
@@ -665,6 +758,232 @@ export function markJobOutputDeleted(db: DatabaseSync, outputId: string, deleted
   return mustGetJobOutput(db, outputId);
 }
 
+export function upsertAutomationModule(db: DatabaseSync, input: AutomationModuleInput): StoredAutomationModule {
+  const timestamp = input.now ?? nowIso();
+  db.prepare(`
+    INSERT INTO automation_modules (id, manifest_json, enabled, installed_at, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      manifest_json = excluded.manifest_json,
+      available = 1,
+      updated_at = excluded.updated_at
+  `).run(input.id, JSON.stringify(input.manifest), input.enabled ? 1 : 0, timestamp, timestamp);
+  return mustGetAutomationModule(db, input.id);
+}
+
+export function markAutomationModulesUnavailableExcept(
+  db: DatabaseSync,
+  availableIds: string[],
+  updatedAt = nowIso(),
+): number {
+  if (availableIds.length === 0) {
+    const result = db.prepare("UPDATE automation_modules SET available = 0, updated_at = ?").run(updatedAt);
+    return Number(result.changes);
+  }
+  const placeholders = availableIds.map(() => '?').join(", ");
+  const result = db.prepare(`
+    UPDATE automation_modules
+    SET available = 0, updated_at = ?
+    WHERE id NOT IN (${placeholders})
+  `).run(updatedAt, ...availableIds);
+  return Number(result.changes);
+}
+
+export function listAutomationModules(db: DatabaseSync): StoredAutomationModule[] {
+  return db
+    .prepare("SELECT * FROM automation_modules ORDER BY id ASC")
+    .all()
+    .map((row) => mapAutomationModule(row as unknown as AutomationModuleRow));
+}
+
+export function getAutomationModule(db: DatabaseSync, id: string): StoredAutomationModule | null {
+  const row = db.prepare("SELECT * FROM automation_modules WHERE id = ?").get(id) as AutomationModuleRow | undefined;
+  return row ? mapAutomationModule(row) : null;
+}
+
+export function mustGetAutomationModule(db: DatabaseSync, id: string): StoredAutomationModule {
+  const module = getAutomationModule(db, id);
+  if (!module) {
+    throw new Error(`Automation module not found: ${id}`);
+  }
+  return module;
+}
+
+export function setAutomationModuleEnabled(
+  db: DatabaseSync,
+  id: string,
+  enabled: boolean,
+  updatedAt = nowIso(),
+): StoredAutomationModule {
+  const result = db
+    .prepare("UPDATE automation_modules SET enabled = ?, updated_at = ? WHERE id = ?")
+    .run(enabled ? 1 : 0, updatedAt, id);
+  if (result.changes === 0) {
+    throw new Error(`Automation module not found: ${id}`);
+  }
+  return mustGetAutomationModule(db, id);
+}
+
+export function createAutomationRun(db: DatabaseSync, input: CreateAutomationRunInput): StoredAutomationRun {
+  const timestamp = input.now ?? nowIso();
+  db.prepare(`
+    INSERT INTO automation_runs (
+      id, module_id, trigger, status, idempotency_key, started_at,
+      stdout_path, stderr_path, result_path
+    ) VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?)
+  `).run(
+    input.id,
+    input.moduleId,
+    input.trigger,
+    input.idempotencyKey ?? null,
+    timestamp,
+    input.stdoutPath,
+    input.stderrPath,
+    input.resultPath,
+  );
+  appendAutomationEvent(db, input.id, "info", "Automation run started", {
+    moduleId: input.moduleId,
+    trigger: input.trigger,
+  }, timestamp);
+  return mustGetAutomationRun(db, input.id);
+}
+
+export function completeAutomationRun(db: DatabaseSync, input: CompleteAutomationRunInput): StoredAutomationRun {
+  const endedAt = input.endedAt ?? nowIso();
+  db.prepare(`
+    UPDATE automation_runs
+    SET status = ?, ended_at = ?, exit_code = ?, error = ?
+    WHERE id = ?
+  `).run(input.status, endedAt, input.exitCode ?? null, input.error ?? null, input.id);
+  appendAutomationEvent(db, input.id, input.status === "SUCCEEDED" ? "info" : "error", "Automation run completed", {
+    status: input.status,
+    exitCode: input.exitCode,
+    error: input.error,
+  }, endedAt);
+  return mustGetAutomationRun(db, input.id);
+}
+
+export function getAutomationRun(db: DatabaseSync, id: string): StoredAutomationRun | null {
+  const row = db.prepare("SELECT * FROM automation_runs WHERE id = ?").get(id) as AutomationRunRow | undefined;
+  return row ? mapAutomationRun(row) : null;
+}
+
+export function getAutomationRunByIdempotency(
+  db: DatabaseSync,
+  moduleId: string,
+  idempotencyKey: string,
+): StoredAutomationRun | null {
+  const row = db
+    .prepare("SELECT * FROM automation_runs WHERE module_id = ? AND idempotency_key = ?")
+    .get(moduleId, idempotencyKey) as AutomationRunRow | undefined;
+  return row ? mapAutomationRun(row) : null;
+}
+
+export function mustGetAutomationRun(db: DatabaseSync, id: string): StoredAutomationRun {
+  const run = getAutomationRun(db, id);
+  if (!run) {
+    throw new Error(`Automation run not found: ${id}`);
+  }
+  return run;
+}
+
+export function listAutomationRuns(
+  db: DatabaseSync,
+  options: { moduleId?: string; limit?: number } = {},
+): StoredAutomationRun[] {
+  const limit = options.limit ?? 20;
+  if (options.moduleId) {
+    return db
+      .prepare("SELECT * FROM automation_runs WHERE module_id = ? ORDER BY started_at DESC LIMIT ?")
+      .all(options.moduleId, limit)
+      .map((row) => mapAutomationRun(row as unknown as AutomationRunRow));
+  }
+  return db
+    .prepare("SELECT * FROM automation_runs ORDER BY started_at DESC LIMIT ?")
+    .all(limit)
+    .map((row) => mapAutomationRun(row as unknown as AutomationRunRow));
+}
+
+export function appendAutomationEvent(
+  db: DatabaseSync,
+  runId: string,
+  level: string,
+  message: string,
+  data?: unknown,
+  createdAt = nowIso(),
+): StoredAutomationEvent {
+  const result = db.prepare(`
+    INSERT INTO automation_events (run_id, level, message, data_json, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(runId, level, message, data === undefined ? null : JSON.stringify(data), createdAt);
+  return mustGetAutomationEvent(db, Number(result.lastInsertRowid));
+}
+
+export function listAutomationEvents(db: DatabaseSync, runId: string): StoredAutomationEvent[] {
+  return db
+    .prepare("SELECT * FROM automation_events WHERE run_id = ? ORDER BY id ASC")
+    .all(runId)
+    .map((row) => mapAutomationEvent(row as unknown as AutomationEventRow));
+}
+
+export function mustGetAutomationEvent(db: DatabaseSync, id: number): StoredAutomationEvent {
+  const row = db.prepare("SELECT * FROM automation_events WHERE id = ?").get(id) as AutomationEventRow | undefined;
+  if (!row) {
+    throw new Error(`Automation event not found: ${id}`);
+  }
+  return mapAutomationEvent(row);
+}
+
+export function upsertAutomationScheduleState(
+  db: DatabaseSync,
+  input: UpsertAutomationScheduleStateInput,
+): StoredAutomationScheduleState {
+  const updatedAt = input.updatedAt ?? nowIso();
+  db.prepare(`
+    INSERT INTO automation_schedule_state (
+      module_id, last_due_key, last_due_at, next_due_at,
+      consecutive_failures, retry_after, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(module_id) DO UPDATE SET
+      last_due_key = excluded.last_due_key,
+      last_due_at = excluded.last_due_at,
+      next_due_at = excluded.next_due_at,
+      consecutive_failures = excluded.consecutive_failures,
+      retry_after = excluded.retry_after,
+      updated_at = excluded.updated_at
+  `).run(
+    input.moduleId,
+    input.lastDueKey ?? null,
+    input.lastDueAt ?? null,
+    input.nextDueAt ?? null,
+    input.consecutiveFailures ?? 0,
+    input.retryAfter ?? null,
+    updatedAt,
+  );
+  return mustGetAutomationScheduleState(db, input.moduleId);
+}
+
+export function getAutomationScheduleState(
+  db: DatabaseSync,
+  moduleId: string,
+): StoredAutomationScheduleState | null {
+  const row = db
+    .prepare("SELECT * FROM automation_schedule_state WHERE module_id = ?")
+    .get(moduleId) as AutomationScheduleStateRow | undefined;
+  return row ? mapAutomationScheduleState(row) : null;
+}
+
+export function mustGetAutomationScheduleState(
+  db: DatabaseSync,
+  moduleId: string,
+): StoredAutomationScheduleState {
+  const state = getAutomationScheduleState(db, moduleId);
+  if (!state) {
+    throw new Error(`Automation schedule state not found: ${moduleId}`);
+  }
+  return state;
+}
+
 function applyV1(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE jobs (
@@ -772,8 +1091,83 @@ function applyV3(db: DatabaseSync): void {
   `);
 }
 
+function applyV4(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE automation_modules (
+      id TEXT PRIMARY KEY,
+      manifest_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      available INTEGER NOT NULL DEFAULT 1,
+      installed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE automation_runs (
+      id TEXT PRIMARY KEY,
+      module_id TEXT NOT NULL REFERENCES automation_modules(id) ON DELETE CASCADE,
+      trigger TEXT NOT NULL,
+      status TEXT NOT NULL,
+      idempotency_key TEXT,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      exit_code INTEGER,
+      stdout_path TEXT NOT NULL,
+      stderr_path TEXT NOT NULL,
+      result_path TEXT NOT NULL,
+      error TEXT
+    );
+
+    CREATE INDEX idx_automation_runs_module_started ON automation_runs(module_id, started_at DESC);
+    CREATE INDEX idx_automation_runs_status_started ON automation_runs(status, started_at DESC);
+    CREATE UNIQUE INDEX idx_automation_runs_idempotency
+      ON automation_runs(module_id, idempotency_key)
+      WHERE idempotency_key IS NOT NULL;
+
+    CREATE TABLE automation_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+      level TEXT NOT NULL,
+      message TEXT NOT NULL,
+      data_json TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX idx_automation_events_run_id_id ON automation_events(run_id, id);
+  `);
+}
+
+function applyV5(db: DatabaseSync): void {
+  if (!hasTableColumn(db, "automation_modules", "available")) {
+    db.exec("ALTER TABLE automation_modules ADD COLUMN available INTEGER NOT NULL DEFAULT 1;");
+  }
+}
+
+function applyV6(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS automation_schedule_state (
+      module_id TEXT PRIMARY KEY REFERENCES automation_modules(id) ON DELETE CASCADE,
+      last_due_key TEXT,
+      last_due_at TEXT,
+      next_due_at TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      retry_after TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_automation_schedule_next_due
+      ON automation_schedule_state(next_due_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_schedule_retry_after
+      ON automation_schedule_state(retry_after);
+  `);
+}
+
 function recordMigration(db: DatabaseSync, version: number): void {
-  db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(version, nowIso());
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(version, nowIso());
+}
+
+function hasTableColumn(db: DatabaseSync, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
 }
 
 function nowIso(): string {
@@ -892,6 +1286,60 @@ function mapJobOutput(row: JobOutputRow): StoredJobOutput {
   return output;
 }
 
+function mapAutomationModule(row: AutomationModuleRow): StoredAutomationModule {
+  return {
+    id: row.id,
+    manifest: parseOptionalJson(row.manifest_json),
+    enabled: row.enabled === 1,
+    available: row.available === 1,
+    installedAt: row.installed_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAutomationRun(row: AutomationRunRow): StoredAutomationRun {
+  const run: StoredAutomationRun = {
+    id: row.id,
+    moduleId: row.module_id,
+    trigger: row.trigger,
+    status: row.status as AutomationRunStatus,
+    startedAt: row.started_at,
+    stdoutPath: row.stdout_path,
+    stderrPath: row.stderr_path,
+    resultPath: row.result_path,
+  };
+  assignDefined(run, "idempotencyKey", definedString(row.idempotency_key));
+  assignDefined(run, "endedAt", definedString(row.ended_at));
+  assignDefined(run, "exitCode", definedNumber(row.exit_code));
+  assignDefined(run, "error", definedString(row.error));
+  return run;
+}
+
+function mapAutomationEvent(row: AutomationEventRow): StoredAutomationEvent {
+  const event: StoredAutomationEvent = {
+    id: row.id,
+    runId: row.run_id,
+    level: row.level,
+    message: row.message,
+    createdAt: row.created_at,
+  };
+  assignDefined(event, "data", parseOptionalJson(row.data_json));
+  return event;
+}
+
+function mapAutomationScheduleState(row: AutomationScheduleStateRow): StoredAutomationScheduleState {
+  const state: StoredAutomationScheduleState = {
+    moduleId: row.module_id,
+    consecutiveFailures: row.consecutive_failures,
+    updatedAt: row.updated_at,
+  };
+  assignDefined(state, "lastDueKey", definedString(row.last_due_key));
+  assignDefined(state, "lastDueAt", definedString(row.last_due_at));
+  assignDefined(state, "nextDueAt", definedString(row.next_due_at));
+  assignDefined(state, "retryAfter", definedString(row.retry_after));
+  return state;
+}
+
 function assignDefined<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | undefined): void {
   if (value !== undefined) {
     target[key] = value;
@@ -968,4 +1416,47 @@ interface JobClaimRow {
   claimed_at: string;
   heartbeat_at: string;
   expires_at: string;
+}
+
+interface AutomationModuleRow {
+  id: string;
+  manifest_json: string;
+  enabled: number;
+  available: number;
+  installed_at: string;
+  updated_at: string;
+}
+
+interface AutomationRunRow {
+  id: string;
+  module_id: string;
+  trigger: string;
+  status: string;
+  idempotency_key: string | null;
+  started_at: string;
+  ended_at: string | null;
+  exit_code: number | null;
+  stdout_path: string;
+  stderr_path: string;
+  result_path: string;
+  error: string | null;
+}
+
+interface AutomationEventRow {
+  id: number;
+  run_id: string;
+  level: string;
+  message: string;
+  data_json: string | null;
+  created_at: string;
+}
+
+interface AutomationScheduleStateRow {
+  module_id: string;
+  last_due_key: string | null;
+  last_due_at: string | null;
+  next_due_at: string | null;
+  consecutive_failures: number;
+  retry_after: string | null;
+  updated_at: string;
 }

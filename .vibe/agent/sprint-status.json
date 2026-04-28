@@ -153,11 +153,50 @@
       "status": "planned",
       "startedAt": "2026-04-27T06:04:05.000Z",
       "planPromptPath": "docs/prompts/sprint-sprint-13-vault-reconcile-retention-plan.md"
+    },
+    {
+      "id": "sprint-17-automation-registry-cli",
+      "name": "Automation Registry And CLI Foundation",
+      "status": "passed",
+      "startedAt": "2026-04-27T13:06:28.000Z",
+      "completedAt": "2026-04-27T13:18:19.444Z",
+      "actualLoc": {
+        "added": 1468,
+        "deleted": 12,
+        "net": 1456,
+        "filesChanged": 16
+      }
+    },
+    {
+      "id": "sprint-18-automation-dispatch-scheduler",
+      "name": "Automation Dispatch Scheduler",
+      "status": "passed",
+      "startedAt": "2026-04-27T13:06:28.000Z",
+      "completedAt": "2026-04-27T13:27:15.297Z"
+    },
+    {
+      "id": "sprint-19-fx-koreaexim-daily-module",
+      "name": "FX Koreaexim Daily Module",
+      "status": "passed",
+      "startedAt": "2026-04-27T13:06:28.000Z",
+      "completedAt": "2026-04-27T13:32:38.571Z"
+    },
+    {
+      "id": "sprint-20-ops-dashboard-automation",
+      "name": "Ops Dashboard Automation Controls",
+      "status": "planned",
+      "startedAt": "2026-04-27T13:06:28.000Z"
+    },
+    {
+      "id": "sprint-21-bootstrap-packaging",
+      "name": "Bootstrap Packaging",
+      "status": "planned",
+      "startedAt": "2026-04-27T13:06:28.000Z"
     }
   ],
   "handoff": {
-    "currentSprintId": "idle",
-    "lastActionSummary": "Added provider-neutral LLMwiki ingest contract loading manifest schema v2 wiki_inputs, command arguments for source/manifest/citations/index/log, required wiki index/log outputs, rendered-output rejection, and schema documentation.",
+    "currentSprintId": "sprint-20-ops-dashboard-automation",
+    "lastActionSummary": "Completed Sprint 19 Korea Eximbank daily FX automation module; next is product ops dashboard automation controls.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -167,12 +206,13 @@
       "LLM agent only updates wiki through adapter",
       "Runtime outputs are TTL cache artifacts, not source-of-truth vault content",
       "LLMwiki reads manifest-declared canonical wiki inputs, not rendered Telegram download outputs",
+      "Automation modules are product-owned one-shot tasks registered by manifest, not package.json script sprawl",
       "Personal OAuth-backed agent automation is operator-only",
       "Pre-agent language checks must be deterministic and not LLM-dependent",
       "Prefer official Anthropic skills for document tasks when a suitable official skill exists"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-27T06:57:07.962Z"
+    "updatedAt": "2026-04-27T13:32:38.571Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -236,57 +276,74 @@
       "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
       "acknowledgedAt": "2026-04-27T06:58:22.001Z",
       "acknowledgement": "INFO-level mature-downstream LOC signal; Sprint 16 added a narrow adapter contract and tests without broad app refactoring."
+    },
+    {
+      "id": "lightweight-audit-sprint-19-fx-koreaexim-daily-module",
+      "raisedBy": "vibe-audit-lightweight",
+      "targetSprint": "*",
+      "text": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "status": "acknowledged",
+      "createdAt": "2026-04-27T13:34:42.013Z",
+      "level": "INFO",
+      "code": "LOC_THRESHOLD_BREACH",
+      "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "acknowledgedAt": "2026-04-27T13:34:56.187Z",
+      "acknowledgement": "INFO-level mature-downstream LOC signal; Sprint 17-19 changes were bounded to automation CLI/module paths and passed focused/full verification."
     }
   ],
   "lastSprintScope": [
-    "apps/worker/src/index.ts",
-    "test/worker.test.ts",
-    "docs/plans/sprint-roadmap.md",
-    ".vibe/agent/sprint-status.json",
-    ".vibe/agent/handoff.md",
-    ".vibe/agent/session-log.md",
-    "packages/vault/src/index.ts",
-    "test/vault.test.ts",
-    "docs/context/llmwiki.md",
+    ".env.example",
+    "README.md",
+    "automations/README.md",
+    "automations/fx-koreaexim-daily/README.md",
+    "automations/fx-koreaexim-daily/manifest.json",
+    "automations/fx-koreaexim-daily/run.mjs",
+    "apps/ops-cli/package.json",
+    "apps/ops-cli/src/index.ts",
+    "docs/context/automation.md",
     "docs/context/architecture.md",
-    "docs/context/conventions.md",
-    ".vibe/agent/iteration-history.json",
-    "packages/preprocessors/src/index.ts",
-    "packages/wiki-adapter/src/index.ts",
-    "test/wiki-adapter.test.ts",
-    "docs/schemas/llmwiki.md",
-    "docs/prompts/sprint-sprint-16-llmwiki-ingest-contract-plan.md"
+    "docs/context/product.md",
+    "docs/plans/sprint-roadmap.md",
+    "package.json",
+    "package-lock.json",
+    "packages/db/src/index.ts",
+    "packages/automation-core/package.json",
+    "packages/automation-core/src/index.ts",
+    "test/automation-core.test.ts",
+    ".vibe/agent/sprint-status.json"
   ],
   "lastSprintScopeGlob": [
-    "apps/worker/src/index.ts",
-    "test/worker.test.ts",
-    "docs/plans/sprint-roadmap.md",
-    ".vibe/agent/sprint-status.json",
-    ".vibe/agent/handoff.md",
-    ".vibe/agent/session-log.md",
-    "packages/vault/src/index.ts",
-    "test/vault.test.ts",
-    "docs/context/llmwiki.md",
+    ".env.example",
+    "README.md",
+    "automations/README.md",
+    "automations/fx-koreaexim-daily/README.md",
+    "automations/fx-koreaexim-daily/manifest.json",
+    "automations/fx-koreaexim-daily/run.mjs",
+    "apps/ops-cli/package.json",
+    "apps/ops-cli/src/index.ts",
+    "docs/context/automation.md",
     "docs/context/architecture.md",
-    "docs/context/conventions.md",
-    ".vibe/agent/iteration-history.json",
-    "packages/preprocessors/src/index.ts",
-    "packages/wiki-adapter/src/index.ts",
-    "test/wiki-adapter.test.ts",
-    "docs/schemas/llmwiki.md",
-    "docs/prompts/sprint-sprint-16-llmwiki-ingest-contract-plan.md"
+    "docs/context/product.md",
+    "docs/plans/sprint-roadmap.md",
+    "package.json",
+    "package-lock.json",
+    "packages/db/src/index.ts",
+    "packages/automation-core/package.json",
+    "packages/automation-core/src/index.ts",
+    "test/automation-core.test.ts",
+    ".vibe/agent/sprint-status.json"
   ],
-  "sprintsSinceLastAudit": 2,
-  "stateUpdatedAt": "2026-04-27T06:57:07.962Z",
-  "verifiedAt": "2026-04-27T06:18:40.683Z",
+  "sprintsSinceLastAudit": 0,
+  "stateUpdatedAt": "2026-04-27T13:34:56.186Z",
+  "verifiedAt": "2026-04-27T13:32:38.571Z",
   "verificationCommands": [
     {
       "id": "typecheck",
       "command": "npm run typecheck"
     },
     {
-      "id": "focused-tests",
-      "command": "node --import tsx --test test/vault.test.ts test/worker.test.ts"
+      "id": "automation-core-tests",
+      "command": "node --import tsx --test test/automation-core.test.ts"
     },
     {
       "id": "test",
@@ -297,12 +354,8 @@
       "command": "npm run build"
     },
     {
-      "id": "preflight",
-      "command": "node scripts/vibe-preflight.mjs"
-    },
-    {
-      "id": "ops-restart",
-      "command": "npm run ops:restart"
+      "id": "diff-check",
+      "command": "git diff --check"
     }
   ]
 }

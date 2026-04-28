@@ -80,6 +80,8 @@ export interface SenseVoiceConfig {
 
 export interface WikiAdapterConfig {
   ingestCommand?: string;
+  chatCommand?: string;
+  chatTimeoutMs: number;
 }
 
 export interface TranslationConfig {
@@ -198,6 +200,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     "AGENT_POSTPROCESS_TIMEOUT_MS",
     issues,
   );
+  const wikiChatTimeoutMs = parseInteger(
+    env.WIKI_CHAT_TIMEOUT_MS,
+    5 * 60 * 1000,
+    "WIKI_CHAT_TIMEOUT_MS",
+    issues,
+  );
   const workerJobConcurrency = parseInteger(env.WORKER_JOB_CONCURRENCY, 2, "WORKER_JOB_CONCURRENCY", issues);
   const workerSttConcurrency = parseInteger(env.WORKER_STT_CONCURRENCY, 1, "WORKER_STT_CONCURRENCY", issues);
   const workerAgentConcurrency = parseInteger(env.WORKER_AGENT_CONCURRENCY, 1, "WORKER_AGENT_CONCURRENCY", issues);
@@ -254,7 +262,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       maxSingleSegmentTimeMs: senseVoiceMaxSingleSegmentTimeMs,
       timeoutMs: senseVoiceTimeoutMs,
     },
-    wiki: {},
+    wiki: {
+      chatTimeoutMs: wikiChatTimeoutMs,
+    },
     translation: {
       defaultRelation: readNonEmpty(env.TRANSLATION_DEFAULT_RELATION) ?? "business",
       targetLanguage: readNonEmpty(env.TRANSLATION_TARGET_LANGUAGE) ?? "ko",
@@ -282,6 +292,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     config.sensevoice.torchNumThreads = senseVoiceTorchNumThreads;
   }
   assignOptional(config.wiki, "ingestCommand", optional("WIKI_INGEST_COMMAND"));
+  assignOptional(config.wiki, "chatCommand", optional("WIKI_CHAT_COMMAND"));
   assignOptional(config.agent, "command", optional("AGENT_POSTPROCESS_COMMAND"));
 
   if (pollTimeoutSeconds < 1 || pollTimeoutSeconds > 100) {
@@ -316,6 +327,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (agentPostprocessTimeoutMs < 1) {
     issues.push("AGENT_POSTPROCESS_TIMEOUT_MS must be at least 1");
+  }
+  if (wikiChatTimeoutMs < 1) {
+    issues.push("WIKI_CHAT_TIMEOUT_MS must be at least 1");
   }
   if (workerJobConcurrency < 1) {
     issues.push("WORKER_JOB_CONCURRENCY must be at least 1");

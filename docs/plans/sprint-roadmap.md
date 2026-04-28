@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: idle (next: sprint-13-vault-reconcile-retention)
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract
-> **Pending**: sprint-13-vault-reconcile-retention
+> **Current**: sprint-20-ops-dashboard-automation
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module
+> **Pending**: sprint-20-ops-dashboard-automation, sprint-21-bootstrap-packaging, sprint-13-vault-reconcile-retention
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -258,6 +258,85 @@ Telegram mobile/desktop
   - Manual deletion of `raw/**` or `wiki/**` produces a deterministic drift report instead of silent desync.
   - Dry-run reconcile performs no writes; apply mode requires an explicit operator flag.
   - SQLite can distinguish present, missing, intentionally deleted, and orphaned source/output state.
+
+## Sprint 17 — Automation Registry And CLI Foundation
+
+- **id**: `sprint-17-automation-registry-cli`
+- **goal**: Add a modular automation substrate so batch scripts can be added, removed, enabled, disabled, and run without growing `package.json`.
+- **tasks**:
+  - Add an `automations/<module_id>/manifest.json` convention with schema validation.
+  - Add SQLite tables for automation modules, runs, and run events/log pointers.
+  - Add a small `packages/automation-core` package for manifest discovery and one-shot module execution.
+  - Add `apps/ops-cli` with stable subcommands: `automation list`, `automation run`, `automation enable`, `automation disable`, and `automation logs`.
+  - Keep `package.json` limited to a single product CLI entrypoint.
+- **acceptance criteria**:
+  - Adding an automation folder does not require editing `package.json`.
+  - Disabled modules cannot be run by dispatcher-style commands unless explicitly forced/manual.
+  - Each run has durable stdout/stderr/result paths under `runtime/automation/runs/<run_id>/`.
+  - CLI commands work in tests against a temp SQLite/runtime root.
+- **status**: completed. Added `packages/automation-core`, `apps/ops-cli`, automation manifest discovery, SQLite automation module/run/event tables, durable run log/result files, and a single stable `npm run tlgi -- automation ...` entrypoint. Module-created `result.json` payloads are preserved inside the runner summary, disabled modules require `--force` for manual runs, and missing/deleted module folders remain visible as unavailable registry entries.
+
+## Sprint 18 — Automation Dispatch Scheduler
+
+- **id**: `sprint-18-automation-dispatch-scheduler`
+- **goal**: Run due automations through a one-shot dispatcher suitable for `systemd` timers, without a 24-hour resident worker.
+- **tasks**:
+  - Extend automation manifests with schedule metadata and catch-up policy.
+  - Add `automation dispatch` to run only enabled due modules.
+  - Add schedule state and next-run calculations in SQLite.
+  - Add a user-level `systemd` timer/service installer and uninstaller.
+  - Add retry/backoff recording for failed scheduled runs.
+- **acceptance criteria**:
+  - One systemd timer can drive every enabled automation module.
+  - If the PC was off, dispatcher can backfill according to manifest policy.
+  - Scheduled runs are idempotency-keyed and do not duplicate the same date/window.
+- **status**: completed. Added `automation dispatch`, schedule-window idempotency keys, SQLite `automation_schedule_state`, daily/interval due calculations with catch-up limits, retry-after metadata recording, and user-level systemd service/timer file installation through `automation timer install|status|uninstall`.
+
+## Sprint 19 — FX Koreaexim Daily Module
+
+- **id**: `sprint-19-fx-koreaexim-daily-module`
+- **goal**: Add the first real automation module: daily Korea Eximbank exchange-rate capture into raw bundles and LLMwiki pages.
+- **tasks**:
+  - Add `automations/fx-koreaexim-daily` manifest and runner.
+  - Read `FX_KOREAEXIM_AUTHKEY` plus target currency settings from env/config.
+  - Fetch `exchangeJSON` with `data=AP01`, normalize target currencies, and preserve original JSON.
+  - Write immutable raw bundles with canonical `rates.md`/`rates.csv` wiki inputs.
+  - Invoke the existing wiki ingest adapter after bundle finalization.
+- **acceptance criteria**:
+  - Missing API key is reported as module readiness failure without exposing secrets.
+  - Non-business-day/null responses are recorded as skipped, not failed data.
+  - Re-running the same date is idempotent.
+  - Wiki pages are token-efficient monthly/latest summaries, not raw JSON dumps.
+- **status**: completed. Added `automations/fx-koreaexim-daily` with Korea Eximbank AP01 fetch/fixture support, currency filtering, deterministic `fx_koreaexim_<YYYYMMDD>` raw bundle output, original JSON evidence, canonical Markdown/CSV wiki inputs, optional wiki ingest adapter invocation, idempotent existing-bundle skip behavior, and fixture-backed regression coverage.
+
+## Sprint 20 — Ops Dashboard Automation Controls
+
+- **id**: `sprint-20-ops-dashboard-automation`
+- **goal**: Add a product-owned local operations dashboard for automation modules, separate from the vibe-doctor harness dashboard.
+- **tasks**:
+  - Add `apps/ops-dashboard` served only on localhost.
+  - Show module enabled state, readiness, next run, last run, and failures.
+  - Add enable/disable and manual run controls with local admin guard.
+  - Add run log and result viewers.
+  - Link runs to raw bundles/wiki pages where available.
+- **acceptance criteria**:
+  - Dashboard does not depend on or edit harness `vibe-dashboard` files.
+  - Secrets are never displayed; only present/missing status is shown.
+  - UI actions call the same ops CLI/core boundaries used by tests.
+
+## Sprint 21 — Bootstrap Packaging
+
+- **id**: `sprint-21-bootstrap-packaging`
+- **goal**: Package the local ingest, wiki, automation, and dashboard stack into a repeatable one-shot Linux setup path.
+- **tasks**:
+  - Add a top-level bootstrap script that chains dependency setup, npm install/build, `.env` creation, DB migration, automation scan, and optional systemd timer install.
+  - Add a release bundle layout for Linux hosts.
+  - Add setup verification that checks Telegram, document/OCR tools, STT provider, wiki roots, automation registry, and timers.
+  - Document reinstall/upgrade/uninstall paths.
+- **acceptance criteria**:
+  - A fresh Linux machine can install the local solution from one command plus env/secret input.
+  - Bootstrap is idempotent and preserves existing `.env` values.
+  - Packaging excludes runtime data, tokens, and machine-specific secrets.
   - LLMwiki lint findings are linked into the report without being treated as DB authority.
   - Retries never recreate missing raw evidence implicitly; they require restore, reimport, or delete-confirm.
 - **status**: planned after Sprint 12 live validation.

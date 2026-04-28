@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -89,13 +89,15 @@ import {
   TelegramBotApiClient,
   type ParsedTelegramCallback,
   type ParsedTelegramFile,
+  type ParsedTelegramMessage,
+  type TelegramMessage,
 } from "@telegram-local-ingest/telegram";
 import {
   type BundleFileRecord,
   type RawBundleArtifactInput,
   writeRawBundle,
 } from "@telegram-local-ingest/vault";
-import { runWikiIngestAdapter } from "@telegram-local-ingest/wiki-adapter";
+import { parseCommandLine, runWikiIngestAdapter, snapshotTree } from "@telegram-local-ingest/wiki-adapter";
 
 const execFileAsync = promisify(execFile);
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -103,6 +105,8 @@ const EML_MIME_TYPES = new Set(["application/eml", "message/rfc822"]);
 const IMAGE_EXTENSIONS = new Set([".jpeg", ".jpg", ".png"]);
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
+const TELEGRAM_TEXT_CHUNK_LIMIT = 3500;
+const WIKI_CHAT_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 
 export interface WorkerContext {
   config: AppConfig;
@@ -444,6 +448,12 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
         if (parsed.files.length === 0 && command && command.name !== "ingest" && command.name !== "unknown") {
           const result = await sendOperatorCommandResponse(context.db, context.telegram, parsed);
           operatorCommandsHandled += result.handled ? 1 : 0;
+        } else if (parsed.files.length === 0 && parsed.text?.trim() && (!command || command.name === "unknown")) {
+          await handleWikiChatMessage(context, parsed);
+          operatorCommandsHandled += 1;
+        } else if (parsed.files.length === 0 && command?.name === "ingest") {
+          await context.telegram.sendMessage(parsed.chatId, "📎 /ingest는 파일과 함께 보내주세요.\n\n파일 없이 위키에 질문하려면 일반 문장으로 입력하면 됩니다.");
+          operatorCommandsHandled += 1;
         } else {
           const needsSttPreset = hasAudioOrVoice(parsed.files);
           const created = needsSttPreset
@@ -1263,6 +1273,244 @@ async function runConfiguredWikiAdapter(context: WorkerContext, job: StoredJob):
     stdout: result.stdout,
     stderr: result.stderr,
   });
+}
+
+async function handleWikiChatMessage(context: WorkerContext, message: ParsedTelegramMessage): Promise<void> {
+  if (!context.config.wiki.chatCommand) {
+    await context.telegram.sendMessage(
+      message.chatId,
+      "⚠️ 위키 채팅 기능이 아직 설정되지 않았습니다.\n\n관리자가 WIKI_CHAT_COMMAND를 설정해야 사용할 수 있습니다.",
+    );
+    return;
+  }
+
+  const text = message.text?.trim();
+  if (!text) {
+    return;
+  }
+
+  const stopTyping = startTelegramChatActionLoop(context, message.chatId);
+  let pendingMessage: TelegramMessage | undefined;
+  try {
+    logWorker(`wiki chat started chat=${message.chatId} message=${message.messageId}`, "info", "WIKI");
+    pendingMessage = await context.telegram.sendMessage(
+      message.chatId,
+      "⏳ 위키 답변 준비 중입니다...\n\n완료되면 이 메시지가 결과로 바뀝니다.",
+    );
+    const result = await runWikiChatCommand(context, message, text);
+    const reply = formatWikiChatReply(result);
+    await sendChunkedTelegramMessage(context, message.chatId, reply, { replaceMessageId: pendingMessage.message_id });
+    logWorker(`wiki chat finished chat=${message.chatId} message=${message.messageId}`, "info", "WIKI");
+  } catch (error) {
+    logWorker(`wiki chat failed chat=${message.chatId} message=${message.messageId} error=${error instanceof Error ? error.message : String(error)}`, "warn", "WIKI");
+    await sendChunkedTelegramMessage(
+      context,
+      message.chatId,
+      `⚠️ 위키 채팅 처리에 실패했습니다.\n\n${error instanceof Error ? error.message : String(error)}`,
+      pendingMessage ? { replaceMessageId: pendingMessage.message_id } : undefined,
+    );
+  } finally {
+    stopTyping();
+  }
+}
+
+async function runWikiChatCommand(
+  context: WorkerContext,
+  message: ParsedTelegramMessage,
+  text: string,
+): Promise<{ stdout: string; stderr: string }> {
+  const commandText = context.config.wiki.chatCommand;
+  if (!commandText) {
+    throw new Error("WIKI_CHAT_COMMAND is not configured");
+  }
+
+  const [command, ...baseArgs] = parseCommandLine(commandText);
+  if (!command) {
+    throw new Error("WIKI_CHAT_COMMAND is empty");
+  }
+
+  const vaultRoot = path.resolve(context.config.vault.obsidianVaultPath);
+  const rawRoot = path.resolve(vaultRoot, context.config.vault.rawRoot);
+  const wikiRoot = path.resolve(vaultRoot, "wiki");
+  const beforeRaw = await snapshotTree(rawRoot);
+  const result = await runBufferedCommand(command, [
+    ...baseArgs,
+    "--message",
+    text,
+    "--wiki-root",
+    wikiRoot,
+    "--raw-root",
+    rawRoot,
+    "--job-id",
+    sanitizeWikiChatId(`tg_chat_${message.chatId}_${message.messageId}`),
+    "--chat-id",
+    message.chatId,
+    ...(message.userId ? ["--user-id", message.userId] : []),
+    "--lock",
+    path.resolve(context.config.runtime.wikiWriteLockPath),
+  ], {
+    timeoutMs: context.config.wiki.chatTimeoutMs,
+    maxOutputBytes: WIKI_CHAT_OUTPUT_LIMIT_BYTES,
+  });
+  const afterRaw = await snapshotTree(rawRoot);
+  const rawDiff = diffSnapshotMaps(beforeRaw, afterRaw);
+  if (rawDiff.length > 0) {
+    throw new Error(`Wiki chat command modified raw files: ${rawDiff.join(", ")}`);
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || `WIKI_CHAT_COMMAND exited with ${result.exitCode}`);
+  }
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+function runBufferedCommand(
+  command: string,
+  args: string[],
+  options: { timeoutMs: number; maxOutputBytes: number },
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
+    let settled = false;
+    let timeout: NodeJS.Timeout | undefined;
+
+    const rejectOnce = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      reject(error);
+    };
+    timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      rejectOnce(new Error(`${command} timed out after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+    const append = (target: Buffer[], chunk: Buffer): void => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > options.maxOutputBytes) {
+        child.kill("SIGTERM");
+        rejectOnce(new Error(`${command} exceeded output limit of ${options.maxOutputBytes} bytes`));
+        return;
+      }
+      target.push(chunk);
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => append(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => append(stderr, chunk));
+    child.on("error", rejectOnce);
+    child.on("close", (exitCode) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolve({
+        exitCode: exitCode ?? 1,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+    });
+  });
+}
+
+function formatWikiChatReply(result: { stdout: string; stderr: string }): string {
+  const stdout = result.stdout.trim();
+  const stderr = result.stderr.trim();
+  if (!stdout && !stderr) {
+    return "🧠 위키 응답이 비어 있습니다.";
+  }
+  if (!stderr) {
+    return stdout;
+  }
+  if (!stdout) {
+    return `⚠️ 위키 경고\n\n${stderr}`;
+  }
+  return `${stdout}\n\n⚠️ stderr\n${stderr}`;
+}
+
+function startTelegramChatActionLoop(context: WorkerContext, chatId: string): () => void {
+  const send = (): void => {
+    void context.telegram.sendChatAction(chatId, "typing").catch((error) => {
+      logWorker(`sendChatAction failed chat=${chatId} error=${error instanceof Error ? error.message : String(error)}`, "warn", "TELEGRAM");
+    });
+  };
+  send();
+  const interval = setInterval(send, 4_000);
+  return () => clearInterval(interval);
+}
+
+async function sendChunkedTelegramMessage(
+  context: WorkerContext,
+  chatId: string,
+  text: string,
+  options: { replaceMessageId?: number } = {},
+): Promise<void> {
+  const chunks = chunkTelegramText(text, TELEGRAM_TEXT_CHUNK_LIMIT);
+  for (let index = 0; index < chunks.length; index += 1) {
+    const prefix = chunks.length > 1 ? `(${index + 1}/${chunks.length})\n` : "";
+    const messageText = `${prefix}${chunks[index]}`;
+    if (index === 0 && options.replaceMessageId !== undefined) {
+      try {
+        await context.telegram.editMessageText(chatId, options.replaceMessageId, messageText);
+        continue;
+      } catch (error) {
+        logWorker(`editMessageText failed chat=${chatId} message=${options.replaceMessageId} error=${error instanceof Error ? error.message : String(error)}`, "warn", "TELEGRAM");
+      }
+    }
+    await context.telegram.sendMessage(chatId, messageText);
+  }
+}
+
+function chunkTelegramText(text: string, limit: number): string[] {
+  const normalized = text.trim() || "(empty)";
+  const chunks: string[] = [];
+  let remaining = normalized;
+  while (remaining.length > limit) {
+    let splitAt = remaining.lastIndexOf("\n\n", limit);
+    if (splitAt < Math.floor(limit * 0.5)) {
+      splitAt = remaining.lastIndexOf("\n", limit);
+    }
+    if (splitAt < Math.floor(limit * 0.5)) {
+      splitAt = limit;
+    }
+    chunks.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  chunks.push(remaining);
+  return chunks;
+}
+
+function diffSnapshotMaps(before: Map<string, string>, after: Map<string, string>): string[] {
+  const diffs: string[] = [];
+  for (const [key, hash] of before) {
+    if (!after.has(key)) {
+      diffs.push(`deleted:${key}`);
+      continue;
+    }
+    if (after.get(key) !== hash) {
+      diffs.push(`modified:${key}`);
+    }
+  }
+  for (const key of after.keys()) {
+    if (!before.has(key)) {
+      diffs.push(`added:${key}`);
+    }
+  }
+  return diffs.sort();
+}
+
+function sanitizeWikiChatId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "_");
 }
 
 async function runConfiguredAgentPostprocess(context: WorkerContext, job: StoredJob): Promise<StoredJobOutput[]> {
