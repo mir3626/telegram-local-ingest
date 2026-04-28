@@ -10,6 +10,12 @@
 
 ## Status
 
+### Dashboard Opus Styling Pass — 2026-04-28
+
+After pushing the dashboard refactor baseline, an explicit Claude Opus high-effort styling pass was run against the refactored dashboard files using the latest image-generated mockup as reference. The pass stayed within `apps/ops-dashboard/src/dashboard-page.ts`, `dashboard-styles.ts`, and `dashboard-client.ts`; server/API/SSE logic was not changed. The UI now uses a sharper operations-console visual system with metric icon tiles, refined table/surface treatment, a darker live-log terminal, responsive grouping, and preserved Korean labels/actions. Manual cleanup removed radial decorative gradients and nonzero/negative letter spacing to keep the implementation aligned with project UI rules.
+
+Verification passed with `npm run typecheck`, focused `test/ops-dashboard.test.ts`, `npm run build`, full `npm test`, `git diff --check`, touched-file UTF-8/mojibake checks, `npm run ops:restart`, and Playwright desktop/mobile smoke. Current stack: Bot API pid `917804`, worker pid `918077`, ops dashboard pid `918088`, dashboard URL `http://127.0.0.1:58991/`. Screenshots: `/tmp/tlgi-opus-dashboard-desktop.png` and `/tmp/tlgi-opus-dashboard-mobile.png`.
+
 ### Dashboard Refactor Checkpoint — 2026-04-28
 
 The product ops dashboard has been split into focused source modules to make the next visual pass and any Claude/Codex delegated UI work easier to scope. `apps/ops-dashboard/src/index.ts` is now only the CLI entrypoint and public re-export surface. `apps/ops-dashboard/src/server.ts` owns the HTTP routes, SSE/log tail, automation/artifact actions, and runtime path resolution. `dashboard-page.ts` composes the HTML document, while `dashboard-styles.ts` and `dashboard-client.ts` hold the page CSS and browser-side JavaScript.

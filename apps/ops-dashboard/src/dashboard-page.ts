@@ -57,7 +57,7 @@ ${DASHBOARD_STYLES}
           </div>
         </div>
         <div class="surface-body">
-          <div class="toolbar">
+          <div class="log-toolbar">
             <select id="logTarget" aria-label="로그 대상">
               <option value="worker">Worker</option>
               <option value="bot-api">Telegram Bot API</option>
