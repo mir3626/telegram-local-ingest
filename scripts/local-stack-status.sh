@@ -4,11 +4,31 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+load_env_file() {
+  local env_file="$1"
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    line="${line#export }"
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      fi
+      export "$key=$value"
+    fi
+  done < "$env_file"
+}
+
 if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
+  load_env_file ./.env
 fi
 
 resolve_path() {
@@ -45,6 +65,7 @@ RUNTIME_DIR="$(resolve_path "${INGEST_RUNTIME_DIR:-./runtime}")"
 PID_DIR="${INGEST_PID_DIR:-$RUNTIME_DIR/pids}"
 BOT_API_PID="$PID_DIR/bot-api.pid"
 WORKER_PID="$PID_DIR/worker.pid"
+OPS_DASHBOARD_PID="${OPS_DASHBOARD_PID:-$PID_DIR/ops-dashboard.pid}"
 
 if bot_state="$(pid_state "$BOT_API_PID")"; then
   bot_running=0
@@ -56,15 +77,21 @@ if worker_state="$(pid_state "$WORKER_PID")"; then
 else
   worker_running=1
 fi
+if dashboard_state="$(pid_state "$OPS_DASHBOARD_PID")"; then
+  dashboard_running=0
+else
+  dashboard_running=1
+fi
 
 echo "Local ingest stack status:"
 echo "  Telegram Local Bot API Server: $bot_state"
 echo "  telegram-local-ingest worker : $worker_state"
+echo "  ops dashboard                : $dashboard_state"
 
-if [[ "$bot_running" -eq 0 && "$worker_running" -eq 0 ]]; then
+if [[ "$bot_running" -eq 0 && "$worker_running" -eq 0 && "$dashboard_running" -eq 0 ]]; then
   exit 0
 fi
-if [[ "$bot_running" -eq 0 || "$worker_running" -eq 0 ]]; then
+if [[ "$bot_running" -eq 0 || "$worker_running" -eq 0 || "$dashboard_running" -eq 0 ]]; then
   exit 2
 fi
 exit 1

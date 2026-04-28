@@ -5,10 +5,30 @@
 - **repo**: `telegram-local-ingest`
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-2`
-- **current sprint**: `sprint-13-vault-reconcile-retention`
+- **current sprint**: `sprint-25-derived-action-library`
 - **harnessVersion**: `1.6.11`
 
 ## Status
+
+### Dashboard Refactor Checkpoint — 2026-04-28
+
+The product ops dashboard has been split into focused source modules to make the next visual pass and any Claude/Codex delegated UI work easier to scope. `apps/ops-dashboard/src/index.ts` is now only the CLI entrypoint and public re-export surface. `apps/ops-dashboard/src/server.ts` owns the HTTP routes, SSE/log tail, automation/artifact actions, and runtime path resolution. `dashboard-page.ts` composes the HTML document, while `dashboard-styles.ts` and `dashboard-client.ts` hold the page CSS and browser-side JavaScript.
+
+Behavior is intended to be unchanged from Sprint 24c. Verification passed with `npm run typecheck`, focused `test/ops-dashboard.test.ts`, `npm run build`, full `npm test`, `git diff --check`, touched-file UTF-8/mojibake checks, live dashboard HTML/API curl, and `npm run ops:restart`. The stack is currently running at `http://127.0.0.1:58991/` with Bot API pid `904841`, worker pid `905113`, and ops dashboard pid `905124`.
+
+### Sprint 24c Closed — Dashboard UI Redesign — 2026-04-28
+
+The product ops dashboard UI was redesigned from image-generated mockups into a denser single-page operations console. The page now has a polished command bar with a TL brand mark, compact status metric ribbon, thin bordered operations surfaces, dark live-log terminal, automation modules, recent automation runs, Generated Renderer artifact audit, and a bottom detail inspector. Existing SSE/log tail APIs, token handling, module enable/run/dispatch actions, artifact promote actions, and detail inspection behavior remain intact.
+
+Browser smoke covered desktop `1440x1000` and mobile `390x900` viewports with no console/page errors and no horizontal overflow. The screenshot artifacts from the local verification are `/tmp/tlgi-dashboard-polished-desktop.png` and `/tmp/tlgi-dashboard-polished-mobile.png`.
+
+During live verification, the remaining local stack helper scripts that shell-sourced `.env` were repaired. `scripts/local-stack-status.sh`, `scripts/tail-worker-log.sh`, and `scripts/tail-bot-api-log.sh` now use the same key/value parser style as start/stop scripts, so unquoted values like `FX_CURRENCIES=USD,JPY(100),EUR,CNH` no longer break status/log helpers. Stack status now includes the ops dashboard pid.
+
+### Sprint 24b Closed — Dashboard SSE Observability — 2026-04-28
+
+The product ops dashboard now has a real-time observability path. `/events` provides Server-Sent Events for dashboard state and log chunks, and `/api/logs/tail` provides cursor-based log reads. Log targets are server-mapped identifiers only: `worker`, `bot-api`, `ops-dashboard`, `automation:<run_id>:stdout|stderr`, and `artifact:<run_id>:stdout|stderr`; arbitrary file paths are not accepted. If `OPS_DASHBOARD_TOKEN` is set, log/SSE reads use the same token guard, with query-token support for EventSource.
+
+The dashboard page has a `실시간 로그` panel with target selection, pause/resume, clear, connection status, and automatic state rendering from SSE events. Selecting an automation or artifact detail injects its stdout/stderr targets into the live-log selector, so Generated Renderer logs can be followed while the run is active.
 
 ### Sprints 22-24 Closed — Derived Artifact Pipeline — 2026-04-28
 
@@ -204,7 +224,7 @@ Image overlay labels are now single-line-height boxes without strokes. The worke
 
 ## Next Action
 
-MVP roadmap plus Sprint 9 through Sprint 12, Sprint 14 through Sprint 20, and the LLMwiki chat routing utility work are complete. Iteration 2 remains active on `main`. Sprint 21 bootstrap packaging is deferred, but future features should stay modular and bootstrap-friendly. The next active carryover sprint is `sprint-13-vault-reconcile-retention`: make raw/wiki/output deletion safe after LLMwiki starts depending on durable source bundles.
+MVP roadmap plus Sprint 9 through Sprint 12, Sprint 14 through Sprint 20, Sprints 22 through 24c, and the LLMwiki chat routing utility work are complete. Iteration 2 remains active on `main`. Sprint 21 bootstrap packaging is deferred, but future features should stay modular and bootstrap-friendly. Current planned work is `sprint-25-derived-action-library`; `sprint-13-vault-reconcile-retention` remains a carryover for safe raw/wiki/output deletion after LLMwiki starts depending on durable source bundles.
 
 ```text
 Current utility flow target: local Telegram server -> upload file -> SQLite job -> SQLite job claim -> bounded background processing pool -> import -> STT transcript output when applicable -> raw bundle -> preprocessing -> translation-needed check -> configured agent postprocess when needed -> worker-normalized `<source-stem>_translated` deliverable -> worker-appended `[원문]` source section with translation first -> output store -> Telegram download button with actual expiry -> hidden output lifecycle callbacks.
@@ -215,11 +235,13 @@ Current utility flow target: local Telegram server -> upload file -> SQLite job 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest on branch `main`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, docs/context/automation.md, and .vibe/interview-log/iter-2.json first. Sprint 24 is passed: wiki chat artifact requests, worker-owned derived artifact execution, generated renderer audit logs, ops dashboard generated renderer review/promote, and registered `fx.chart.1y` are in place. Sprint 21 bootstrap packaging is deferred, and Sprint 13 vault reconcile remains pending carryover. Current planned work is Sprint 25: promote repeated wiki-data transformations into registered renderers/scripts. Core LLMwiki decision remains: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority. Derived wiki artifacts live outside `raw/**` under `derived/<date>/<artifact_id>/` with provenance and optional `wiki/derived/**` ingest.
+Continue from /home/tony/workspace/telegram-local-ingest on branch `main`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, docs/context/automation.md, and .vibe/interview-log/iter-2.json first. Sprint 24c is passed: wiki chat artifact requests, worker-owned derived artifact execution, generated renderer audit logs, ops dashboard generated renderer review/promote, registered `fx.chart.1y`, dashboard SSE live state/log observability, and polished grouped single-page dashboard UI are in place. Sprint 21 bootstrap packaging is deferred, and Sprint 13 vault reconcile remains pending carryover. Current planned work is Sprint 25: promote repeated wiki-data transformations into registered renderers/scripts. Core LLMwiki decision remains: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority. Derived wiki artifacts live outside `raw/**` under `derived/<date>/<artifact_id>/` with provenance and optional `wiki/derived/**` ingest. Dashboard live logs must keep using server-mapped target ids, not arbitrary file paths.
 ```
 
 ## Latest Verification
 
+- Latest verification after dashboard UI redesign: imagegen mockup was used as visual reference; Playwright desktop `1440x1000` and mobile `390x900` smoke passed with no console/page errors and no horizontal overflow; screenshots were written to `/tmp/tlgi-dashboard-polished-desktop.png` and `/tmp/tlgi-dashboard-polished-mobile.png`; focused `node --import tsx --test test/ops-dashboard.test.ts` passed (`5`); `npm run typecheck` passed; `npm run build` passed; full `npm test` passed (`471` passed, `1` skipped); `git diff --check` passed; `bash -n` passed for stack helper scripts; `bash scripts/local-stack-status.sh` passed and reported Bot API/worker/ops dashboard pids; timeout-based tail helper smokes passed; `npm run ops:restart` passed.
+- Latest verification after dashboard SSE observability: focused `node --import tsx --test test/ops-dashboard.test.ts` passed (`5`); `npm run typecheck` passed; full `npm test` passed (`471` passed, `1` skipped); `npm run build` passed; `git diff --check` passed; `node --import tsx scripts/vibe-validate-state.ts` passed.
 - Latest verification after derived artifact pipeline and generated renderer dashboard support: `npm run typecheck` passed; `node --import tsx --test test/artifact-core.test.ts` passed; `node --import tsx --test test/ops-dashboard.test.ts` passed (`4`); focused `node --import tsx --test test/worker.test.ts` passed (`36`); `node --check` passed for `yoni-llm-wiki/scripts/chat.mjs` and `renderers/fx-chart-1y/render.mjs`.
 - Latest verification after wiki chat file transfer support: `npm run typecheck` passed; focused `node --import tsx --test test/worker.test.ts` passed (`35`); `node --check /home/tony/workspace/yoni-llm-wiki/scripts/chat.mjs` passed; `node --check` passed for derived scripts and Python compile passed for `scripts/fx_chart.py`; staging/package/ingest smoke confirmed `fx_chart_1y` stays under `derived/**`, root loose artifact is absent, and derived log remains idempotent; repo-side `node --import tsx scripts/vibe-validate-state.ts`, `git diff --check`, and `npm run vibe:checkpoint` passed. `node scripts/vibe-preflight.mjs` is expected to pass once these documentation/state edits are committed; before commit it reports the dirty worktree and warns that the existing Sprint 13 prompt predates the latest state update.
 - Latest verification after ops dashboard Korean UI and stack lifecycle integration: `bash -n scripts/start-local-stack.sh scripts/stop-local-stack.sh scripts/restart-local-stack.sh` passed; `git diff --check` passed; `npm run typecheck` passed; focused `node --import tsx --test test/ops-dashboard.test.ts` passed (`3`); `npm run build` passed; full `npm test` passed (`464` passed, `1` skipped); UTF-8/mojibake checks passed; live dashboard HTML/API curl confirmed Korean UI markers and `/api/state` at `http://127.0.0.1:58991/`; `npm run ops:restart` passed and started Bot API pid `809127`, worker pid `809399`, and ops dashboard pid `809410`. Current dashboard notes: `OPS_DASHBOARD_TOKEN` protects write actions only, recent runs fetch up to 100 records but render inside a scrollable table, and start/stop scripts manage the dashboard with the rest of the local stack.

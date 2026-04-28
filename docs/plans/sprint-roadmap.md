@@ -2,7 +2,7 @@
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
 > **Current**: sprint-25-derived-action-library (planned)
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign
 > **Pending**: sprint-13-vault-reconcile-retention, sprint-25-derived-action-library
 <!-- END:VIBE:CURRENT-SPRINT -->
 
@@ -387,6 +387,40 @@ Telegram mobile/desktop
   - Promoting creates a registered renderer manifest and entry script under `WIKI_RENDERERS_DIR`.
   - Existing registered renderers can be reused from natural-language wiki chat requests.
 - **status**: completed. The ops dashboard now shows a `2차 산출물 / Generated Renderer` section, detail view, prompt/code/log inspection, and promote action. The local `yoni-llm-wiki` vault now has `renderers/fx-chart-1y` registered as `fx.chart.1y`.
+
+## Sprint 24b — Dashboard SSE Observability
+
+- **id**: `sprint-24b-dashboard-sse-observability`
+- **goal**: Upgrade the product-owned ops dashboard from manual refresh/static log reads to a real-time observability surface.
+- **deliverables**:
+  - Add a dashboard SSE endpoint for state and log events.
+  - Add a cursor-based log tail API for safe log reads.
+  - Stream only server-mapped log targets, never arbitrary user-provided paths.
+  - Add a live log panel for worker, Telegram Bot API, dashboard, automation run, and artifact run logs.
+  - Keep `OPS_DASHBOARD_TOKEN` compatible with EventSource through the existing local token query path.
+- **acceptance criteria**:
+  - Dashboard lists update from SSE state events without manual refresh.
+  - Live logs can follow app logs and selected run stdout/stderr.
+  - Log tailing survives append-only growth and cursor reset after truncation/rotation.
+  - Tests cover tail API authorization and SSE state/log delivery.
+- **status**: completed. Added `/events` Server-Sent Events, `/api/logs/tail`, live log target switching, pause/clear controls, run-log target injection from detail views, and focused dashboard tests.
+
+## Sprint 24c — Dashboard UI Redesign
+
+- **id**: `sprint-24c-dashboard-ui-redesign`
+- **goal**: Rework the product ops dashboard into a single-page operations surface that stays readable as more monitored data is added.
+- **deliverables**:
+  - Use an image-generated UI mockup as the visual planning reference.
+  - Replace the plain utility-dashboard look with a refined operations-console visual system: command bar, status metric ribbon, thin bordered surfaces, dark live log terminal, compact tables, and restrained status accents.
+  - Add a compact top status strip for stack, automation, run, schedule, artifact, and log-target health.
+  - Split the page into visible functional zones: automation modules, live logs, recent automation runs, generated renderer audits, and detail inspector.
+  - Keep existing dashboard APIs, SSE behavior, token guard, and promote/manual-run actions intact.
+  - Ensure desktop and mobile viewports avoid horizontal overflow.
+- **acceptance criteria**:
+  - The dashboard remains one page but is scannable by category.
+  - Live log controls and detail inspection remain immediately accessible.
+  - Browser smoke confirms the core sections render without console errors.
+- **status**: completed. Rebuilt the dashboard HTML/CSS around a polished operations-console style with a command bar, summary metrics, grouped surfaces, compact tables, live log controls, and a detail inspector while preserving existing operations.
 
 ## Sprint 25 — Derived Action Library
 

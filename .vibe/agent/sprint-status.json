@@ -223,6 +223,20 @@
       "completedAt": "2026-04-28T09:35:00.000Z"
     },
     {
+      "id": "sprint-24b-dashboard-sse-observability",
+      "name": "Dashboard SSE Observability",
+      "status": "passed",
+      "startedAt": "2026-04-28T10:00:00.000Z",
+      "completedAt": "2026-04-28T10:06:25.000Z"
+    },
+    {
+      "id": "sprint-24c-dashboard-ui-redesign",
+      "name": "Dashboard UI Redesign",
+      "status": "passed",
+      "startedAt": "2026-04-28T10:08:22.000Z",
+      "completedAt": "2026-04-28T10:21:24.000Z"
+    },
+    {
       "id": "sprint-25-derived-action-library",
       "name": "Derived Action Library",
       "status": "planned",
@@ -231,7 +245,7 @@
   ],
   "handoff": {
     "currentSprintId": "sprint-25-derived-action-library",
-    "lastActionSummary": "Implemented worker-owned derived artifact pipeline, generated renderer audit logs, dashboard review/promote flow, and registered fx.chart.1y renderer. Sprint 25 now tracks reusable derived action renderers.",
+    "lastActionSummary": "Polished the single-page ops dashboard visual system from a fresh image-generated mockup and fixed remaining stack status/tail helpers to parse .env safely. Sprint 25 remains planned for reusable derived action renderers.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -245,10 +259,13 @@
       "Personal OAuth-backed agent automation is operator-only",
       "Pre-agent language checks must be deterministic and not LLM-dependent",
       "Prefer official Anthropic skills for document tasks when a suitable official skill exists",
-      "Generated renderers must be logged with the triggering user prompt and promoted to registered renderers only after operator review"
+      "Generated renderers must be logged with the triggering user prompt and promoted to registered renderers only after operator review",
+      "Dashboard log streaming must use server-mapped target identifiers, not arbitrary user-provided file paths",
+      "Keep product ops dashboard additions grouped into visible single-page zones before introducing page routing",
+      "Dashboard visual changes should preserve the polished operations-console style: command bar, compact metric ribbon, thin bordered surfaces, restrained status accents, and dark live-log terminal"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-28T09:35:00.000Z"
+    "updatedAt": "2026-04-28T10:49:05.000Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -389,8 +406,8 @@
     "test/ops-dashboard.test.ts"
   ],
   "sprintsSinceLastAudit": 1,
-  "stateUpdatedAt": "2026-04-28T09:35:00.000Z",
-  "verifiedAt": "2026-04-27T13:32:38.571Z",
+  "stateUpdatedAt": "2026-04-28T10:49:05.000Z",
+  "verifiedAt": "2026-04-28T10:49:05.000Z",
   "verificationCommands": [
     {
       "id": "typecheck",

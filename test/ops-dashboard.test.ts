@@ -127,6 +127,53 @@ test("ops dashboard can run a module and return durable result logs", async () =
   }
 });
 
+test("ops dashboard tails logs and streams state/log events over SSE", async () => {
+  const fixture = createFixture();
+  const logsDir = path.join(fixture.runtimeDir, "logs");
+  fs.mkdirSync(logsDir, { recursive: true });
+  fs.writeFileSync(path.join(logsDir, "worker.log"), "initial worker line\n", "utf8");
+  const dashboard = await createOpsDashboardServer({
+    projectRoot: repoRoot,
+    port: 0,
+    env: {
+      ...process.env,
+      AUTOMATION_MODULES_DIR: fixture.modulesRoot,
+      INGEST_RUNTIME_DIR: fixture.runtimeDir,
+      SQLITE_DB_PATH: fixture.dbPath,
+      OPS_DASHBOARD_TOKEN: "admin-token",
+    },
+    loadEnvFile: false,
+  });
+  const abort = new AbortController();
+  try {
+    const blocked = await fetch(new URL("/api/logs/tail?target=worker&cursor=0", dashboard.url));
+    assert.equal(blocked.status, 403);
+
+    const tail = await (await fetch(new URL("/api/logs/tail?target=worker&cursor=0&maxBytes=1000&token=admin-token", dashboard.url))).json() as {
+      cursor: number;
+      chunk: string;
+    };
+    assert.match(tail.chunk, /initial worker line/);
+    fs.appendFileSync(path.join(logsDir, "worker.log"), "second worker line\n", "utf8");
+    const nextTail = await (await fetch(new URL(`/api/logs/tail?target=worker&cursor=${tail.cursor}&maxBytes=1000&token=admin-token`, dashboard.url))).json() as {
+      chunk: string;
+    };
+    assert.equal(nextTail.chunk, "second worker line\n");
+
+    const stream = await fetch(new URL("/events?target=worker&token=admin-token", dashboard.url), {
+      signal: abort.signal,
+    });
+    assert.equal(stream.status, 200);
+    assert.match(stream.headers.get("content-type") ?? "", /text\/event-stream/);
+    const eventText = await readStreamUntil(stream, /event: state[\s\S]*event: log[\s\S]*initial worker line/);
+    assert.match(eventText, /"logsDir"/);
+  } finally {
+    abort.abort();
+    await closeServer(dashboard.server);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("ops dashboard exposes generated renderer prompt and can promote it", async () => {
   const fixture = createFixture();
   const vaultRoot = path.join(fixture.root, "vault");
@@ -319,6 +366,46 @@ function waitForDashboardUrl(child: ChildProcessWithoutNullStreams): Promise<str
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
     child.once("exit", onExit);
+  });
+}
+
+async function readStreamUntil(response: Response, pattern: RegExp, timeoutMs = 5_000): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Response body is not readable");
+  }
+  const decoder = new TextDecoder();
+  let output = "";
+  const timeoutAt = Date.now() + timeoutMs;
+  while (Date.now() < timeoutAt) {
+    const remaining = timeoutAt - Date.now();
+    const read = await readWithTimeout(reader, remaining);
+    if (read.done) {
+      break;
+    }
+    output += decoder.decode(read.value, { stream: true });
+    if (pattern.test(output)) {
+      await reader.cancel();
+      return output;
+    }
+  }
+  await reader.cancel();
+  throw new Error(`Timed out waiting for SSE pattern. Output: ${output}`);
+}
+
+function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+): Promise<{ done: boolean; value?: Uint8Array }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("stream read timeout")), timeoutMs);
+    reader.read().then((result) => {
+      clearTimeout(timer);
+      resolve(result);
+    }, (error: unknown) => {
+      clearTimeout(timer);
+      reject(error);
+    });
   });
 }
 
