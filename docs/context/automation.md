@@ -25,6 +25,7 @@ npm run tlgi -- automation run <id> [--force]
 npm run tlgi -- automation logs [id]
 npm run tlgi -- automation dispatch [--dry-run]
 npm run tlgi -- automation timer install
+npm run ops:dashboard
 ```
 
 Sprint 17 owns registry discovery, manual runs, durable run logs, and enable/disable state. Sprint 18 adds due-run dispatch and user-level `systemd` timer file installation.
@@ -45,6 +46,12 @@ Run files live under `runtime/automation/runs/<run_id>/`:
 - `result.json`
 
 Secrets remain in `.env` or the host secret store. The registry only records missing/present readiness and must never persist secret values.
+
+## Local Ops Dashboard
+
+`apps/ops-dashboard` is a product-owned dashboard, separate from the `vibe-doctor` harness dashboard. It binds only to localhost by default (`OPS_DASHBOARD_HOST=127.0.0.1`, `OPS_DASHBOARD_PORT=58991`) and reads the same SQLite registry, run log paths, manifests, and automation-core readiness checks as `apps/ops-cli`.
+
+The dashboard shows module enabled/available state, readiness as present/missing env names only, next due time, recent runs, run result/log text, and links to raw bundle/wiki source paths when a module result records them. It supports enable/disable, manual run, and dispatch actions. If `OPS_DASHBOARD_TOKEN` is set, write actions require `x-ops-dashboard-token`, `Authorization: Bearer ...`, or the local token field in the page; the token itself is never shown in API state.
 
 ## Scheduling Policy
 
