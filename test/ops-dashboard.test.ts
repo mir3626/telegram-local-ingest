@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -120,6 +121,37 @@ test("ops dashboard can run a module and return durable result logs", async () =
   }
 });
 
+test("ops dashboard CLI entrypoint keeps the server process alive", async () => {
+  const fixture = createFixture();
+  writeAutomationModule(fixture.modulesRoot, {
+    id: "demo.cli",
+    title: "Demo CLI",
+    defaultEnabled: true,
+  });
+  const child = spawn(process.execPath, ["--import", "tsx", "apps/ops-dashboard/src/index.ts"], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      AUTOMATION_MODULES_DIR: fixture.modulesRoot,
+      INGEST_RUNTIME_DIR: fixture.runtimeDir,
+      SQLITE_DB_PATH: fixture.dbPath,
+      OPS_DASHBOARD_PORT: "0",
+    },
+  });
+  try {
+    const url = await waitForDashboardUrl(child);
+    const response = await fetch(new URL("/api/state", url));
+    assert.equal(response.status, 200);
+    const state = await response.json() as { modules: Array<{ id: string }> };
+    assert.ok(state.modules.some((module) => module.id === "demo.cli"));
+    assert.equal(child.exitCode, null);
+  } finally {
+    child.kill("SIGTERM");
+    await waitForExit(child);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 function createFixture(): { root: string; modulesRoot: string; runtimeDir: string; dbPath: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ops-dashboard-"));
   const modulesRoot = path.join(root, "automations");
@@ -168,5 +200,45 @@ function closeServer(server: { close(callback?: (error?: Error) => void): void }
       }
       resolve();
     });
+  });
+}
+
+function waitForDashboardUrl(child: ChildProcessWithoutNullStreams): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let output = "";
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for dashboard URL. Output: ${output}`));
+    }, 5_000);
+    const onData = (chunk: Buffer): void => {
+      output += chunk.toString("utf8");
+      const match = output.match(/ops dashboard listening (http:\/\/127\.0\.0\.1:\d+\/)/);
+      if (match?.[1]) {
+        cleanup();
+        resolve(match[1]);
+      }
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      cleanup();
+      reject(new Error(`Dashboard exited before listening: code=${code ?? "-"} signal=${signal ?? "-"}. Output: ${output}`));
+    };
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      child.stdout.off("data", onData);
+      child.stderr.off("data", onData);
+      child.off("exit", onExit);
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.once("exit", onExit);
+  });
+}
+
+function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    child.once("exit", () => resolve());
   });
 }

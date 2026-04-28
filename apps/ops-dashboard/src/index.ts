@@ -767,8 +767,17 @@ function renderDashboardHtml(): string {
 </html>`;
 }
 
+let activeDashboard: StartedOpsDashboard | undefined;
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  startOpsDashboard().catch((error) => {
+  startOpsDashboard().then((started) => {
+    activeDashboard = started;
+    const shutdown = (): void => {
+      activeDashboard?.server.close(() => process.exit(0));
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+  }).catch((error) => {
     process.stderr.write(`${errorMessage(error)}\n`);
     process.exit(1);
   });
