@@ -16,6 +16,7 @@ import {
   getJob,
   getJobOutput,
   getTelegramOffset,
+  listArtifactRendererRuns,
   listJobEvents,
   listJobOutputs,
   migrate,
@@ -1468,6 +1469,208 @@ test("runWorkerOnce routes unregistered slash text to wiki chat", async () => {
   }
 });
 
+test("runWorkerOnce sends wiki chat attachments immediately for fewer than five files", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }> = [];
+  writeFile(fixture.vaultPath, "derived/2026-04-28/fx_chart_1y/artifacts/fx_chart_1y.png", "png");
+  const scriptPath = writeFile(fixture.root, "wiki-chat-attachment.mjs", [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const attachmentDir = process.argv[process.argv.indexOf('--attachment-dir') + 1];",
+    "fs.mkdirSync(attachmentDir, { recursive: true });",
+    "fs.writeFileSync(path.join(attachmentDir, 'attachments.json'), JSON.stringify({ attachments: [{ path: 'derived/2026-04-28/fx_chart_1y/artifacts/fx_chart_1y.png', label: '환율 차트' }] }), 'utf8');",
+    "process.stdout.write('차트를 전송합니다.');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockWikiChatAttachmentFetch({ sentMessages, sentDocuments, text: "최근 1년 환율 라인차트 보여줘" }),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentDocuments.length, 1);
+    assert.equal(sentDocuments[0]?.document, "fx_chart_1y.png");
+    assert.match(sentDocuments[0]?.caption ?? "", /derived\/2026-04-28\/fx_chart_1y\/artifacts\/fx_chart_1y\.png/);
+    assert.match(sentMessages.at(-1)?.text ?? "", /차트를 전송합니다/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce executes wiki chat artifact requests and sends generated artifacts", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }> = [];
+  writeFile(fixture.vaultPath, "wiki/sources/demo.md", "# Demo\n\nrate,value\nUSD,1400\n");
+  const scriptPath = writeFile(fixture.root, "wiki-chat-artifact.mjs", [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const attachmentDir = process.argv[process.argv.indexOf('--attachment-dir') + 1];",
+    "const code = [",
+    "  \"import fs from 'node:fs/promises';\",",
+    "  \"import path from 'node:path';\",",
+    "  \"const [inputPath, outputDir, resultPath] = process.argv.slice(2);\",",
+    "  \"JSON.parse(await fs.readFile(inputPath, 'utf8'));\",",
+    "  \"const out = path.join(outputDir, 'demo_chart.png');\",",
+    "  \"await fs.writeFile(out, 'png', 'utf8');\",",
+    "  \"await fs.writeFile(resultPath, JSON.stringify({artifacts:[{path:'demo_chart.png',role:'visualization',mediaType:'image/png'}]}), 'utf8');\",",
+    "].join('\\n');",
+    "fs.mkdirSync(attachmentDir, { recursive: true });",
+    "fs.writeFileSync(path.join(attachmentDir, 'artifact-requests.json'), JSON.stringify({ requests: [{",
+    "  action: 'create_derived_artifact',",
+    "  artifactKind: 'chart',",
+    "  artifactId: 'demo_chart',",
+    "  title: 'Demo Chart',",
+    "  renderer: { mode: 'generated', language: 'javascript', suggestedId: 'demo_chart', code },",
+    "  sources: [{ path: 'wiki/sources/demo.md', type: 'wiki_source' }],",
+    "  parameters: {},",
+    "  delivery: { sendToTelegram: true, ingestDerived: false }",
+    "}]}), 'utf8');",
+    "process.stdout.write('차트를 생성합니다.');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockWikiChatAttachmentFetch({ sentMessages, sentDocuments, text: "demo 차트 생성해줘" }),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentDocuments.length, 1);
+    assert.equal(sentDocuments[0]?.document, "demo_chart.png");
+    assert.match(sentDocuments[0]?.caption ?? "", /derived\/2026-04-28\/demo_chart\/artifacts\/demo_chart\.png/);
+    assert.equal(listArtifactRendererRuns(dbHandle.db, 10)[0]?.rendererMode, "generated");
+    assert.match(listArtifactRendererRuns(dbHandle.db, 10)[0]?.sourcePrompt ?? "", /demo 차트 생성/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce asks for confirmation and sends a wiki chat zip for five or more files", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }> = [];
+  const attachmentPaths: string[] = [];
+  for (let index = 1; index <= 5; index += 1) {
+    const relative = `raw/2024-05-15/invoice-job/original/invoice-${index}.pdf`;
+    attachmentPaths.push(relative);
+    writeFile(fixture.vaultPath, relative, `invoice ${index}`);
+  }
+  const scriptPath = writeFile(fixture.root, "wiki-chat-many-attachments.mjs", [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const attachmentDir = process.argv[process.argv.indexOf('--attachment-dir') + 1];",
+    `const paths = ${JSON.stringify(attachmentPaths)};`,
+    "fs.mkdirSync(attachmentDir, { recursive: true });",
+    "fs.writeFileSync(path.join(attachmentDir, 'attachments.json'), JSON.stringify({ attachments: paths.map((filePath) => ({ path: filePath })) }), 'utf8');",
+    "process.stdout.write('인보이스 원본 후보를 찾았습니다.');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockWikiChatAttachmentFetch({ sentMessages, sentDocuments, text: "2024년 5월 15일 인보이스 원본파일 보내줘" }),
+      ),
+    };
+
+    await runWorkerOnce(context);
+
+    assert.equal(sentDocuments.length, 0);
+    const confirmation = sentMessages.at(-1);
+    assert.match(confirmation?.text ?? "", /전송 대상 파일 5개/);
+    const callbackData = (((confirmation?.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined)
+      ?.inline_keyboard?.[0]?.[0]?.callback_data) ?? "");
+    assert.match(callbackData, /^wiki-files:wcf_/);
+
+    context.telegram = new TelegramBotApiClient(
+      { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+      mockWikiChatZipCallbackFetch(callbackData, sentDocuments),
+    );
+    await runWorkerOnce(context);
+
+    assert.equal(sentDocuments.length, 1);
+    assert.match(sentDocuments[0]?.document ?? "", /^wcf_[a-f0-9]{18}\.zip$/);
+    const requestId = callbackData.split(":")[1]!;
+    const zipPath = path.join(fixture.runtimeDir, "outputs", "wiki-chat", requestId, `${requestId}.zip`);
+    const zip = fs.readFileSync(zipPath);
+    assert.ok(extractZipEntry(zip, "manifest.json"));
+    assert.equal(extractZipEntry(zip, "files/raw/2024-05-15/invoice-job/original/invoice-1.pdf")?.toString("utf8"), "invoice 1");
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce cleans expired wiki chat zip requests", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const requestDir = path.join(fixture.runtimeDir, "outputs", "wiki-chat", "wcf_111111111111111111");
+  writeFile(fixture.runtimeDir, "outputs/wiki-chat/wcf_111111111111111111/request.json", JSON.stringify({
+    id: "wcf_111111111111111111",
+    chatId: "300",
+    createdAt: "2026-04-27T00:00:00.000Z",
+    expiresAt: "2026-04-27T00:00:00.000Z",
+    messageText: "old",
+    attachments: [],
+    zipPath: path.join(requestDir, "wcf_111111111111111111.zip"),
+    zipFileName: "wcf_111111111111111111.zip",
+  }));
+  writeFile(fixture.runtimeDir, "outputs/wiki-chat/wcf_111111111111111111/wcf_111111111111111111.zip", "zip");
+  try {
+    migrate(dbHandle.db);
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockEmptyUpdatesFetch(),
+      ),
+    };
+
+    await runWorkerOnce(context);
+
+    assert.equal(fs.existsSync(requestDir), false);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce does not treat slash command prefixes as registered commands", async () => {
   const fixture = createFixture();
   const dbHandle = openIngestDatabase(":memory:");
@@ -1768,6 +1971,9 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
     },
     wiki: {
       chatTimeoutMs: 5 * 60 * 1000,
+    },
+    artifact: {
+      allowGeneratedRenderers: true,
     },
     translation: {
       defaultRelation: "business",
@@ -2249,6 +2455,120 @@ function mockEmptyUpdatesFetch(sentMessages: Array<{ chat_id: string; text: stri
           date: 1,
           chat: { id: Number((body as { chat_id: string }).chat_id), type: "private" },
           text: (body as { text: string }).text,
+        },
+      });
+    }
+    return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
+function mockWikiChatAttachmentFetch(input: {
+  sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }>;
+  sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }>;
+  text: string;
+}): FetchLike {
+  return async (url, init) => {
+    const method = url.split("/").at(-1);
+    const body = init?.body instanceof FormData ? init.body : init?.body ? JSON.parse(String(init.body)) : {};
+    if (method === "getUpdates") {
+      return jsonResponse({
+        ok: true,
+        result: [{
+          update_id: 11,
+          message: {
+            message_id: 21,
+            date: 1_777_000_001,
+            chat: { id: 300, type: "private" },
+            from: { id: 400, is_bot: false, first_name: "Tony" },
+            text: input.text,
+          },
+        }],
+      });
+    }
+    if (method === "sendMessage" || method === "editMessageText") {
+      input.sentMessages.push(body as { chat_id: string; text: string; reply_markup?: unknown });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: method === "editMessageText" ? (body as { message_id: number }).message_id : 100,
+          date: 1,
+          chat: { id: Number((body as { chat_id: string }).chat_id), type: "private" },
+          text: (body as { text: string }).text,
+        },
+      });
+    }
+    if (method === "sendChatAction") {
+      return jsonResponse({ ok: true, result: true });
+    }
+    if (method === "sendDocument" && body instanceof FormData) {
+      const document = body.get("document");
+      input.sentDocuments.push({
+        chat_id: String(body.get("chat_id")),
+        caption: String(body.get("caption")),
+        ...(typeof document === "string" ? { document } : {}),
+        ...(typeof document !== "string" && document?.name ? { document: document.name } : {}),
+      });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: 101,
+          date: 1,
+          chat: { id: Number(body.get("chat_id")), type: "private" },
+          document: { file_id: "doc", file_name: typeof document !== "string" ? document?.name : "file" },
+        },
+      });
+    }
+    return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
+  };
+}
+
+function mockWikiChatZipCallbackFetch(
+  callbackData: string,
+  sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }>,
+): FetchLike {
+  return async (input, init) => {
+    const method = input.split("/").at(-1);
+    const body = init?.body instanceof FormData ? init.body : init?.body ? JSON.parse(String(init.body)) : {};
+    if (method === "getUpdates") {
+      return jsonResponse({
+        ok: true,
+        result: [{
+          update_id: 12,
+          callback_query: {
+            id: "wiki-files-callback-1",
+            from: { id: 400, is_bot: false, first_name: "Tony" },
+            message: {
+              message_id: 22,
+              date: 1_777_000_002,
+              chat: { id: 300, type: "private" },
+              text: "confirm",
+            },
+            data: callbackData,
+          },
+        }],
+      });
+    }
+    if (method === "answerCallbackQuery") {
+      return jsonResponse({ ok: true, result: true });
+    }
+    if (method === "sendChatAction") {
+      return jsonResponse({ ok: true, result: true });
+    }
+    if (method === "sendDocument" && body instanceof FormData) {
+      const document = body.get("document");
+      sentDocuments.push({
+        chat_id: String(body.get("chat_id")),
+        caption: String(body.get("caption")),
+        ...(typeof document === "string" ? { document } : {}),
+        ...(typeof document !== "string" && document?.name ? { document: document.name } : {}),
+      });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: 102,
+          date: 1,
+          chat: { id: Number(body.get("chat_id")), type: "private" },
+          document: { file_id: "zip", file_name: typeof document !== "string" ? document?.name : "bundle.zip" },
         },
       });
     }

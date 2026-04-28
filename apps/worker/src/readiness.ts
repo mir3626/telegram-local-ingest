@@ -131,6 +131,21 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
   } else {
     checks.push(warn("WIKI_CHAT_COMMAND", "not set; plain Telegram chat messages will not call wiki skills"));
   }
+  const renderersRoot = config.artifact.renderersRoot
+    ? path.resolve(config.vault.obsidianVaultPath, config.artifact.renderersRoot)
+    : path.resolve(config.vault.obsidianVaultPath, "renderers");
+  if (await pathExists(renderersRoot)) {
+    checks.push(ok("WIKI_RENDERERS_DIR", `readable: ${renderersRoot}`));
+  } else {
+    checks.push(warn("WIKI_RENDERERS_DIR", `missing; registered artifact renderers are unavailable: ${renderersRoot}`));
+  }
+  checks.push(ok(
+    "WIKI_ARTIFACT_ALLOW_GENERATED_RENDERERS",
+    config.artifact.allowGeneratedRenderers ? "enabled" : "disabled",
+  ));
+  if (config.artifact.derivedIngestCommand) {
+    await checkCommandReadable(checks, "WIKI_DERIVED_INGEST_COMMAND", config.artifact.derivedIngestCommand, cwd);
+  }
 
   await checkAgentPostprocessReadiness(checks, config, cwd, env);
 
@@ -410,6 +425,15 @@ async function nearestExistingPath(targetPath: string): Promise<string | null> {
       }
       current = parent;
     }
+  }
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -6,6 +6,12 @@ import path from "node:path";
 import test from "node:test";
 
 import { createOpsDashboardServer } from "../apps/ops-dashboard/src/index.js";
+import {
+  completeArtifactRendererRun,
+  createArtifactRendererRun,
+  migrate,
+  openIngestDatabase,
+} from "@telegram-local-ingest/db";
 
 const repoRoot = path.resolve(".");
 
@@ -115,6 +121,88 @@ test("ops dashboard can run a module and return durable result logs", async () =
     const detailText = await detailResponse.text();
     assert.match(detailText, /demo.echo/);
     assert.match(detailText, /bundlePath/);
+  } finally {
+    await closeServer(dashboard.server);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("ops dashboard exposes generated renderer prompt and can promote it", async () => {
+  const fixture = createFixture();
+  const vaultRoot = path.join(fixture.root, "vault");
+  const renderersRoot = path.join(vaultRoot, "renderers");
+  const runId = "artifact_demo_20260428T000000000Z";
+  const runDir = path.join(fixture.runtimeDir, "wiki-artifacts", "runs", runId);
+  const generatedDir = path.join(runDir, "generated");
+  fs.mkdirSync(generatedDir, { recursive: true });
+  fs.writeFileSync(path.join(generatedDir, "render.mjs"), "process.stdout.write('ok');\n", "utf8");
+  fs.writeFileSync(path.join(runDir, "stdout.log"), "stdout\n", "utf8");
+  fs.writeFileSync(path.join(runDir, "stderr.log"), "", "utf8");
+  fs.writeFileSync(path.join(runDir, "result.json"), "{}\n", "utf8");
+
+  const dbHandle = openIngestDatabase(fixture.dbPath);
+  try {
+    migrate(dbHandle.db);
+    createArtifactRendererRun(dbHandle.db, {
+      id: runId,
+      artifactId: "demo",
+      artifactKind: "report",
+      rendererMode: "generated",
+      rendererLanguage: "javascript",
+      sourcePrompt: "사용자가 입력한 프롬프트",
+      request: {
+        action: "create_derived_artifact",
+        artifactKind: "report",
+        artifactId: "demo",
+        title: "Demo",
+        renderer: {
+          mode: "generated",
+          language: "javascript",
+          code: "process.stdout.write('ok');\n",
+        },
+      },
+      runDir,
+      outputDir: path.join(runDir, "outputs"),
+      stdoutPath: path.join(runDir, "stdout.log"),
+      stderrPath: path.join(runDir, "stderr.log"),
+      resultPath: path.join(runDir, "result.json"),
+    });
+    completeArtifactRendererRun(dbHandle.db, { id: runId, status: "SUCCEEDED" });
+  } finally {
+    dbHandle.close();
+  }
+
+  const dashboard = await createOpsDashboardServer({
+    projectRoot: repoRoot,
+    port: 0,
+    env: {
+      ...process.env,
+      AUTOMATION_MODULES_DIR: fixture.modulesRoot,
+      INGEST_RUNTIME_DIR: fixture.runtimeDir,
+      SQLITE_DB_PATH: fixture.dbPath,
+      OBSIDIAN_VAULT_PATH: vaultRoot,
+      WIKI_RENDERERS_DIR: renderersRoot,
+    },
+    loadEnvFile: false,
+  });
+  try {
+    const stateText = await (await fetch(new URL("/api/state", dashboard.url))).text();
+    assert.match(stateText, /사용자가 입력한 프롬프트/);
+
+    const detail = await (await fetch(new URL(`/api/artifacts/runs/${runId}`, dashboard.url))).json() as {
+      run: { sourcePrompt: string };
+      generatedCode: string;
+    };
+    assert.equal(detail.run.sourcePrompt, "사용자가 입력한 프롬프트");
+    assert.match(detail.generatedCode, /process\.stdout/);
+
+    const promote = await fetch(new URL(`/api/artifacts/runs/${runId}/promote`, dashboard.url), {
+      method: "POST",
+      body: JSON.stringify({ rendererId: "generated.report.demo" }),
+      headers: { "content-type": "application/json" },
+    });
+    assert.equal(promote.status, 200);
+    assert.equal(fs.existsSync(path.join(renderersRoot, "generated-report-demo", "manifest.json")), true);
   } finally {
     await closeServer(dashboard.server);
     fs.rmSync(fixture.root, { recursive: true, force: true });

@@ -15,14 +15,26 @@ import {
   runAutomationModule,
   type DiscoveredAutomationModule,
 } from "@telegram-local-ingest/automation-core";
+import {
+  artifactRequestSchema,
+  buildArtifactRunId,
+  promoteGeneratedRenderer,
+  runArtifactRequest,
+  type ArtifactRequest,
+} from "@telegram-local-ingest/artifact-core";
 import { loadNearestEnvFile } from "@telegram-local-ingest/core";
 import {
+  completeArtifactRendererRun,
   completeAutomationRun,
+  createArtifactRendererRun,
   createAutomationRun,
+  getArtifactRendererRun,
   getAutomationRunByIdempotency,
   getAutomationScheduleState,
+  listArtifactRendererRuns,
   listAutomationModules,
   listAutomationRuns,
+  markArtifactRendererRunPromoted,
   markAutomationModulesUnavailableExcept,
   migrate,
   openIngestDatabase,
@@ -37,15 +49,22 @@ import {
 interface RuntimePaths {
   projectRoot: string;
   modulesRoot: string;
+  renderersRoot: string;
+  vaultRoot?: string;
   runtimeDir: string;
   sqliteDbPath: string;
   automationRunsDir: string;
+  derivedIngestCommand?: string;
 }
 
 async function main(): Promise<void> {
   const [domain, command, ...args] = process.argv.slice(2);
   if (!domain || domain === "help" || domain === "--help") {
     printHelp();
+    return;
+  }
+  if (domain === "artifact") {
+    await handleArtifactCommand(command, args);
     return;
   }
   if (domain !== "automation") {
@@ -117,6 +136,103 @@ async function handleAutomationCommand(command: string | undefined, args: string
       return;
     }
     throw new Error(`Unknown automation command: ${command}`);
+  } finally {
+    dbHandle.close();
+  }
+}
+
+async function handleArtifactCommand(command: string | undefined, args: string[]): Promise<void> {
+  if (!command || command === "help" || command === "--help") {
+    printArtifactHelp();
+    return;
+  }
+  const paths = await resolveRuntimePaths();
+  const dbHandle = openIngestDatabase(paths.sqliteDbPath);
+  try {
+    migrate(dbHandle.db);
+    if (command === "run") {
+      const requestFile = requiredArg(args, 0, "artifact run requires a request JSON file");
+      if (!paths.vaultRoot) {
+        throw new Error("OBSIDIAN_VAULT_PATH is required for artifact run");
+      }
+      const request = artifactRequestSchema.parse(JSON.parse(await fs.readFile(requestFile, "utf8")) as unknown);
+      const sourcePrompt = getOptionValue(args, "--prompt") ?? request.title;
+      const artifactId = localArtifactId(request);
+      const runId = buildArtifactRunId(artifactId);
+      const runDir = path.join(paths.runtimeDir, "wiki-artifacts", "runs", runId);
+      createArtifactRendererRun(dbHandle.db, {
+        id: runId,
+        artifactId,
+        artifactKind: request.artifactKind,
+        rendererMode: request.renderer.mode,
+        ...(request.renderer.mode === "registered" ? { rendererId: request.renderer.id } : {}),
+        ...(request.renderer.mode === "generated" ? { rendererLanguage: request.renderer.language } : {}),
+        sourcePrompt,
+        request,
+        runDir,
+        outputDir: path.join(runDir, "outputs"),
+        stdoutPath: path.join(runDir, "stdout.log"),
+        stderrPath: path.join(runDir, "stderr.log"),
+        resultPath: path.join(runDir, "result.json"),
+      });
+      try {
+        const result = await runArtifactRequest({
+          request,
+          runId,
+          vaultRoot: paths.vaultRoot,
+          runtimeDir: paths.runtimeDir,
+          sourcePrompt,
+          rendererRegistryRoot: paths.renderersRoot,
+          ...(paths.derivedIngestCommand ? { ingestDerivedCommand: paths.derivedIngestCommand } : {}),
+          allowGeneratedRenderers: process.env.WIKI_ARTIFACT_ALLOW_GENERATED_RENDERERS !== "0",
+          env: process.env,
+        });
+        completeArtifactRendererRun(dbHandle.db, {
+          id: runId,
+          status: "SUCCEEDED",
+          derivedBundlePath: result.derivedBundlePath,
+          ...(result.wikiPageRelative ? { wikiPagePath: path.join(paths.vaultRoot, "wiki", result.wikiPageRelative) } : {}),
+          endedAt: result.endedAt,
+        });
+        process.stdout.write(`succeeded ${runId}\n`);
+        process.stdout.write(`bundle=${result.derivedBundlePath}\n`);
+        for (const artifact of result.artifacts) {
+          process.stdout.write(`artifact=${artifact.path}\n`);
+        }
+      } catch (error) {
+        completeArtifactRendererRun(dbHandle.db, {
+          id: runId,
+          status: "FAILED",
+          error: errorMessage(error),
+        });
+        throw error;
+      }
+      return;
+    }
+    if (command === "logs") {
+      printArtifactRunList(listArtifactRendererRuns(dbHandle.db, 30));
+      return;
+    }
+    if (command === "promote") {
+      const runId = requiredArg(args, 0, "artifact promote requires a run id");
+      const run = getArtifactRendererRun(dbHandle.db, runId);
+      if (!run) {
+        throw new Error(`Artifact run not found: ${runId}`);
+      }
+      const request = artifactRequestSchema.parse(run.request);
+      const rendererId = getOptionValue(args, "--id");
+      const promoted = await promoteGeneratedRenderer({
+        runDir: run.runDir,
+        request,
+        targetRoot: paths.renderersRoot,
+        ...(rendererId ? { rendererId } : {}),
+      });
+      markArtifactRendererRunPromoted(dbHandle.db, runId, promoted.rendererId);
+      process.stdout.write(`promoted ${runId} -> ${promoted.rendererId}\n`);
+      process.stdout.write(`renderer=${promoted.rendererDir}\n`);
+      return;
+    }
+    throw new Error(`Unknown artifact command: ${command}`);
   } finally {
     dbHandle.close();
   }
@@ -338,12 +454,18 @@ async function resolveRuntimePaths(): Promise<RuntimePaths> {
   loadNearestEnvFile(projectRoot);
   const runtimeDir = path.resolve(projectRoot, process.env.INGEST_RUNTIME_DIR ?? "runtime");
   const sqliteDbPath = path.resolve(projectRoot, process.env.SQLITE_DB_PATH ?? path.join(runtimeDir, "ingest.db"));
+  const vaultRoot = process.env.OBSIDIAN_VAULT_PATH?.trim()
+    ? path.resolve(process.env.OBSIDIAN_VAULT_PATH)
+    : undefined;
   return {
     projectRoot,
     runtimeDir,
     sqliteDbPath,
     modulesRoot: path.resolve(projectRoot, process.env.AUTOMATION_MODULES_DIR ?? "automations"),
+    renderersRoot: path.resolve(vaultRoot ?? projectRoot, process.env.WIKI_RENDERERS_DIR ?? "renderers"),
     automationRunsDir: path.resolve(projectRoot, process.env.AUTOMATION_RUNS_DIR ?? path.join(runtimeDir, "automation", "runs")),
+    ...(vaultRoot ? { vaultRoot } : {}),
+    ...(process.env.WIKI_DERIVED_INGEST_COMMAND?.trim() ? { derivedIngestCommand: process.env.WIKI_DERIVED_INGEST_COMMAND.trim() } : {}),
   };
 }
 
@@ -387,6 +509,17 @@ function printRunList(runs: ReturnType<typeof listAutomationRuns>): void {
   }
   for (const run of runs) {
     process.stdout.write(`${run.status.toLowerCase()} ${run.id} ${run.moduleId} ${run.startedAt} exit=${run.exitCode ?? "-"}\n`);
+  }
+}
+
+function printArtifactRunList(runs: ReturnType<typeof listArtifactRendererRuns>): void {
+  if (runs.length === 0) {
+    process.stdout.write("No artifact renderer runs recorded.\n");
+    return;
+  }
+  for (const run of runs) {
+    const promoted = run.promotedRendererId ? ` promoted=${run.promotedRendererId}` : "";
+    process.stdout.write(`${run.status.toLowerCase()} ${run.id} ${run.rendererMode} ${run.artifactKind} ${run.artifactId}${promoted}\n`);
   }
 }
 
@@ -475,12 +608,23 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+function localArtifactId(request: ArtifactRequest): string {
+  const suggested = request.renderer.mode === "generated" ? request.renderer.suggestedId : undefined;
+  const raw = request.artifactId ?? suggested ?? request.title;
+  return raw.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "artifact";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function printHelp(): void {
   process.stdout.write([
     "telegram-local-ingest ops CLI",
     "",
     "Usage:",
     "  npm run tlgi -- automation <command>",
+    "  npm run tlgi -- artifact <command>",
     "",
     "Commands:",
     "  automation list",
@@ -492,12 +636,25 @@ function printHelp(): void {
     "  automation timer install [--interval-minutes N]",
     "  automation timer uninstall",
     "  automation timer status",
+    "  artifact run <request.json> [--prompt <text>]",
+    "  artifact logs",
+    "  artifact promote <run_id> [--id <renderer.id>]",
     "",
   ].join("\n"));
 }
 
 function printAutomationHelp(): void {
   printHelp();
+}
+
+function printArtifactHelp(): void {
+  process.stdout.write([
+    "Usage:",
+    "  npm run tlgi -- artifact run <request.json> [--prompt <text>]",
+    "  npm run tlgi -- artifact logs",
+    "  npm run tlgi -- artifact promote <run_id> [--id <renderer.id>]",
+    "",
+  ].join("\n"));
 }
 
 function printTimerHelp(): void {

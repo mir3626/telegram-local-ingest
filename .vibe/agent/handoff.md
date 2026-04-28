@@ -5,10 +5,28 @@
 - **repo**: `telegram-local-ingest`
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-2`
-- **current sprint**: `sprint-21-bootstrap-packaging`
+- **current sprint**: `sprint-13-vault-reconcile-retention`
 - **harnessVersion**: `1.6.11`
 
 ## Status
+
+### Sprints 22-24 Closed — Derived Artifact Pipeline — 2026-04-28
+
+Wiki chat can now request new second-order artifacts through a worker-owned pipeline. The external `yoni-llm-wiki/scripts/chat.mjs` wrapper may write `artifact-requests.json` from a fenced `tlgi-artifact-request` block. The worker validates the request, records an `artifact_renderer_runs` SQLite row with the original user prompt, snapshots `raw/**`, executes a registered or generated renderer through `packages/artifact-core`, finalizes outputs under `derived/<date>/<artifact_id>/`, optionally calls the derived ingest command, and sends resulting artifacts through the existing Telegram attachment flow.
+
+Generated renderer runs are auditable and promotable. Generated code is stored under `runtime/wiki-artifacts/runs/<run_id>/generated/`, logs/results stay with the run, and the ops dashboard now has a `2차 산출물 / Generated Renderer` section showing the triggering user prompt, request JSON, generated code, stdout/stderr/result, derived bundle path, and promote state. The dashboard and `npm run tlgi -- artifact promote` can promote a reviewed generated renderer into `WIKI_RENDERERS_DIR` as a registered renderer. The local `yoni-llm-wiki` vault now registers the existing FX line-chart flow as `fx.chart.1y`.
+
+Sprint 25 is planned as the reusable derived action library: charts, summary reports, comparison tables, timelines, vendor invoice summaries, FX statistics, STT action items, glossary generation, and topic index rebuild helpers should become registered renderers/scripts where repeated value is high. Sprint 13 vault reconcile remains pending carryover.
+
+### Sprint 21 Deferred — 2026-04-28
+
+Sprint 21 bootstrap packaging is intentionally deferred. Future features should still be written as modular scripts/modules with stable CLI boundaries, limited package script growth, idempotent setup assumptions, and dashboard/ops visibility where appropriate, so the later one-shot Linux packaging sprint can compose them cleanly.
+
+LLMwiki derived artifact policy is now explicit: generated artifacts made from existing wiki/raw data, such as FX line charts, should not be placed under `raw/**`. Use a future sibling `derived/<date>/<artifact_id>/` package with manifest, source, artifacts, and machine-readable provenance, then ingest to `wiki/derived/**` while citing the underlying canonical raw inputs for factual claims.
+
+The local `yoni-llm-wiki` vault now has the first implementation slice for that policy: `scripts/fx_chart.py` writes generated images to `derived/_staging/fx_chart_1y/artifacts/`, `scripts/package-fx-chart-derived.mjs` moves the generated file into `derived/2026-04-28/fx_chart_1y/`, and `scripts/ingest-derived.mjs` creates `wiki/derived/fx_chart_1y.md`, updates `wiki/index.md`, and appends `wiki/log.md` without changing the raw ingest path. The package provenance records 245 source pages for `2025-04-28` through `2026-04-28`. Generated files should not remain in the vault root; no separate `derived/raw` folder is used.
+
+Wiki chat file transfer is now worker-owned. `WIKI_CHAT_COMMAND` receives `--attachment-dir` and may write `attachments.json` there; the worker validates each candidate against the vault allowlist before sending. One to four files are sent immediately with `sendDocument`. Five or more files produce a Telegram confirmation message with a `wiki-files:<request_id>` callback; on confirmation the worker creates a ZIP under `runtime/outputs/wiki-chat/<request_id>/`, includes `manifest.json` plus the requested files under `files/<vault-relative-path>`, sends it, and deletes the request/ZIP after a 12-hour TTL through the normal output cleanup cadence.
 
 ### Sprint 17 Closed — 2026-04-27
 
@@ -182,10 +200,11 @@ Image overlay labels are now single-line-height boxes without strokes. The worke
 - Let the LLM wiki adapter update `wiki/**` only, never `raw/**`.
 - LLMwiki may read only `source.md`, `manifest.yaml`, and manifest-declared canonical wiki inputs by default.
 - Treat `_translated.*`, image overlay PDFs, transcript DOCX files, and `runtime/outputs/**` as user-facing deliverables, not wiki source authority.
+- Treat generated charts/reports/analysis made from existing wiki/raw data as derived artifacts outside `raw/**`; prefer a future `derived/<date>/<artifact_id>/` package with provenance and ingest derived pages under `wiki/derived/**`.
 
 ## Next Action
 
-MVP roadmap plus Sprint 9 through Sprint 12, Sprint 14 through Sprint 20, and the LLMwiki chat routing utility work are complete. Iteration 2 remains active on the `llm-wiki-integration` branch. The next planned automation sprint is `sprint-21-bootstrap-packaging`: package the local ingest, wiki, automation, and ops dashboard stack into a repeatable one-shot Linux setup path. Carryover `sprint-13-vault-reconcile-retention` remains planned after the automation packaging path unless deletion/drift work becomes urgent.
+MVP roadmap plus Sprint 9 through Sprint 12, Sprint 14 through Sprint 20, and the LLMwiki chat routing utility work are complete. Iteration 2 remains active on `main`. Sprint 21 bootstrap packaging is deferred, but future features should stay modular and bootstrap-friendly. The next active carryover sprint is `sprint-13-vault-reconcile-retention`: make raw/wiki/output deletion safe after LLMwiki starts depending on durable source bundles.
 
 ```text
 Current utility flow target: local Telegram server -> upload file -> SQLite job -> SQLite job claim -> bounded background processing pool -> import -> STT transcript output when applicable -> raw bundle -> preprocessing -> translation-needed check -> configured agent postprocess when needed -> worker-normalized `<source-stem>_translated` deliverable -> worker-appended `[원문]` source section with translation first -> output store -> Telegram download button with actual expiry -> hidden output lifecycle callbacks.
@@ -196,11 +215,13 @@ Current utility flow target: local Telegram server -> upload file -> SQLite job 
 Use this when resuming in a fresh session:
 
 ```text
-Continue from /home/tony/workspace/telegram-local-ingest on branch `llm-wiki-integration`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, docs/context/automation.md, and .vibe/interview-log/iter-2.json first. Sprint 20 is passed: automation manifests, SQLite registry/run/event/schedule-state tables, `npm run tlgi -- automation dispatch`, user-level systemd timer files, `automations/fx-koreaexim-daily`, and `apps/ops-dashboard` are in place. Next planned work is Sprint 21: package the local ingest, wiki, automation, and ops dashboard stack into a repeatable one-shot Linux setup path. Core LLMwiki decision remains: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority.
+Continue from /home/tony/workspace/telegram-local-ingest on branch `main`. Read .vibe/agent/handoff.md, .vibe/agent/session-log.md, docs/context/llmwiki.md, docs/context/automation.md, and .vibe/interview-log/iter-2.json first. Sprint 24 is passed: wiki chat artifact requests, worker-owned derived artifact execution, generated renderer audit logs, ops dashboard generated renderer review/promote, and registered `fx.chart.1y` are in place. Sprint 21 bootstrap packaging is deferred, and Sprint 13 vault reconcile remains pending carryover. Current planned work is Sprint 25: promote repeated wiki-data transformations into registered renderers/scripts. Core LLMwiki decision remains: wiki raw is original evidence plus deterministic canonical text projections declared as manifest `wiki_inputs`; runtime outputs and rendered `_translated` deliverables are excluded from wiki authority. Derived wiki artifacts live outside `raw/**` under `derived/<date>/<artifact_id>/` with provenance and optional `wiki/derived/**` ingest.
 ```
 
 ## Latest Verification
 
+- Latest verification after derived artifact pipeline and generated renderer dashboard support: `npm run typecheck` passed; `node --import tsx --test test/artifact-core.test.ts` passed; `node --import tsx --test test/ops-dashboard.test.ts` passed (`4`); focused `node --import tsx --test test/worker.test.ts` passed (`36`); `node --check` passed for `yoni-llm-wiki/scripts/chat.mjs` and `renderers/fx-chart-1y/render.mjs`.
+- Latest verification after wiki chat file transfer support: `npm run typecheck` passed; focused `node --import tsx --test test/worker.test.ts` passed (`35`); `node --check /home/tony/workspace/yoni-llm-wiki/scripts/chat.mjs` passed; `node --check` passed for derived scripts and Python compile passed for `scripts/fx_chart.py`; staging/package/ingest smoke confirmed `fx_chart_1y` stays under `derived/**`, root loose artifact is absent, and derived log remains idempotent; repo-side `node --import tsx scripts/vibe-validate-state.ts`, `git diff --check`, and `npm run vibe:checkpoint` passed. `node scripts/vibe-preflight.mjs` is expected to pass once these documentation/state edits are committed; before commit it reports the dirty worktree and warns that the existing Sprint 13 prompt predates the latest state update.
 - Latest verification after ops dashboard Korean UI and stack lifecycle integration: `bash -n scripts/start-local-stack.sh scripts/stop-local-stack.sh scripts/restart-local-stack.sh` passed; `git diff --check` passed; `npm run typecheck` passed; focused `node --import tsx --test test/ops-dashboard.test.ts` passed (`3`); `npm run build` passed; full `npm test` passed (`464` passed, `1` skipped); UTF-8/mojibake checks passed; live dashboard HTML/API curl confirmed Korean UI markers and `/api/state` at `http://127.0.0.1:58991/`; `npm run ops:restart` passed and started Bot API pid `809127`, worker pid `809399`, and ops dashboard pid `809410`. Current dashboard notes: `OPS_DASHBOARD_TOKEN` protects write actions only, recent runs fetch up to 100 records but render inside a scrollable table, and start/stop scripts manage the dashboard with the rest of the local stack.
 - Latest verification after FX two-year backfill: `node --import tsx --test test/automation-core.test.ts` passed (`10`); `node --check automations/fx-koreaexim-daily/run.mjs` passed; `npm run typecheck` passed; full `npm test` passed (`460` passed, `1` skipped); `git diff --check` passed; wiki wrapper syntax checks passed; touched-file UTF-8/mojibake checks passed. No worker/server restart was required because this is a one-shot automation module path.
 - Latest verification after FX Korea Eximbank parser correction and data regeneration: `node --import tsx --test test/automation-core.test.ts` passed (`9`); `node --check automations/fx-koreaexim-daily/run.mjs` passed; `npm run typecheck` passed; full `npm test` passed (`460` passed, `1` skipped); `git diff --check` passed; touched-file UTF-8/mojibake checks passed. The regenerated `/home/tony/workspace/yoni-llm-wiki/raw/2026-04-28/fx_koreaexim_20260428` bundle is finalized and its wiki source shows 23 source rows and 4 selected currencies. No worker/server restart was required because this is a one-shot automation module path.

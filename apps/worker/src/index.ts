@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,12 +14,20 @@ import {
   type AgentPostprocessInput,
   type AgentPostprocessResult,
 } from "@telegram-local-ingest/agent-adapter";
+import {
+  artifactRequestSchema,
+  buildArtifactRunId,
+  runArtifactRequest,
+  type ArtifactRequest,
+} from "@telegram-local-ingest/artifact-core";
 import { createIngestJobFromTelegramMessage, createQueuedJobFromTelegramMessage } from "@telegram-local-ingest/capture";
 import { type AppConfig, ConfigError, loadConfig, loadNearestEnvFile } from "@telegram-local-ingest/core";
 import {
   appendJobEvent,
   claimRunnableJobs,
+  completeArtifactRendererRun,
   createSourceBundle,
+  createArtifactRendererRun,
   getSourceBundleForJob,
   getJob,
   getTelegramOffset,
@@ -107,6 +115,38 @@ const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 const TELEGRAM_TEXT_CHUNK_LIMIT = 3500;
 const WIKI_CHAT_OUTPUT_LIMIT_BYTES = 1024 * 1024;
+const WIKI_CHAT_ATTACHMENT_ZIP_THRESHOLD = 5;
+const WIKI_CHAT_ATTACHMENT_TTL_MS = 12 * 60 * 60 * 1000;
+const WIKI_CHAT_ATTACHMENT_MIME_TYPE = "application/zip";
+
+interface WikiChatAttachment {
+  path: string;
+  label?: string;
+  fileName?: string;
+  mimeType?: string;
+}
+
+interface ResolvedWikiChatAttachment {
+  absolutePath: string;
+  vaultRelativePath: string;
+  fileName: string;
+  label: string;
+  mimeType?: string;
+  sizeBytes: number;
+  sha256: string;
+}
+
+interface WikiChatFileRequest {
+  id: string;
+  chatId: string;
+  userId?: string;
+  messageText: string;
+  createdAt: string;
+  expiresAt: string;
+  attachments: ResolvedWikiChatAttachment[];
+  zipPath?: string;
+  zipFileName?: string;
+}
 
 export interface WorkerContext {
   config: AppConfig;
@@ -423,6 +463,7 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
           const handled = await handleRetryCallback(context, callback)
             || await handleOutputLifecycleCallback(context, callback)
             || await handleDownloadCallback(context, callback)
+            || await handleWikiChatFileConfirmCallback(context, callback)
             || await handleSttContextCallback(context, callback);
           operatorCommandsHandled += handled ? 1 : 0;
         }
@@ -791,12 +832,18 @@ async function isReusableSourceBundle(bundle: { bundlePath: string; manifestPath
 }
 
 async function cleanupExpiredOutputFiles(context: WorkerContext): Promise<void> {
-  const cleanup = await cleanupExpiredOutputs(context.db, { limit: 50 });
+  const [cleanup, wikiChatDeleted] = await Promise.all([
+    cleanupExpiredOutputs(context.db, { limit: 50 }),
+    cleanupExpiredWikiChatFileRequests(context.config.runtime.runtimeDir),
+  ]);
   if (cleanup.deletedOutputs.length > 0) {
     logWorker(`expired output cleanup deleted=${cleanup.deletedOutputs.length}`, "info", "OUTPUT");
   }
   if (cleanup.failedOutputs.length > 0) {
     logWorker(`expired output cleanup failures=${cleanup.failedOutputs.length}`, "warn", "OUTPUT");
+  }
+  if (wikiChatDeleted > 0) {
+    logWorker(`expired wiki chat attachments deleted=${wikiChatDeleted}`, "info", "OUTPUT");
   }
 }
 
@@ -1300,6 +1347,8 @@ async function handleWikiChatMessage(context: WorkerContext, message: ParsedTele
     const result = await runWikiChatCommand(context, message, text);
     const reply = formatWikiChatReply(result);
     await sendChunkedTelegramMessage(context, message.chatId, reply, { replaceMessageId: pendingMessage.message_id });
+    const artifactAttachments = await handleWikiChatArtifactRequests(context, message, text, result.artifactRequests);
+    await handleWikiChatAttachments(context, message, text, [...artifactAttachments, ...result.attachments]);
     logWorker(`wiki chat finished chat=${message.chatId} message=${message.messageId}`, "info", "WIKI");
   } catch (error) {
     logWorker(`wiki chat failed chat=${message.chatId} message=${message.messageId} error=${error instanceof Error ? error.message : String(error)}`, "warn", "WIKI");
@@ -1318,7 +1367,7 @@ async function runWikiChatCommand(
   context: WorkerContext,
   message: ParsedTelegramMessage,
   text: string,
-): Promise<{ stdout: string; stderr: string }> {
+): Promise<{ stdout: string; stderr: string; attachments: ResolvedWikiChatAttachment[]; artifactRequests: ArtifactRequest[] }> {
   const commandText = context.config.wiki.chatCommand;
   if (!commandText) {
     throw new Error("WIKI_CHAT_COMMAND is not configured");
@@ -1332,6 +1381,10 @@ async function runWikiChatCommand(
   const vaultRoot = path.resolve(context.config.vault.obsidianVaultPath);
   const rawRoot = path.resolve(vaultRoot, context.config.vault.rawRoot);
   const wikiRoot = path.resolve(vaultRoot, "wiki");
+  const jobId = sanitizeWikiChatId(`tg_chat_${message.chatId}_${message.messageId}`);
+  const attachmentDir = resolveRuntimePath(context.config.runtime.runtimeDir, "wiki-chat", jobId);
+  await fs.rm(attachmentDir, { recursive: true, force: true });
+  await fs.mkdir(attachmentDir, { recursive: true });
   const beforeRaw = await snapshotTree(rawRoot);
   const result = await runBufferedCommand(command, [
     ...baseArgs,
@@ -1342,12 +1395,14 @@ async function runWikiChatCommand(
     "--raw-root",
     rawRoot,
     "--job-id",
-    sanitizeWikiChatId(`tg_chat_${message.chatId}_${message.messageId}`),
+    jobId,
     "--chat-id",
     message.chatId,
     ...(message.userId ? ["--user-id", message.userId] : []),
     "--lock",
     path.resolve(context.config.runtime.wikiWriteLockPath),
+    "--attachment-dir",
+    attachmentDir,
   ], {
     timeoutMs: context.config.wiki.chatTimeoutMs,
     maxOutputBytes: WIKI_CHAT_OUTPUT_LIMIT_BYTES,
@@ -1360,10 +1415,564 @@ async function runWikiChatCommand(
   if (result.exitCode !== 0) {
     throw new Error(result.stderr || result.stdout || `WIKI_CHAT_COMMAND exited with ${result.exitCode}`);
   }
+  const attachments = await loadWikiChatAttachments(attachmentDir, vaultRoot, rawRoot, wikiRoot);
+  const artifactRequests = await loadWikiChatArtifactRequests(attachmentDir);
   return {
     stdout: result.stdout,
     stderr: result.stderr,
+    attachments,
+    artifactRequests,
   };
+}
+
+async function handleWikiChatAttachments(
+  context: WorkerContext,
+  message: ParsedTelegramMessage,
+  messageText: string,
+  attachments: ResolvedWikiChatAttachment[],
+): Promise<void> {
+  if (attachments.length === 0) {
+    return;
+  }
+
+  if (attachments.length < WIKI_CHAT_ATTACHMENT_ZIP_THRESHOLD) {
+    await context.telegram.sendChatAction(message.chatId, "upload_document");
+    for (const attachment of attachments) {
+      await sendWikiChatAttachment(context, message.chatId, attachment);
+    }
+    return;
+  }
+
+  const request = await createWikiChatFileRequest(context, message, messageText, attachments);
+  await context.telegram.sendMessage(
+    message.chatId,
+    buildWikiChatZipConfirmationMessage(request),
+    {
+      replyMarkup: {
+        inline_keyboard: [[{
+          text: `✅ 예, ZIP으로 전송 (${attachments.length}개)`,
+          callback_data: `wiki-files:${request.id}`,
+        }]],
+      },
+    },
+  );
+}
+
+async function handleWikiChatArtifactRequests(
+  context: WorkerContext,
+  message: ParsedTelegramMessage,
+  messageText: string,
+  requests: ArtifactRequest[],
+): Promise<ResolvedWikiChatAttachment[]> {
+  if (requests.length === 0) {
+    return [];
+  }
+  const vaultRoot = path.resolve(context.config.vault.obsidianVaultPath);
+  const rawRoot = path.resolve(vaultRoot, context.config.vault.rawRoot);
+  const wikiRoot = path.resolve(vaultRoot, "wiki");
+  const renderersRoot = resolveArtifactRenderersRoot(context, vaultRoot);
+  const ingestDerivedCommand = await resolveDerivedIngestCommand(context, vaultRoot);
+  const attachments: ResolvedWikiChatAttachment[] = [];
+
+  for (const request of requests) {
+    const artifactId = wikiChatArtifactId(request);
+    const runId = buildArtifactRunId(artifactId);
+    const runDir = resolveRuntimePath(context.config.runtime.runtimeDir, "wiki-artifacts", "runs", runId);
+    createArtifactRendererRun(context.db, {
+      id: runId,
+      artifactId,
+      artifactKind: request.artifactKind,
+      rendererMode: request.renderer.mode,
+      ...(request.renderer.mode === "registered" ? { rendererId: request.renderer.id } : {}),
+      ...(request.renderer.mode === "generated" ? { rendererLanguage: request.renderer.language } : {}),
+      sourcePrompt: messageText,
+      request,
+      runDir,
+      outputDir: path.join(runDir, "outputs"),
+      stdoutPath: path.join(runDir, "stdout.log"),
+      stderrPath: path.join(runDir, "stderr.log"),
+      resultPath: path.join(runDir, "result.json"),
+    });
+
+    await context.telegram.sendMessage(
+      message.chatId,
+      `🧪 2차 산출물을 생성합니다.\n\n${request.title}\nrun: ${runId}`,
+    );
+    try {
+      const beforeRaw = await snapshotTree(rawRoot);
+      const result = await runArtifactRequest({
+        request,
+        runId,
+        vaultRoot,
+        runtimeDir: context.config.runtime.runtimeDir,
+        sourcePrompt: messageText,
+        rendererRegistryRoot: renderersRoot,
+        ...(ingestDerivedCommand ? { ingestDerivedCommand } : {}),
+        allowGeneratedRenderers: context.config.artifact.allowGeneratedRenderers,
+        env: process.env,
+      });
+      const afterRaw = await snapshotTree(rawRoot);
+      const rawDiff = diffSnapshotMaps(beforeRaw, afterRaw);
+      if (rawDiff.length > 0) {
+        throw new Error(`Artifact renderer modified raw files: ${rawDiff.join(", ")}`);
+      }
+      const wikiPagePath = result.wikiPageRelative ? path.join(vaultRoot, "wiki", result.wikiPageRelative) : undefined;
+      completeArtifactRendererRun(context.db, {
+        id: runId,
+        status: "SUCCEEDED",
+        derivedBundlePath: result.derivedBundlePath,
+        ...(wikiPagePath ? { wikiPagePath } : {}),
+        endedAt: result.endedAt,
+      });
+      for (const artifact of result.artifacts) {
+        const artifactPath = path.join(result.derivedBundlePath, artifact.path);
+        const vaultRelativePath = path.relative(vaultRoot, artifactPath).replace(/\\/g, "/");
+        attachments.push(await resolveWikiChatAttachment({
+          path: vaultRelativePath,
+          label: `${request.title} · ${path.basename(artifact.path)}`,
+          mimeType: artifact.mediaType,
+        }, { vaultRoot, rawRoot, wikiRoot }));
+      }
+      await context.telegram.sendMessage(
+        message.chatId,
+        `✅ 2차 산출물 생성 완료\n\n${request.title}\n${path.relative(vaultRoot, result.derivedBundlePath).replace(/\\/g, "/")}`,
+      );
+      logWorker(`wiki artifact generated run=${runId} bundle=${result.derivedBundlePath}`, "info", "WIKI");
+    } catch (error) {
+      completeArtifactRendererRun(context.db, {
+        id: runId,
+        status: "FAILED",
+        error: errorMessage(error),
+      });
+      await context.telegram.sendMessage(
+        message.chatId,
+        `⚠️ 2차 산출물 생성 실패\n\n${request.title}\n${errorMessage(error)}`,
+      );
+      logWorker(`wiki artifact failed run=${runId} error=${errorMessage(error)}`, "warn", "WIKI");
+    }
+  }
+  return attachments;
+}
+
+async function sendWikiChatAttachment(
+  context: WorkerContext,
+  chatId: string,
+  attachment: ResolvedWikiChatAttachment,
+): Promise<void> {
+  await context.telegram.sendDocument(chatId, attachment.absolutePath, {
+    fileName: attachment.fileName,
+    ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+    caption: `📎 ${attachment.label}\n${attachment.vaultRelativePath}`,
+  });
+  logWorker(`wiki chat attachment sent path=${attachment.vaultRelativePath}`, "info", "WIKI");
+}
+
+async function handleWikiChatFileConfirmCallback(context: WorkerContext, callback: ParsedTelegramCallback): Promise<boolean> {
+  const parsed = parseWikiChatFileCallbackData(callback.data);
+  if (!parsed) {
+    return false;
+  }
+  if (!callback.chatId) {
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 파일을 전송할 채팅을 확인할 수 없습니다.");
+    return true;
+  }
+
+  const request = await readWikiChatFileRequest(context.config.runtime.runtimeDir, parsed.requestId);
+  if (!request) {
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⚠️ 전송 요청을 찾을 수 없습니다.");
+    return true;
+  }
+  if (request.chatId !== callback.chatId || (request.userId && callback.userId && request.userId !== callback.userId)) {
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "🔒 이 파일 묶음을 전송할 권한이 없습니다.");
+    return true;
+  }
+  if (Date.parse(request.expiresAt) <= Date.now()) {
+    await answerCallbackQuerySafely(context, callback.callbackQueryId, "⏳ 전송 요청이 만료되었습니다.");
+    return true;
+  }
+
+  await answerCallbackQuerySafely(context, callback.callbackQueryId, "📦 ZIP 파일을 준비합니다.");
+  await context.telegram.sendChatAction(callback.chatId, "upload_document");
+  const updated = await ensureWikiChatZip(context, request);
+  if (!updated.zipPath || !updated.zipFileName) {
+    throw new Error(`Wiki chat zip was not created for request ${updated.id}`);
+  }
+  await context.telegram.sendDocument(callback.chatId, updated.zipPath, {
+    fileName: updated.zipFileName,
+    mimeType: WIKI_CHAT_ATTACHMENT_MIME_TYPE,
+    caption: `📦 위키 파일 묶음\n${updated.attachments.length}개 파일 · ${formatKstDateTime(updated.expiresAt)}까지 보관`,
+  });
+  logWorker(`wiki chat zip sent request=${updated.id} files=${updated.attachments.length}`, "info", "WIKI");
+  return true;
+}
+
+async function loadWikiChatAttachments(
+  attachmentDir: string,
+  vaultRoot: string,
+  rawRoot: string,
+  wikiRoot: string,
+): Promise<ResolvedWikiChatAttachment[]> {
+  const manifestPath = path.join(attachmentDir, "attachments.json");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return [];
+    }
+    throw error;
+  }
+  const rawAttachments = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.attachments)
+      ? payload.attachments
+      : [];
+  const resolved: ResolvedWikiChatAttachment[] = [];
+  const seen = new Set<string>();
+  for (const record of rawAttachments) {
+    if (!isRecord(record) || typeof record.path !== "string") {
+      continue;
+    }
+    const attachment = await resolveWikiChatAttachment(record, { vaultRoot, rawRoot, wikiRoot });
+    if (seen.has(attachment.absolutePath)) {
+      continue;
+    }
+    seen.add(attachment.absolutePath);
+    resolved.push(attachment);
+  }
+  return resolved;
+}
+
+async function loadWikiChatArtifactRequests(attachmentDir: string): Promise<ArtifactRequest[]> {
+  const requestPath = path.join(attachmentDir, "artifact-requests.json");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await fs.readFile(requestPath, "utf8"));
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return [];
+    }
+    throw error;
+  }
+  const records = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.requests)
+      ? payload.requests
+      : [];
+  const requests: ArtifactRequest[] = [];
+  for (const record of records) {
+    try {
+      requests.push(artifactRequestSchema.parse(record));
+    } catch (error) {
+      logWorker(`wiki artifact request ignored error=${errorMessage(error)}`, "warn", "WIKI");
+    }
+  }
+  return requests;
+}
+
+async function resolveWikiChatAttachment(
+  record: Record<string, unknown>,
+  roots: { vaultRoot: string; rawRoot: string; wikiRoot: string },
+): Promise<ResolvedWikiChatAttachment> {
+  const rawPath = String(record.path);
+  const absolutePath = path.resolve(path.isAbsolute(rawPath) ? rawPath : path.join(roots.vaultRoot, rawPath));
+  const vaultRelativePath = path.relative(roots.vaultRoot, absolutePath).replace(/\\/g, "/");
+  if (vaultRelativePath.startsWith("..") || path.isAbsolute(vaultRelativePath)) {
+    throw new Error(`Wiki chat attachment is outside vault root: ${rawPath}`);
+  }
+  assertAllowedWikiChatAttachmentPath(absolutePath, roots);
+  const stat = await fs.stat(absolutePath);
+  if (!stat.isFile()) {
+    throw new Error(`Wiki chat attachment is not a file: ${rawPath}`);
+  }
+  const fileName = safeTelegramFileName(typeof record.fileName === "string" ? record.fileName : path.basename(absolutePath));
+  const label = typeof record.label === "string" && record.label.trim() ? record.label.trim() : fileName;
+  const mimeType = typeof record.mimeType === "string" && record.mimeType.trim()
+    ? record.mimeType.trim()
+    : inferAttachmentMimeType(absolutePath);
+  return {
+    absolutePath,
+    vaultRelativePath,
+    fileName,
+    label,
+    ...(mimeType ? { mimeType } : {}),
+    sizeBytes: stat.size,
+    sha256: await sha256LocalFile(absolutePath),
+  };
+}
+
+function assertAllowedWikiChatAttachmentPath(
+  absolutePath: string,
+  roots: { vaultRoot: string; rawRoot: string; wikiRoot: string },
+): void {
+  const derivedRoot = path.join(roots.vaultRoot, "derived");
+  if (isPathInside(roots.rawRoot, absolutePath)) {
+    const parts = path.relative(roots.rawRoot, absolutePath).split(path.sep);
+    const subPath = parts.slice(2).join("/");
+    if (parts.length >= 3 && (
+      subPath === "source.md" ||
+      subPath === "manifest.yaml" ||
+      subPath.startsWith("original/") ||
+      subPath.startsWith("extracted/")
+    )) {
+      return;
+    }
+  }
+  if (isPathInside(derivedRoot, absolutePath)) {
+    const parts = path.relative(derivedRoot, absolutePath).split(path.sep);
+    const subPath = parts.slice(2).join("/");
+    if (parts[0] !== "_staging" && parts.length >= 3 && (
+      subPath === "source.md" ||
+      subPath === "manifest.yaml" ||
+      subPath === "provenance.json" ||
+      subPath.startsWith("artifacts/")
+    )) {
+      return;
+    }
+  }
+  if (isPathInside(roots.wikiRoot, absolutePath)) {
+    const relative = path.relative(roots.wikiRoot, absolutePath).replace(/\\/g, "/");
+    if ((relative.startsWith("derived/") || relative.startsWith("sources/")) && relative.endsWith(".md")) {
+      return;
+    }
+  }
+  throw new Error(`Wiki chat attachment path is not allowed: ${absolutePath}`);
+}
+
+function resolveArtifactRenderersRoot(context: WorkerContext, vaultRoot: string): string {
+  const configured = context.config.artifact.renderersRoot;
+  if (!configured) {
+    return path.join(vaultRoot, "renderers");
+  }
+  return path.resolve(path.isAbsolute(configured) ? configured : path.join(vaultRoot, configured));
+}
+
+async function resolveDerivedIngestCommand(context: WorkerContext, vaultRoot: string): Promise<string | undefined> {
+  if (context.config.artifact.derivedIngestCommand) {
+    return context.config.artifact.derivedIngestCommand;
+  }
+  const localScript = path.join(vaultRoot, "scripts", "ingest-derived.mjs");
+  return await fileExists(localScript) ? `${process.execPath} ${localScript}` : undefined;
+}
+
+function wikiChatArtifactId(request: ArtifactRequest): string {
+  const suggested = request.renderer.mode === "generated" ? request.renderer.suggestedId : undefined;
+  const raw = request.artifactId ?? suggested ?? request.title;
+  return raw.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "artifact";
+}
+
+async function createWikiChatFileRequest(
+  context: WorkerContext,
+  message: ParsedTelegramMessage,
+  messageText: string,
+  attachments: ResolvedWikiChatAttachment[],
+): Promise<WikiChatFileRequest> {
+  const id = `wcf_${randomUUID().replace(/-/g, "").slice(0, 18)}`;
+  const createdAt = new Date().toISOString();
+  const request: WikiChatFileRequest = {
+    id,
+    chatId: message.chatId,
+    ...(message.userId ? { userId: message.userId } : {}),
+    messageText,
+    createdAt,
+    expiresAt: new Date(Date.parse(createdAt) + WIKI_CHAT_ATTACHMENT_TTL_MS).toISOString(),
+    attachments,
+  };
+  await writeWikiChatFileRequest(context.config.runtime.runtimeDir, request);
+  return request;
+}
+
+function buildWikiChatZipConfirmationMessage(request: WikiChatFileRequest): string {
+  const preview = request.attachments.slice(0, 10)
+    .map((attachment, index) => `${index + 1}. ${attachment.fileName} (${formatBytes(attachment.sizeBytes)})\n   ${attachment.vaultRelativePath}`)
+    .join("\n");
+  const remaining = request.attachments.length > 10 ? `\n... 외 ${request.attachments.length - 10}개` : "";
+  return [
+    `📦 전송 대상 파일 ${request.attachments.length}개를 찾았습니다.`,
+    "",
+    preview,
+    remaining,
+    "",
+    `ZIP으로 묶어 전송할까요? 요청은 ${formatKstDateTime(request.expiresAt)}까지 유효합니다.`,
+  ].join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+async function ensureWikiChatZip(context: WorkerContext, request: WikiChatFileRequest): Promise<WikiChatFileRequest> {
+  const now = new Date().toISOString();
+  const outputDir = wikiChatFileRequestDir(context.config.runtime.runtimeDir, request.id);
+  const zipFileName = `${safeTelegramFileName(request.id)}.zip`;
+  const zipPath = path.join(outputDir, zipFileName);
+  if (request.zipPath && await fileExists(request.zipPath)) {
+    return request;
+  }
+
+  await fs.mkdir(outputDir, { recursive: true });
+  const entries = new Map<string, Buffer>();
+  entries.set("manifest.json", Buffer.from(`${JSON.stringify({
+    request_id: request.id,
+    requested_at: request.createdAt,
+    generated_at: now,
+    expires_at: new Date(Date.parse(now) + WIKI_CHAT_ATTACHMENT_TTL_MS).toISOString(),
+    message: request.messageText,
+    files: request.attachments.map((attachment) => ({
+      path: attachment.vaultRelativePath,
+      file_name: attachment.fileName,
+      label: attachment.label,
+      size_bytes: attachment.sizeBytes,
+      sha256: attachment.sha256,
+    })),
+  }, null, 2)}\n`, "utf8"));
+  for (const attachment of request.attachments) {
+    const entryName = `files/${sanitizeZipEntryName(attachment.vaultRelativePath)}`;
+    entries.set(entryName, await fs.readFile(attachment.absolutePath));
+  }
+  await writeZipEntries(zipPath, entries);
+  const next: WikiChatFileRequest = {
+    ...request,
+    expiresAt: new Date(Date.parse(now) + WIKI_CHAT_ATTACHMENT_TTL_MS).toISOString(),
+    zipPath,
+    zipFileName,
+  };
+  await writeWikiChatFileRequest(context.config.runtime.runtimeDir, next);
+  return next;
+}
+
+async function readWikiChatFileRequest(runtimeDir: string, requestId: string): Promise<WikiChatFileRequest | null> {
+  try {
+    const payload = JSON.parse(await fs.readFile(wikiChatFileRequestPath(runtimeDir, requestId), "utf8")) as unknown;
+    if (!isRecord(payload) || !Array.isArray(payload.attachments)) {
+      return null;
+    }
+    return payload as unknown as WikiChatFileRequest;
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function writeWikiChatFileRequest(runtimeDir: string, request: WikiChatFileRequest): Promise<void> {
+  const requestPath = wikiChatFileRequestPath(runtimeDir, request.id);
+  await fs.mkdir(path.dirname(requestPath), { recursive: true });
+  await fs.writeFile(requestPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
+}
+
+async function cleanupExpiredWikiChatFileRequests(runtimeDir: string, now = new Date()): Promise<number> {
+  const root = wikiChatOutputRoot(runtimeDir);
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return 0;
+    }
+    throw error;
+  }
+  let deleted = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const request = await readWikiChatFileRequest(runtimeDir, entry.name);
+    if (!request || Date.parse(request.expiresAt) > now.getTime()) {
+      continue;
+    }
+    await fs.rm(wikiChatFileRequestDir(runtimeDir, entry.name), { recursive: true, force: true });
+    deleted += 1;
+  }
+  return deleted;
+}
+
+function wikiChatOutputRoot(runtimeDir: string): string {
+  return resolveRuntimePath(runtimeDir, "outputs", "wiki-chat");
+}
+
+function wikiChatFileRequestDir(runtimeDir: string, requestId: string): string {
+  return path.join(wikiChatOutputRoot(runtimeDir), safePathSegment(requestId));
+}
+
+function wikiChatFileRequestPath(runtimeDir: string, requestId: string): string {
+  return path.join(wikiChatFileRequestDir(runtimeDir, requestId), "request.json");
+}
+
+function parseWikiChatFileCallbackData(data: string | undefined): { requestId: string } | null {
+  const match = /^wiki-files:(wcf_[a-f0-9]{18})$/.exec(data ?? "");
+  return match?.[1] ? { requestId: match[1] } : null;
+}
+
+function inferAttachmentMimeType(filePath: string): string | undefined {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".pdf":
+      return "application/pdf";
+    case ".json":
+      return "application/json";
+    case ".md":
+      return "text/markdown";
+    case ".txt":
+      return "text/plain";
+    case ".csv":
+      return "text/csv";
+    case ".docx":
+      return DOCX_MIME_TYPE;
+    case ".zip":
+      return WIKI_CHAT_ATTACHMENT_MIME_TYPE;
+    default:
+      return undefined;
+  }
+}
+
+function safeTelegramFileName(value: string): string {
+  const baseName = path.basename(value).replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_").trim();
+  return baseName.length > 0 ? baseName.slice(0, 160) : "file";
+}
+
+function safePathSegment(value: string): string {
+  const segment = value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^\.+$/, "_").slice(0, 160);
+  return segment.length > 0 ? segment : "path";
+}
+
+function sanitizeZipEntryName(value: string): string {
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..")
+    .map((part) => part.replace(/[<>:"\\|?*\x00-\x1f]+/g, "_"))
+    .join("/");
+}
+
+async function sha256LocalFile(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  hash.update(await fs.readFile(filePath));
+  return hash.digest("hex");
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath, fsConstants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function runBufferedCommand(

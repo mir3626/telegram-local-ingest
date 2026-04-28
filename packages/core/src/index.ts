@@ -84,6 +84,12 @@ export interface WikiAdapterConfig {
   chatTimeoutMs: number;
 }
 
+export interface ArtifactConfig {
+  renderersRoot?: string;
+  derivedIngestCommand?: string;
+  allowGeneratedRenderers: boolean;
+}
+
 export interface TranslationConfig {
   defaultRelation: string;
   targetLanguage: string;
@@ -113,6 +119,7 @@ export interface AppConfig {
   rtzr: RtzrConfig;
   sensevoice: SenseVoiceConfig;
   wiki: WikiAdapterConfig;
+  artifact: ArtifactConfig;
   translation: TranslationConfig;
   agent: AgentPostprocessConfig;
   worker: WorkerConfig;
@@ -265,6 +272,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     wiki: {
       chatTimeoutMs: wikiChatTimeoutMs,
     },
+    artifact: {
+      allowGeneratedRenderers: parseBoolean(
+        env.WIKI_ARTIFACT_ALLOW_GENERATED_RENDERERS,
+        true,
+        "WIKI_ARTIFACT_ALLOW_GENERATED_RENDERERS",
+        issues,
+      ),
+    },
     translation: {
       defaultRelation: readNonEmpty(env.TRANSLATION_DEFAULT_RELATION) ?? "business",
       targetLanguage: readNonEmpty(env.TRANSLATION_TARGET_LANGUAGE) ?? "ko",
@@ -293,6 +308,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   assignOptional(config.wiki, "ingestCommand", optional("WIKI_INGEST_COMMAND"));
   assignOptional(config.wiki, "chatCommand", optional("WIKI_CHAT_COMMAND"));
+  assignOptional(config.artifact, "renderersRoot", optional("WIKI_RENDERERS_DIR"));
+  assignOptional(config.artifact, "derivedIngestCommand", optional("WIKI_DERIVED_INGEST_COMMAND"));
   assignOptional(config.agent, "command", optional("AGENT_POSTPROCESS_COMMAND"));
 
   if (pollTimeoutSeconds < 1 || pollTimeoutSeconds > 100) {

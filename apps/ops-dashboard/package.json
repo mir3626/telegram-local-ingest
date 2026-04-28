@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@telegram-local-ingest/automation-core": "0.1.0",
+    "@telegram-local-ingest/artifact-core": "0.1.0",
     "@telegram-local-ingest/core": "0.1.0",
     "@telegram-local-ingest/db": "0.1.0"
   }

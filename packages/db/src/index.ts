@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { IngestSource, JobStatus } from "@telegram-local-ingest/core";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export interface DbHandle {
   db: DatabaseSync;
@@ -216,6 +216,58 @@ export interface StoredAutomationScheduleState {
   updatedAt: string;
 }
 
+export type ArtifactRendererRunStatus = "RUNNING" | "SUCCEEDED" | "FAILED";
+
+export interface CreateArtifactRendererRunInput {
+  id: string;
+  artifactId: string;
+  artifactKind: string;
+  rendererMode: string;
+  rendererId?: string;
+  rendererLanguage?: string;
+  sourcePrompt: string;
+  request: unknown;
+  runDir: string;
+  outputDir: string;
+  stdoutPath: string;
+  stderrPath: string;
+  resultPath: string;
+  now?: string;
+}
+
+export interface CompleteArtifactRendererRunInput {
+  id: string;
+  status: Exclude<ArtifactRendererRunStatus, "RUNNING">;
+  derivedBundlePath?: string;
+  wikiPagePath?: string;
+  error?: string;
+  endedAt?: string;
+}
+
+export interface StoredArtifactRendererRun {
+  id: string;
+  artifactId: string;
+  artifactKind: string;
+  rendererMode: string;
+  rendererId?: string;
+  rendererLanguage?: string;
+  status: ArtifactRendererRunStatus;
+  sourcePrompt: string;
+  request: unknown;
+  runDir: string;
+  outputDir: string;
+  stdoutPath: string;
+  stderrPath: string;
+  resultPath: string;
+  derivedBundlePath?: string;
+  wikiPagePath?: string;
+  promotedAt?: string;
+  promotedRendererId?: string;
+  createdAt: string;
+  endedAt?: string;
+  error?: string;
+}
+
 export interface ClaimRunnableJobsInput {
   workerId: string;
   limit: number;
@@ -310,6 +362,10 @@ export function migrate(db: DatabaseSync): void {
     if (current < 6) {
       applyV6(db);
       recordMigration(db, 6);
+    }
+    if (current < 7) {
+      applyV7(db);
+      recordMigration(db, 7);
     }
     db.exec("COMMIT;");
   } catch (error) {
@@ -984,6 +1040,93 @@ export function mustGetAutomationScheduleState(
   return state;
 }
 
+export function createArtifactRendererRun(
+  db: DatabaseSync,
+  input: CreateArtifactRendererRunInput,
+): StoredArtifactRendererRun {
+  const timestamp = input.now ?? nowIso();
+  db.prepare(`
+    INSERT INTO artifact_renderer_runs (
+      id, artifact_id, artifact_kind, renderer_mode, renderer_id, renderer_language,
+      status, source_prompt, request_json, run_dir, output_dir,
+      stdout_path, stderr_path, result_path, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.id,
+    input.artifactId,
+    input.artifactKind,
+    input.rendererMode,
+    input.rendererId ?? null,
+    input.rendererLanguage ?? null,
+    input.sourcePrompt,
+    JSON.stringify(input.request),
+    input.runDir,
+    input.outputDir,
+    input.stdoutPath,
+    input.stderrPath,
+    input.resultPath,
+    timestamp,
+  );
+  return mustGetArtifactRendererRun(db, input.id);
+}
+
+export function completeArtifactRendererRun(
+  db: DatabaseSync,
+  input: CompleteArtifactRendererRunInput,
+): StoredArtifactRendererRun {
+  const endedAt = input.endedAt ?? nowIso();
+  db.prepare(`
+    UPDATE artifact_renderer_runs
+    SET status = ?, ended_at = ?, derived_bundle_path = ?, wiki_page_path = ?, error = ?
+    WHERE id = ?
+  `).run(
+    input.status,
+    endedAt,
+    input.derivedBundlePath ?? null,
+    input.wikiPagePath ?? null,
+    input.error ?? null,
+    input.id,
+  );
+  return mustGetArtifactRendererRun(db, input.id);
+}
+
+export function getArtifactRendererRun(db: DatabaseSync, id: string): StoredArtifactRendererRun | null {
+  const row = db.prepare("SELECT * FROM artifact_renderer_runs WHERE id = ?").get(id) as ArtifactRendererRunRow | undefined;
+  return row ? mapArtifactRendererRun(row) : null;
+}
+
+export function mustGetArtifactRendererRun(db: DatabaseSync, id: string): StoredArtifactRendererRun {
+  const run = getArtifactRendererRun(db, id);
+  if (!run) {
+    throw new Error(`Artifact renderer run not found: ${id}`);
+  }
+  return run;
+}
+
+export function listArtifactRendererRuns(db: DatabaseSync, limit = 50): StoredArtifactRendererRun[] {
+  return db
+    .prepare("SELECT * FROM artifact_renderer_runs ORDER BY created_at DESC LIMIT ?")
+    .all(limit)
+    .map((row) => mapArtifactRendererRun(row as unknown as ArtifactRendererRunRow));
+}
+
+export function markArtifactRendererRunPromoted(
+  db: DatabaseSync,
+  id: string,
+  promotedRendererId: string,
+  promotedAt = nowIso(),
+): StoredArtifactRendererRun {
+  const result = db.prepare(`
+    UPDATE artifact_renderer_runs
+    SET promoted_at = ?, promoted_renderer_id = ?
+    WHERE id = ?
+  `).run(promotedAt, promotedRendererId, id);
+  if (result.changes === 0) {
+    throw new Error(`Artifact renderer run not found: ${id}`);
+  }
+  return mustGetArtifactRendererRun(db, id);
+}
+
 function applyV1(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE jobs (
@@ -1158,6 +1301,41 @@ function applyV6(db: DatabaseSync): void {
       ON automation_schedule_state(next_due_at);
     CREATE INDEX IF NOT EXISTS idx_automation_schedule_retry_after
       ON automation_schedule_state(retry_after);
+  `);
+}
+
+function applyV7(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS artifact_renderer_runs (
+      id TEXT PRIMARY KEY,
+      artifact_id TEXT NOT NULL,
+      artifact_kind TEXT NOT NULL,
+      renderer_mode TEXT NOT NULL,
+      renderer_id TEXT,
+      renderer_language TEXT,
+      status TEXT NOT NULL,
+      source_prompt TEXT NOT NULL,
+      request_json TEXT NOT NULL,
+      run_dir TEXT NOT NULL,
+      output_dir TEXT NOT NULL,
+      stdout_path TEXT NOT NULL,
+      stderr_path TEXT NOT NULL,
+      result_path TEXT NOT NULL,
+      derived_bundle_path TEXT,
+      wiki_page_path TEXT,
+      promoted_at TEXT,
+      promoted_renderer_id TEXT,
+      created_at TEXT NOT NULL,
+      ended_at TEXT,
+      error TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_artifact_renderer_runs_created
+      ON artifact_renderer_runs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_artifact_renderer_runs_mode_created
+      ON artifact_renderer_runs(renderer_mode, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_artifact_renderer_runs_status_created
+      ON artifact_renderer_runs(status, created_at DESC);
   `);
 }
 
@@ -1340,6 +1518,33 @@ function mapAutomationScheduleState(row: AutomationScheduleStateRow): StoredAuto
   return state;
 }
 
+function mapArtifactRendererRun(row: ArtifactRendererRunRow): StoredArtifactRendererRun {
+  const run: StoredArtifactRendererRun = {
+    id: row.id,
+    artifactId: row.artifact_id,
+    artifactKind: row.artifact_kind,
+    rendererMode: row.renderer_mode,
+    status: row.status as ArtifactRendererRunStatus,
+    sourcePrompt: row.source_prompt,
+    request: parseOptionalJson(row.request_json),
+    runDir: row.run_dir,
+    outputDir: row.output_dir,
+    stdoutPath: row.stdout_path,
+    stderrPath: row.stderr_path,
+    resultPath: row.result_path,
+    createdAt: row.created_at,
+  };
+  assignDefined(run, "rendererId", definedString(row.renderer_id));
+  assignDefined(run, "rendererLanguage", definedString(row.renderer_language));
+  assignDefined(run, "derivedBundlePath", definedString(row.derived_bundle_path));
+  assignDefined(run, "wikiPagePath", definedString(row.wiki_page_path));
+  assignDefined(run, "promotedAt", definedString(row.promoted_at));
+  assignDefined(run, "promotedRendererId", definedString(row.promoted_renderer_id));
+  assignDefined(run, "endedAt", definedString(row.ended_at));
+  assignDefined(run, "error", definedString(row.error));
+  return run;
+}
+
 function assignDefined<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | undefined): void {
   if (value !== undefined) {
     target[key] = value;
@@ -1459,4 +1664,28 @@ interface AutomationScheduleStateRow {
   consecutive_failures: number;
   retry_after: string | null;
   updated_at: string;
+}
+
+interface ArtifactRendererRunRow {
+  id: string;
+  artifact_id: string;
+  artifact_kind: string;
+  renderer_mode: string;
+  renderer_id: string | null;
+  renderer_language: string | null;
+  status: string;
+  source_prompt: string;
+  request_json: string;
+  run_dir: string;
+  output_dir: string;
+  stdout_path: string;
+  stderr_path: string;
+  result_path: string;
+  derived_bundle_path: string | null;
+  wiki_page_path: string | null;
+  promoted_at: string | null;
+  promoted_renderer_id: string | null;
+  created_at: string;
+  ended_at: string | null;
+  error: string | null;
 }

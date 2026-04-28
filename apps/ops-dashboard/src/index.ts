@@ -16,15 +16,22 @@ import {
   runAutomationModule,
   type DiscoveredAutomationModule,
 } from "@telegram-local-ingest/automation-core";
+import {
+  artifactRequestSchema,
+  promoteGeneratedRenderer,
+} from "@telegram-local-ingest/artifact-core";
 import { loadNearestEnvFile } from "@telegram-local-ingest/core";
 import {
   completeAutomationRun,
   createAutomationRun,
+  getArtifactRendererRun,
   getAutomationRun,
   getAutomationRunByIdempotency,
   getAutomationScheduleState,
+  listArtifactRendererRuns,
   listAutomationModules,
   listAutomationRuns,
+  markArtifactRendererRunPromoted,
   markAutomationModulesUnavailableExcept,
   migrate,
   openIngestDatabase,
@@ -39,9 +46,12 @@ import {
 interface RuntimePaths {
   projectRoot: string;
   modulesRoot: string;
+  renderersRoot: string;
   runtimeDir: string;
   sqliteDbPath: string;
   automationRunsDir: string;
+  artifactRunsDir: string;
+  vaultRoot?: string;
 }
 
 export interface OpsDashboardOptions {
@@ -137,6 +147,19 @@ async function handleRequest(context: DashboardContext, request: IncomingMessage
       sendJson(response, 200, await readRunDetail(context, id));
       return;
     }
+    if (request.method === "GET" && url.pathname.startsWith("/api/artifacts/runs/")) {
+      const id = decodeURIComponent(url.pathname.slice("/api/artifacts/runs/".length));
+      sendJson(response, 200, await readArtifactRunDetail(context, id));
+      return;
+    }
+    const artifactPromote = url.pathname.match(/^\/api\/artifacts\/runs\/([^/]+)\/promote$/);
+    if (request.method === "POST" && artifactPromote) {
+      assertAdminRequest(context, request, url);
+      const id = decodeURIComponent(artifactPromote[1] ?? "");
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await promoteArtifactRun(context, id, typeof body.rendererId === "string" ? body.rendererId : undefined));
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/dispatch") {
       assertAdminRequest(context, request, url);
       const body = await readJsonBody(request);
@@ -194,14 +217,17 @@ async function readDashboardState(context: DashboardContext): Promise<unknown> {
       ...run,
       links: await readRunArtifactLinks(context, run),
     })));
+    const artifactRuns = listArtifactRendererRuns(db, RECENT_RUN_LIMIT);
     return {
       project: {
         root: context.paths.projectRoot,
         sqliteDbPath: context.paths.sqliteDbPath,
         modulesRoot: context.paths.modulesRoot,
+        renderersRoot: context.paths.renderersRoot,
       },
       modules,
       runs,
+      artifactRuns,
       admin: {
         tokenRequired: Boolean(context.env.OPS_DASHBOARD_TOKEN?.trim()),
       },
@@ -264,6 +290,55 @@ async function readRunDetail(context: DashboardContext, runId: string): Promise<
       result: parsedResult,
       links: await readRunArtifactLinks(context, run, parsedResult),
     };
+  } finally {
+    dbHandle.close();
+  }
+}
+
+async function readArtifactRunDetail(context: DashboardContext, runId: string): Promise<unknown> {
+  const dbHandle = openIngestDatabase(context.paths.sqliteDbPath);
+  try {
+    migrate(dbHandle.db);
+    const run = getArtifactRendererRun(dbHandle.db, runId);
+    if (!run) {
+      throw new Error(`Artifact renderer run not found: ${runId}`);
+    }
+    const [stdout, stderr, resultText, generatedCode] = await Promise.all([
+      readSafeRunText(context.paths.artifactRunsDir, run.stdoutPath),
+      readSafeRunText(context.paths.artifactRunsDir, run.stderrPath),
+      readSafeRunText(context.paths.artifactRunsDir, run.resultPath),
+      readGeneratedRendererCode(context.paths.artifactRunsDir, run.runDir),
+    ]);
+    return {
+      run,
+      stdout,
+      stderr,
+      resultText,
+      result: parseJson(resultText),
+      generatedCode,
+    };
+  } finally {
+    dbHandle.close();
+  }
+}
+
+async function promoteArtifactRun(context: DashboardContext, runId: string, rendererId?: string): Promise<unknown> {
+  const dbHandle = openIngestDatabase(context.paths.sqliteDbPath);
+  try {
+    migrate(dbHandle.db);
+    const run = getArtifactRendererRun(dbHandle.db, runId);
+    if (!run) {
+      throw new Error(`Artifact renderer run not found: ${runId}`);
+    }
+    const request = artifactRequestSchema.parse(run.request);
+    const promoted = await promoteGeneratedRenderer({
+      runDir: run.runDir,
+      request,
+      targetRoot: context.paths.renderersRoot,
+      ...(rendererId ? { rendererId } : {}),
+    });
+    const updated = markArtifactRendererRunPromoted(dbHandle.db, runId, promoted.rendererId);
+    return { run: updated, promoted };
   } finally {
     dbHandle.close();
   }
@@ -500,6 +575,25 @@ async function readSafeRunText(runsRoot: string, targetPath: string): Promise<st
   }
 }
 
+async function readGeneratedRendererCode(runsRoot: string, runDir: string): Promise<string> {
+  const generatedDir = path.join(runDir, "generated");
+  for (const fileName of ["render.py", "render.mjs"]) {
+    const candidate = path.join(generatedDir, fileName);
+    if (!isPathInside(runsRoot, candidate)) {
+      continue;
+    }
+    try {
+      const text = await fs.readFile(candidate, "utf8");
+      return text.length > MAX_LOG_CHARS ? `${text.slice(0, MAX_LOG_CHARS)}\n[truncated]` : text;
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        return `[unavailable: ${errorMessage(error)}]`;
+      }
+    }
+  }
+  return "";
+}
+
 function parseManifest(stored: StoredAutomationModule): AutomationManifest {
   return stored.manifest as AutomationManifest;
 }
@@ -515,12 +609,16 @@ function parseJson(value: string): unknown {
 function resolveRuntimePaths(projectRoot: string, env: NodeJS.ProcessEnv): RuntimePaths {
   const runtimeDir = path.resolve(projectRoot, env.INGEST_RUNTIME_DIR ?? "runtime");
   const sqliteDbPath = path.resolve(projectRoot, env.SQLITE_DB_PATH ?? path.join(runtimeDir, "ingest.db"));
+  const vaultRoot = env.OBSIDIAN_VAULT_PATH?.trim() ? path.resolve(env.OBSIDIAN_VAULT_PATH) : undefined;
   return {
     projectRoot,
     runtimeDir,
     sqliteDbPath,
     modulesRoot: path.resolve(projectRoot, env.AUTOMATION_MODULES_DIR ?? "automations"),
+    renderersRoot: path.resolve(vaultRoot ?? projectRoot, env.WIKI_RENDERERS_DIR ?? "renderers"),
     automationRunsDir: path.resolve(projectRoot, env.AUTOMATION_RUNS_DIR ?? path.join(runtimeDir, "automation", "runs")),
+    artifactRunsDir: path.resolve(projectRoot, env.WIKI_ARTIFACT_RUNS_DIR ?? path.join(runtimeDir, "wiki-artifacts", "runs")),
+    ...(vaultRoot ? { vaultRoot } : {}),
   };
 }
 
@@ -623,6 +721,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
 class DashboardHttpError extends Error {
   constructor(readonly statusCode: number, message: string) {
     super(message);
@@ -646,7 +748,7 @@ function renderDashboardHtml(): string {
     section { margin: 0 0 20px; }
     h2 { font-size: 16px; margin: 0 0 10px; }
     button { border: 1px solid #94a3b8; background: #fff; color: #17202a; border-radius: 6px; padding: 7px 10px; cursor: default; font: inherit; }
-    button[data-run], button[data-enable], button[data-runmodule], #refresh, #dispatch { cursor: pointer; }
+    button[data-run], button[data-enable], button[data-runmodule], button[data-artifact-run], button[data-promote], #refresh, #dispatch { cursor: pointer; }
     button.primary { background: #0f766e; color: #fff; border-color: #0f766e; }
     button.danger { background: #b42318; color: #fff; border-color: #b42318; }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -689,6 +791,10 @@ function renderDashboardHtml(): string {
       <h2>최근 실행 로그</h2>
       <div id="runs"></div>
     </section>
+    <section>
+      <h2>2차 산출물 / Generated Renderer</h2>
+      <div id="artifactRuns"></div>
+    </section>
     <section class="grid">
       <div class="panel">
         <h2>실행 상세</h2>
@@ -715,6 +821,7 @@ function renderDashboardHtml(): string {
       const state = await api('/api/state');
       renderModules(state.modules || []);
       renderRuns(state.runs || []);
+      renderArtifactRuns(state.artifactRuns || []);
     }
     function renderModules(modules) {
       document.getElementById('modules').innerHTML = '<div class="table-scroll"><table><thead><tr><th>모듈</th><th>상태</th><th>준비도</th><th>스케줄</th><th>최근 실행</th><th>작업</th></tr></thead><tbody>' +
@@ -740,6 +847,17 @@ function renderDashboardHtml(): string {
           '<td>' + (run.links?.rawBundlePath ? '<span class="muted">raw</span> ' + esc(run.links.rawBundlePath) : '-') + '</td>' +
         '</tr>').join('') + '</tbody></table></div>';
     }
+    function renderArtifactRuns(runs) {
+      document.getElementById('artifactRuns').innerHTML = '<div class="table-scroll runs-scroll"><table><thead><tr><th>상태</th><th>실행 ID</th><th>종류</th><th>Renderer</th><th>사용자 프롬프트</th><th>Promote</th></tr></thead><tbody>' +
+        runs.map((run) => '<tr>' +
+          '<td><span class="status ' + (run.status === 'SUCCEEDED' ? 'ok' : run.status === 'FAILED' ? 'bad' : 'warn') + '">' + esc(run.status) + '</span></td>' +
+          '<td><button data-artifact-run="' + esc(run.id) + '">' + esc(run.id) + '</button><br><span class="muted">' + esc(fmt(run.createdAt)) + '</span></td>' +
+          '<td>' + esc(run.artifactKind) + '<br><span class="muted">' + esc(run.artifactId) + '</span></td>' +
+          '<td>' + esc(run.rendererMode) + '<br><span class="muted">' + esc(run.rendererId || run.rendererLanguage || '-') + '</span></td>' +
+          '<td>' + esc((run.sourcePrompt || '').slice(0, 220)) + (run.sourcePrompt && run.sourcePrompt.length > 220 ? '...' : '') + '</td>' +
+          '<td>' + (run.rendererMode === 'generated' ? (run.promotedRendererId ? '<span class="status ok">' + esc(run.promotedRendererId) + '</span>' : '<button class="primary" data-promote="' + esc(run.id) + '">Registered로 승격</button>') : '<span class="muted">등록됨</span>') + '</td>' +
+        '</tr>').join('') + '</tbody></table></div>';
+    }
     async function showRun(id) {
       const detail = await api('/api/runs/' + encodeURIComponent(id));
       document.getElementById('detail').innerHTML = '<div><strong>' + esc(id) + '</strong></div>' +
@@ -750,10 +868,31 @@ function renderDashboardHtml(): string {
         '<h2>표준 출력 (stdout.log)</h2><pre>' + esc(detail.stdout || '') + '</pre>' +
         '<h2>오류 출력 (stderr.log)</h2><pre>' + esc(detail.stderr || '') + '</pre>';
     }
+    async function showArtifactRun(id) {
+      const detail = await api('/api/artifacts/runs/' + encodeURIComponent(id));
+      const requestText = JSON.stringify(detail.run.request || {}, null, 2);
+      document.getElementById('detail').innerHTML = '<div><strong>' + esc(id) + '</strong></div>' +
+        '<p>상태: ' + esc(detail.run.status) + ' / renderer ' + esc(detail.run.rendererMode) + '</p>' +
+        (detail.run.derivedBundlePath ? '<p>Derived: ' + esc(detail.run.derivedBundlePath) + '</p>' : '') +
+        (detail.run.wikiPagePath ? '<p>Wiki: ' + esc(detail.run.wikiPagePath) + '</p>' : '') +
+        '<h2>사용자 입력 프롬프트</h2><pre>' + esc(detail.run.sourcePrompt || '') + '</pre>' +
+        '<h2>Artifact Request</h2><pre>' + esc(requestText) + '</pre>' +
+        (detail.generatedCode ? '<h2>Generated Renderer 코드</h2><pre>' + esc(detail.generatedCode) + '</pre>' : '') +
+        '<h2>결과 (result.json)</h2><pre>' + esc(detail.resultText || '') + '</pre>' +
+        '<h2>표준 출력 (stdout.log)</h2><pre>' + esc(detail.stdout || '') + '</pre>' +
+        '<h2>오류 출력 (stderr.log)</h2><pre>' + esc(detail.stderr || '') + '</pre>';
+    }
     document.addEventListener('click', async (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       if (target.dataset.run) await showRun(target.dataset.run);
+      if (target.dataset.artifactRun) await showArtifactRun(target.dataset.artifactRun);
+      if (target.dataset.promote) {
+        const rendererId = prompt('등록할 renderer id를 입력하세요. 비워두면 자동 생성됩니다.', '');
+        await api('/api/artifacts/runs/' + encodeURIComponent(target.dataset.promote) + '/promote', {method:'POST', body:JSON.stringify(rendererId ? {rendererId} : {})});
+        await load();
+        await showArtifactRun(target.dataset.promote);
+      }
       if (target.dataset.enable) {
         const state = target.textContent === '켜기' ? 'enable' : 'disable';
         await api('/api/modules/' + encodeURIComponent(target.dataset.enable) + '/' + state, {method:'POST', body:'{}'});

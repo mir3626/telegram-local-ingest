@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-21-bootstrap-packaging (not started, started 2026-04-28)
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation
-> **Pending**: sprint-21-bootstrap-packaging, sprint-13-vault-reconcile-retention
+> **Current**: sprint-25-derived-action-library (planned)
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote
+> **Pending**: sprint-13-vault-reconcile-retention, sprint-25-derived-action-library
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -340,7 +340,73 @@ Telegram mobile/desktop
   - Packaging excludes runtime data, tokens, and machine-specific secrets.
   - LLMwiki lint findings are linked into the report without being treated as DB authority.
   - Retries never recreate missing raw evidence implicitly; they require restore, reimport, or delete-confirm.
-- **status**: planned after Sprint 12 live validation.
+- **status**: deferred. Keep future scripts/features modular and bootstrap-friendly, but do not implement the packaging sprint until the solution shape stabilizes further.
+
+## Sprint 22 — Derived Artifact Runner
+
+- **id**: `sprint-22-derived-artifact-runner`
+- **goal**: Let wiki chat requests create new derived artifacts through a worker-owned execution pipeline instead of letting the LLM run arbitrary Bash.
+- **tasks**:
+  - Add a `tlgi.artifact.request.v1` request schema.
+  - Add `packages/artifact-core` for registered/generated renderer execution.
+  - Validate source paths against raw/wiki/derived allowlists and snapshot `raw/**` around execution.
+  - Finalize outputs into `derived/<YYYY-MM-DD>/<artifact_id>/` with `manifest.yaml`, `source.md`, `provenance.json`, and `artifacts/*`.
+  - Reuse Telegram attachment delivery for generated artifacts.
+- **acceptance criteria**:
+  - The LLM writes only a structured artifact request; the worker owns execution and file writes.
+  - Derived artifacts are never written under `raw/**`.
+  - The user prompt, request, sources, renderer, and artifact hashes are recorded in provenance.
+- **status**: completed. Added `packages/artifact-core`, generated/registered renderer execution, source snapshots, derived package finalization, CLI `npm run tlgi -- artifact run`, and worker integration for `artifact-requests.json`.
+
+## Sprint 23 — Generated Renderer Audit Log
+
+- **id**: `sprint-23-generated-renderer-audit`
+- **goal**: Make ad hoc generated renderer usage auditable and reviewable before promotion.
+- **tasks**:
+  - Add SQLite `artifact_renderer_runs` with request JSON, original user prompt, run paths, renderer mode/language, status, output bundle, and promote metadata.
+  - Write generated renderer code under `runtime/wiki-artifacts/runs/<run_id>/generated/`.
+  - Add CLI log/promote commands.
+  - Ensure generated renderer runs cannot silently mutate raw source bundles.
+- **acceptance criteria**:
+  - Operators can inspect which user prompt caused a generated renderer.
+  - Generated code and logs remain durable under runtime.
+  - Promotion state is stored separately from generated run output.
+- **status**: completed. SQLite schema version 7 records artifact renderer runs, `tlgi artifact logs` lists them, and `tlgi artifact promote` can promote a generated renderer into the registered renderer directory.
+
+## Sprint 24 — Artifact Dashboard Promote
+
+- **id**: `sprint-24-artifact-dashboard-promote`
+- **goal**: Expose generated renderer review and promotion in the existing ops dashboard.
+- **tasks**:
+  - Add dashboard API endpoints for artifact run list/detail.
+  - Show generated renderer source prompt, request JSON, generated code, stdout/stderr/result, derived bundle, and wiki page path.
+  - Add `Promote to Registered Renderer` action guarded by the same local dashboard admin token path.
+  - Register the existing FX one-year chart script as `fx.chart.1y`.
+- **acceptance criteria**:
+  - Dashboard visibly includes the user prompt that triggered generated renderer creation.
+  - Promoting creates a registered renderer manifest and entry script under `WIKI_RENDERERS_DIR`.
+  - Existing registered renderers can be reused from natural-language wiki chat requests.
+- **status**: completed. The ops dashboard now shows a `2차 산출물 / Generated Renderer` section, detail view, prompt/code/log inspection, and promote action. The local `yoni-llm-wiki` vault now has `renderers/fx-chart-1y` registered as `fx.chart.1y`.
+
+## Sprint 25 — Derived Action Library
+
+- **id**: `sprint-25-derived-action-library`
+- **goal**: Promote recurring wiki-data transformations into reusable registered renderers/scripts.
+- **tasks**:
+  - Add registered renderers for charts as PNG/SVG/PDF.
+  - Add summary report renderers for Markdown/PDF/DOCX.
+  - Add comparison table renderers for CSV/XLSX/Markdown table.
+  - Add timeline renderers for Markdown/JSON.
+  - Add vendor invoice summary renderers producing CSV plus `report.md`.
+  - Add FX statistics renderers for period statistics, `chart.png`, `stats.csv`, and `summary.md`.
+  - Add STT meeting action-item renderers.
+  - Add multi-document glossary renderers.
+  - Add topic-specific wiki index rebuild helpers.
+- **acceptance criteria**:
+  - High-value repeated actions run as registered renderers rather than ad hoc generated code.
+  - Each renderer writes provenance-rich derived packages and declares supported artifact kinds.
+  - Generated renderer promotion remains the path for discovering future reusable renderers.
+- **status**: planned.
 
 ## Iteration iter-2 — LLMwiki Foundation
 
@@ -394,9 +460,9 @@ This iteration turns the completed Telegram ingest utility into a Karpathy-style
   - Wiki output remains provider-neutral and can be driven by Claude, Codex, or a custom LLMwiki CLI.
 - **status**: completed. The wiki adapter now loads schema v2 `manifest.yaml`, resolves manifest-declared `wiki_inputs`, passes a provider-neutral `telegram-local-ingest.llmwiki.v1` contract with source/manifest/wiki-input/citation/index/log arguments to the configured command, rejects rendered outputs as wiki source inputs, requires `wiki/index.md` and `wiki/log.md` outputs, and keeps raw bundle snapshot checks before and after command execution. `docs/schemas/llmwiki.md` defines page, citation, and output rules, and fake-command tests cover index/log writes plus raw immutability.
 
-### Automation Packaging Continuation
+### Automation Continuation
 
-The automation packaging sprints were added to the active iteration after the LLMwiki ingest contract. Full sprint details live in their roadmap sections above; this compact continuation keeps the iteration-scoped preflight order aligned with the current work queue.
+The automation sprints were added to the active iteration after the LLMwiki ingest contract. Full sprint details live in their roadmap sections above; this compact continuation keeps the iteration-scoped preflight order aligned with the current work queue. Sprint 21 bootstrap packaging is intentionally deferred outside the active iteration queue.
 
 - **id**: `sprint-17-automation-registry-cli`
 - **status**: completed.
@@ -406,8 +472,14 @@ The automation packaging sprints were added to the active iteration after the LL
 - **status**: completed.
 - **id**: `sprint-20-ops-dashboard-automation`
 - **status**: completed.
-- **id**: `sprint-21-bootstrap-packaging`
-- **status**: planned next.
+- **id**: `sprint-22-derived-artifact-runner`
+- **status**: completed.
+- **id**: `sprint-23-generated-renderer-audit`
+- **status**: completed.
+- **id**: `sprint-24-artifact-dashboard-promote`
+- **status**: completed.
+- **id**: `sprint-25-derived-action-library`
+- **status**: planned.
 
 ### Sprint 13 Carryover — Vault Reconcile And Retention
 
