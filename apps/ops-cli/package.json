@@ -1,0 +1,14 @@
+{
+  "name": "@telegram-local-ingest/ops-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@telegram-local-ingest/automation-core": "0.1.0",
+    "@telegram-local-ingest/core": "0.1.0",
+    "@telegram-local-ingest/db": "0.1.0"
+  }
+}

@@ -19,8 +19,9 @@ export type PreprocessedArtifactKind =
 export interface PreprocessJobInput {
   job: StoredJob;
   files: StoredJobFile[];
-  sourceBundle: StoredSourceBundle;
+  sourceBundle?: StoredSourceBundle;
   artifactRoot?: string;
+  includeBundledTranscripts?: boolean;
   maxBytesPerArtifact?: number;
 }
 
@@ -143,12 +144,15 @@ export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput
 
     if (preprocessKind === "text") {
       const preview = await readUtf8Preview(sourcePath, maxBytes);
+      const extractedPath = input.artifactRoot
+        ? await writeExtractedTextArtifact(input.artifactRoot, file, sourcePath, preview.text)
+        : sourcePath;
       artifacts.push({
         id: `${file.id}:original_text`,
         kind: "original_text",
         fileId: file.id,
         fileName: file.originalName ?? path.basename(sourcePath),
-        sourcePath,
+        sourcePath: extractedPath,
         text: preview.text,
         charCount: preview.text.length,
         truncated: preview.truncated,
@@ -288,8 +292,10 @@ export async function collectPreprocessedTextArtifacts(input: PreprocessJobInput
     });
   }
 
-  const transcriptArtifacts = await collectTranscriptArtifacts(input.sourceBundle, maxBytes);
-  artifacts.push(...transcriptArtifacts);
+  if (input.includeBundledTranscripts !== false && input.sourceBundle) {
+    const transcriptArtifacts = await collectTranscriptArtifacts(input.sourceBundle, maxBytes);
+    artifacts.push(...transcriptArtifacts);
+  }
 
   return {
     jobId: input.job.id,
@@ -352,7 +358,7 @@ async function collectTranscriptArtifacts(
     }
     const sourcePath = path.join(extractedDir, entry);
     const preview = await readUtf8Preview(sourcePath, maxBytes);
-    const text = stripTranscriptMarkdownBoilerplate(preview.text);
+    const text = normalizeTranscriptMarkdownForTextProcessing(preview.text);
     artifacts.push({
       id: `${sourceBundle.id}:extracted:${entry}`,
       kind: "transcript_markdown",
@@ -1025,7 +1031,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
-function stripTranscriptMarkdownBoilerplate(text: string): string {
+export function normalizeTranscriptMarkdownForTextProcessing(text: string): string {
   return text
     .split(/\r?\n/)
     .flatMap((line) => {

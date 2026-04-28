@@ -1,0 +1,27 @@
+{
+  "id": "fx.koreaexim.daily",
+  "title": "Korea Eximbank Daily FX",
+  "description": "Capture daily Korea Eximbank AP01 exchange rates into immutable raw bundles and optionally trigger wiki ingest.",
+  "entry": "run.mjs",
+  "defaultEnabled": false,
+  "schedule": {
+    "type": "daily",
+    "time": "11:30",
+    "timezone": "Asia/Seoul",
+    "catchUp": "missing-business-days"
+  },
+  "requiredEnv": [
+    "FX_KOREAEXIM_AUTHKEY",
+    "OBSIDIAN_VAULT_PATH"
+  ],
+  "capabilities": [
+    "network:api.koreaexim.go.kr",
+    "raw-bundle-write",
+    "wiki-ingest-optional"
+  ],
+  "timeoutMs": 120000,
+  "retry": {
+    "maxAttempts": 2,
+    "backoffMs": 1800000
+  }
+}

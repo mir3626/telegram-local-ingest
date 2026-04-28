@@ -1,0 +1,15 @@
+{
+  "name": "@telegram-local-ingest/ops-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --import tsx src/index.ts",
+    "start": "node ../../dist/app/apps/ops-dashboard/src/index.js"
+  },
+  "dependencies": {
+    "@telegram-local-ingest/automation-core": "0.1.0",
+    "@telegram-local-ingest/core": "0.1.0",
+    "@telegram-local-ingest/db": "0.1.0"
+  }
+}

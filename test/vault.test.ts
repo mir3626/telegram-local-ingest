@@ -30,6 +30,7 @@ test("writeRawBundle creates manifest, source markdown, log, marker, and origina
   const fixture = createFixture();
   const originalPath = writeFile(fixture.runtimeDir, "archive/originals/lead.txt", "lead content");
   const extractedPath = writeFile(fixture.runtimeDir, "extracted/lead.md", "# Lead\n");
+  const structurePath = writeFile(fixture.runtimeDir, "extracted/lead.blocks.json", "{\"blocks\":[]}\n");
 
   const result = await writeRawBundle({
     vaultPath: fixture.vaultPath,
@@ -47,18 +48,37 @@ test("writeRawBundle creates manifest, source markdown, log, marker, and origina
         createdAt: NOW,
       },
     ],
-    extractedArtifacts: [{ sourcePath: extractedPath, name: "lead.md", mimeType: "text/markdown" }],
+    extractedArtifacts: [
+      { sourcePath: extractedPath, name: "lead.md", kind: "transcript_markdown", mimeType: "text/markdown", sourceFileId: "file-1" },
+      { sourcePath: structurePath, name: "lead.blocks.json", kind: "docx_blocks", mimeType: "application/json", sourceFileId: "file-1" },
+    ],
     events: [eventFixture()],
     now: NOW,
   });
 
+  const manifest = fs.readFileSync(result.paths.manifest, "utf8");
+  const sourceMarkdown = fs.readFileSync(result.paths.sourceMarkdown, "utf8");
   assert.equal(result.id, "tg_300_21");
+  assert.equal(result.wikiInputs.length, 3);
   assert.equal(fs.readFileSync(path.join(result.paths.originalDir, "lead.txt"), "utf8"), "lead content");
   assert.equal(fs.readFileSync(path.join(result.paths.extractedDir, "lead.md"), "utf8"), "# Lead\n");
-  assert.match(fs.readFileSync(result.paths.manifest, "utf8"), /bundle_id: "tg_300_21"/);
-  assert.match(fs.readFileSync(result.paths.manifest, "utf8"), /sha256: "abc123"/);
-  assert.match(fs.readFileSync(result.paths.sourceMarkdown, "utf8"), /## Original Files/);
-  assert.match(fs.readFileSync(result.paths.sourceMarkdown, "utf8"), /\[lead.txt\]\(original\/lead.txt\)/);
+  assert.match(manifest, /schema_version: 2/);
+  assert.match(manifest, /bundle_id: "tg_300_21"/);
+  assert.match(manifest, /sha256: "abc123"/);
+  assert.match(manifest, /wiki_policy:/);
+  assert.match(manifest, /rendered_outputs_excluded:/);
+  assert.match(manifest, /\*\*\/\*_translated\.\*/);
+  assert.match(manifest, /wiki_inputs:/);
+  assert.match(manifest, /role: "evidence_original"/);
+  assert.match(manifest, /role: "canonical_text"/);
+  assert.match(manifest, /role: "structure"/);
+  assert.match(manifest, /derived_from: "original\/lead.txt"/);
+  assert.match(sourceMarkdown, /## LLMwiki Read Order/);
+  assert.match(sourceMarkdown, /## Wiki Authority Policy/);
+  assert.match(sourceMarkdown, /### Canonical Text/);
+  assert.match(sourceMarkdown, /\[lead.md\]\(extracted\/lead.md\)/);
+  assert.match(sourceMarkdown, /## Original Files/);
+  assert.match(sourceMarkdown, /\[lead.txt\]\(original\/lead.txt\)/);
   assert.match(fs.readFileSync(result.paths.logMarkdown, "utf8"), /job.transition: QUEUED -> IMPORTING/);
   assert.match(fs.readFileSync(result.paths.finalizedMarker, "utf8"), /finalized_at=/);
 });

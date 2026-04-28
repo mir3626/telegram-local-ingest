@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -56,7 +56,13 @@ import {
   discardRuntimeOutput,
   resolveDownloadableOutput,
 } from "@telegram-local-ingest/output-store";
-import { collectPreprocessedTextArtifacts } from "@telegram-local-ingest/preprocessors";
+import {
+  collectPreprocessedTextArtifacts,
+  normalizeTranscriptMarkdownForTextProcessing,
+  type PreprocessedArtifactKind,
+  type PreprocessedTextArtifact,
+  type PreprocessJobResult,
+} from "@telegram-local-ingest/preprocessors";
 import { detectLanguageAcrossArtifacts, type DetectedLanguage } from "@telegram-local-ingest/language-detector";
 import {
   ensureRtzrSupportedAudio,
@@ -83,9 +89,15 @@ import {
   TelegramBotApiClient,
   type ParsedTelegramCallback,
   type ParsedTelegramFile,
+  type ParsedTelegramMessage,
+  type TelegramMessage,
 } from "@telegram-local-ingest/telegram";
-import { type RawBundleArtifactInput, writeRawBundle } from "@telegram-local-ingest/vault";
-import { runWikiIngestAdapter } from "@telegram-local-ingest/wiki-adapter";
+import {
+  type BundleFileRecord,
+  type RawBundleArtifactInput,
+  writeRawBundle,
+} from "@telegram-local-ingest/vault";
+import { parseCommandLine, runWikiIngestAdapter, snapshotTree } from "@telegram-local-ingest/wiki-adapter";
 
 const execFileAsync = promisify(execFile);
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -93,6 +105,8 @@ const EML_MIME_TYPES = new Set(["application/eml", "message/rfc822"]);
 const IMAGE_EXTENSIONS = new Set([".jpeg", ".jpg", ".png"]);
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
+const TELEGRAM_TEXT_CHUNK_LIMIT = 3500;
+const WIKI_CHAT_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 
 export interface WorkerContext {
   config: AppConfig;
@@ -434,6 +448,12 @@ export async function pollTelegramUpdatesOnce(context: WorkerContext): Promise<O
         if (parsed.files.length === 0 && command && command.name !== "ingest" && command.name !== "unknown") {
           const result = await sendOperatorCommandResponse(context.db, context.telegram, parsed);
           operatorCommandsHandled += result.handled ? 1 : 0;
+        } else if (parsed.files.length === 0 && parsed.text?.trim() && (!command || command.name === "unknown")) {
+          await handleWikiChatMessage(context, parsed);
+          operatorCommandsHandled += 1;
+        } else if (parsed.files.length === 0 && command?.name === "ingest") {
+          await context.telegram.sendMessage(parsed.chatId, "📎 /ingest는 파일과 함께 보내주세요.\n\n파일 없이 위키에 질문하려면 일반 문장으로 입력하면 됩니다.");
+          operatorCommandsHandled += 1;
         } else {
           const needsSttPreset = hasAudioOrVoice(parsed.files);
           const created = needsSttPreset
@@ -529,6 +549,10 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       if (audioFiles.length > 0) {
         logWorker(`STT phase started job=${job.id} provider=${context.config.stt.provider} files=${audioFiles.length}`, "info", "STT");
         await runWithSemaphore(context, "stt", () => runConfiguredSttTranscription(context, job));
+        const transcriptOutputs = await registerTranscriptOutputs(context, job);
+        if (transcriptOutputs.length > 0) {
+          logWorker(`transcript outputs registered job=${job.id} count=${transcriptOutputs.length}`, "info", "OUTPUT");
+        }
         const stopped = terminalJobIfStopped(context.db, job.id);
         if (stopped) {
           return stopped;
@@ -557,15 +581,24 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
       } else {
       logWorker(`writing raw bundle job=${job.id}`, "info", "BUNDLE");
       const events = listJobEvents(context.db, job.id);
+      const preBundlePreprocessing = await collectPreprocessedTextArtifacts({
+        job,
+        files: listJobFiles(context.db, job.id),
+        artifactRoot: resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, "canonical"),
+        includeBundledTranscripts: false,
+      });
       const bundle = await writeRawBundle({
         vaultPath: context.config.vault.obsidianVaultPath,
         rawRoot: context.config.vault.rawRoot,
         job,
         files: listJobFiles(context.db, job.id),
         events,
-        extractedArtifacts: collectExtractedArtifacts(events),
+        extractedArtifacts: [
+          ...collectExtractedArtifacts(events),
+          ...preprocessedArtifactsToRawBundleInputs(preBundlePreprocessing.artifacts),
+        ],
       });
-      createSourceBundle(context.db, {
+      const storedBundle = createSourceBundle(context.db, {
         id: bundle.id,
         jobId: job.id,
         bundlePath: bundle.paths.root,
@@ -573,6 +606,19 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
         sourceMarkdownPath: bundle.paths.sourceMarkdown,
         finalizedAt: bundle.finalizedAt,
       });
+      const bundledTranscripts = await collectPreprocessedTextArtifacts({
+        job,
+        files: [],
+        sourceBundle: storedBundle,
+      });
+      appendPreprocessCompletedEvent(
+        context,
+        job,
+        mergePreprocessingResults(
+          preBundlePreprocessingToRawPaths(preBundlePreprocessing, bundle.paths.root, bundle.extractedFiles),
+          bundledTranscripts,
+        ),
+      );
       logWorker(`bundle written job=${job.id} path=${bundle.paths.root}`, "info", "BUNDLE");
       transitionJob(context.db, job.id, "INGESTING", { message: "Raw bundle ready for wiki ingest" });
       job = mustGetJob(context.db, job.id);
@@ -1229,6 +1275,244 @@ async function runConfiguredWikiAdapter(context: WorkerContext, job: StoredJob):
   });
 }
 
+async function handleWikiChatMessage(context: WorkerContext, message: ParsedTelegramMessage): Promise<void> {
+  if (!context.config.wiki.chatCommand) {
+    await context.telegram.sendMessage(
+      message.chatId,
+      "⚠️ 위키 채팅 기능이 아직 설정되지 않았습니다.\n\n관리자가 WIKI_CHAT_COMMAND를 설정해야 사용할 수 있습니다.",
+    );
+    return;
+  }
+
+  const text = message.text?.trim();
+  if (!text) {
+    return;
+  }
+
+  const stopTyping = startTelegramChatActionLoop(context, message.chatId);
+  let pendingMessage: TelegramMessage | undefined;
+  try {
+    logWorker(`wiki chat started chat=${message.chatId} message=${message.messageId}`, "info", "WIKI");
+    pendingMessage = await context.telegram.sendMessage(
+      message.chatId,
+      "⏳ 위키 답변 준비 중입니다...\n\n완료되면 이 메시지가 결과로 바뀝니다.",
+    );
+    const result = await runWikiChatCommand(context, message, text);
+    const reply = formatWikiChatReply(result);
+    await sendChunkedTelegramMessage(context, message.chatId, reply, { replaceMessageId: pendingMessage.message_id });
+    logWorker(`wiki chat finished chat=${message.chatId} message=${message.messageId}`, "info", "WIKI");
+  } catch (error) {
+    logWorker(`wiki chat failed chat=${message.chatId} message=${message.messageId} error=${error instanceof Error ? error.message : String(error)}`, "warn", "WIKI");
+    await sendChunkedTelegramMessage(
+      context,
+      message.chatId,
+      `⚠️ 위키 채팅 처리에 실패했습니다.\n\n${error instanceof Error ? error.message : String(error)}`,
+      pendingMessage ? { replaceMessageId: pendingMessage.message_id } : undefined,
+    );
+  } finally {
+    stopTyping();
+  }
+}
+
+async function runWikiChatCommand(
+  context: WorkerContext,
+  message: ParsedTelegramMessage,
+  text: string,
+): Promise<{ stdout: string; stderr: string }> {
+  const commandText = context.config.wiki.chatCommand;
+  if (!commandText) {
+    throw new Error("WIKI_CHAT_COMMAND is not configured");
+  }
+
+  const [command, ...baseArgs] = parseCommandLine(commandText);
+  if (!command) {
+    throw new Error("WIKI_CHAT_COMMAND is empty");
+  }
+
+  const vaultRoot = path.resolve(context.config.vault.obsidianVaultPath);
+  const rawRoot = path.resolve(vaultRoot, context.config.vault.rawRoot);
+  const wikiRoot = path.resolve(vaultRoot, "wiki");
+  const beforeRaw = await snapshotTree(rawRoot);
+  const result = await runBufferedCommand(command, [
+    ...baseArgs,
+    "--message",
+    text,
+    "--wiki-root",
+    wikiRoot,
+    "--raw-root",
+    rawRoot,
+    "--job-id",
+    sanitizeWikiChatId(`tg_chat_${message.chatId}_${message.messageId}`),
+    "--chat-id",
+    message.chatId,
+    ...(message.userId ? ["--user-id", message.userId] : []),
+    "--lock",
+    path.resolve(context.config.runtime.wikiWriteLockPath),
+  ], {
+    timeoutMs: context.config.wiki.chatTimeoutMs,
+    maxOutputBytes: WIKI_CHAT_OUTPUT_LIMIT_BYTES,
+  });
+  const afterRaw = await snapshotTree(rawRoot);
+  const rawDiff = diffSnapshotMaps(beforeRaw, afterRaw);
+  if (rawDiff.length > 0) {
+    throw new Error(`Wiki chat command modified raw files: ${rawDiff.join(", ")}`);
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || `WIKI_CHAT_COMMAND exited with ${result.exitCode}`);
+  }
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+function runBufferedCommand(
+  command: string,
+  args: string[],
+  options: { timeoutMs: number; maxOutputBytes: number },
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
+    let settled = false;
+    let timeout: NodeJS.Timeout | undefined;
+
+    const rejectOnce = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      reject(error);
+    };
+    timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      rejectOnce(new Error(`${command} timed out after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+    const append = (target: Buffer[], chunk: Buffer): void => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > options.maxOutputBytes) {
+        child.kill("SIGTERM");
+        rejectOnce(new Error(`${command} exceeded output limit of ${options.maxOutputBytes} bytes`));
+        return;
+      }
+      target.push(chunk);
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => append(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => append(stderr, chunk));
+    child.on("error", rejectOnce);
+    child.on("close", (exitCode) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolve({
+        exitCode: exitCode ?? 1,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+    });
+  });
+}
+
+function formatWikiChatReply(result: { stdout: string; stderr: string }): string {
+  const stdout = result.stdout.trim();
+  const stderr = result.stderr.trim();
+  if (!stdout && !stderr) {
+    return "🧠 위키 응답이 비어 있습니다.";
+  }
+  if (!stderr) {
+    return stdout;
+  }
+  if (!stdout) {
+    return `⚠️ 위키 경고\n\n${stderr}`;
+  }
+  return `${stdout}\n\n⚠️ stderr\n${stderr}`;
+}
+
+function startTelegramChatActionLoop(context: WorkerContext, chatId: string): () => void {
+  const send = (): void => {
+    void context.telegram.sendChatAction(chatId, "typing").catch((error) => {
+      logWorker(`sendChatAction failed chat=${chatId} error=${error instanceof Error ? error.message : String(error)}`, "warn", "TELEGRAM");
+    });
+  };
+  send();
+  const interval = setInterval(send, 4_000);
+  return () => clearInterval(interval);
+}
+
+async function sendChunkedTelegramMessage(
+  context: WorkerContext,
+  chatId: string,
+  text: string,
+  options: { replaceMessageId?: number } = {},
+): Promise<void> {
+  const chunks = chunkTelegramText(text, TELEGRAM_TEXT_CHUNK_LIMIT);
+  for (let index = 0; index < chunks.length; index += 1) {
+    const prefix = chunks.length > 1 ? `(${index + 1}/${chunks.length})\n` : "";
+    const messageText = `${prefix}${chunks[index]}`;
+    if (index === 0 && options.replaceMessageId !== undefined) {
+      try {
+        await context.telegram.editMessageText(chatId, options.replaceMessageId, messageText);
+        continue;
+      } catch (error) {
+        logWorker(`editMessageText failed chat=${chatId} message=${options.replaceMessageId} error=${error instanceof Error ? error.message : String(error)}`, "warn", "TELEGRAM");
+      }
+    }
+    await context.telegram.sendMessage(chatId, messageText);
+  }
+}
+
+function chunkTelegramText(text: string, limit: number): string[] {
+  const normalized = text.trim() || "(empty)";
+  const chunks: string[] = [];
+  let remaining = normalized;
+  while (remaining.length > limit) {
+    let splitAt = remaining.lastIndexOf("\n\n", limit);
+    if (splitAt < Math.floor(limit * 0.5)) {
+      splitAt = remaining.lastIndexOf("\n", limit);
+    }
+    if (splitAt < Math.floor(limit * 0.5)) {
+      splitAt = limit;
+    }
+    chunks.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  chunks.push(remaining);
+  return chunks;
+}
+
+function diffSnapshotMaps(before: Map<string, string>, after: Map<string, string>): string[] {
+  const diffs: string[] = [];
+  for (const [key, hash] of before) {
+    if (!after.has(key)) {
+      diffs.push(`deleted:${key}`);
+      continue;
+    }
+    if (after.get(key) !== hash) {
+      diffs.push(`modified:${key}`);
+    }
+  }
+  for (const key of after.keys()) {
+    if (!before.has(key)) {
+      diffs.push(`added:${key}`);
+    }
+  }
+  return diffs.sort();
+}
+
+function sanitizeWikiChatId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "_");
+}
+
 async function runConfiguredAgentPostprocess(context: WorkerContext, job: StoredJob): Promise<StoredJobOutput[]> {
   const events = listJobEvents(context.db, job.id);
   if (events.some((event) => event.type === "agent.postprocess.completed")) {
@@ -1397,28 +1681,7 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
     return;
   }
 
-  const bundle = mustGetSourceBundleForJob(context.db, job.id);
-  const preprocessing = await collectPreprocessedTextArtifacts({
-    job,
-    files: listJobFiles(context.db, job.id),
-    sourceBundle: bundle,
-    artifactRoot: resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, "preprocess"),
-  });
-  appendJobEvent(context.db, job.id, "preprocess.completed", "Preprocessing text collection completed", {
-    artifactCount: preprocessing.artifacts.length,
-    skippedCount: preprocessing.skippedFiles.length,
-    artifacts: preprocessing.artifacts.map((artifact) => ({
-      id: artifact.id,
-      kind: artifact.kind,
-      fileId: artifact.fileId,
-      fileName: artifact.fileName,
-      sourcePath: artifact.sourcePath,
-      structurePath: artifact.structurePath,
-      charCount: artifact.charCount,
-      truncated: artifact.truncated,
-    })),
-    skippedFiles: preprocessing.skippedFiles,
-  });
+  const preprocessing = await readOrCreatePreprocessingResult(context, job, events);
   logWorker(
     `text artifacts collected job=${job.id} count=${preprocessing.artifacts.length} skipped=${preprocessing.skippedFiles.length}`,
     "info",
@@ -1450,6 +1713,99 @@ async function runPreprocessingAndLanguageCheck(context: WorkerContext, job: Sto
     "info",
     "LANGUAGE",
   );
+}
+
+async function readOrCreatePreprocessingResult(
+  context: WorkerContext,
+  job: StoredJob,
+  events: StoredJobEvent[],
+): Promise<PreprocessJobResult> {
+  const existingEvent = [...events].reverse().find((event) => event.type === "preprocess.completed");
+  if (existingEvent) {
+    return readPreprocessingResultFromEvent(job.id, existingEvent);
+  }
+
+  const bundle = mustGetSourceBundleForJob(context.db, job.id);
+  const preprocessing = await collectPreprocessedTextArtifacts({
+    job,
+    files: listJobFiles(context.db, job.id),
+    sourceBundle: bundle,
+    artifactRoot: resolveRuntimePath(context.config.runtime.runtimeDir, "extracted", job.id, "preprocess"),
+  });
+  appendPreprocessCompletedEvent(context, job, preprocessing);
+  return preprocessing;
+}
+
+async function readPreprocessingResultFromEvent(jobId: string, event: StoredJobEvent): Promise<PreprocessJobResult> {
+  if (!isRecord(event.data)) {
+    return { jobId, artifacts: [], skippedFiles: [] };
+  }
+  const artifacts = Array.isArray(event.data.artifacts) ? event.data.artifacts : [];
+  const skippedFiles = Array.isArray(event.data.skippedFiles)
+    ? event.data.skippedFiles.flatMap((file) => {
+      if (!isRecord(file) || typeof file.fileName !== "string" || typeof file.reason !== "string") {
+        return [];
+      }
+      return [{
+        ...(typeof file.fileId === "string" ? { fileId: file.fileId } : {}),
+        fileName: file.fileName,
+        reason: file.reason,
+      }];
+    })
+    : [];
+
+  return {
+    jobId,
+    artifacts: await Promise.all(artifacts.flatMap((artifact) => {
+      if (
+        !isRecord(artifact) ||
+        typeof artifact.id !== "string" ||
+        typeof artifact.kind !== "string" ||
+        typeof artifact.fileName !== "string" ||
+        typeof artifact.sourcePath !== "string"
+      ) {
+        return [];
+      }
+      return [readPreprocessedArtifactFromEvent(artifact)];
+    })),
+    skippedFiles,
+  };
+}
+
+async function readPreprocessedArtifactFromEvent(artifact: Record<string, unknown>): Promise<PreprocessedTextArtifact> {
+  const rawText = await fs.readFile(String(artifact.sourcePath), "utf8");
+  const text = artifact.kind === "transcript_markdown"
+    ? normalizeTranscriptMarkdownForTextProcessing(rawText)
+    : rawText;
+  return {
+    id: String(artifact.id),
+    kind: artifact.kind as PreprocessedArtifactKind,
+    ...(typeof artifact.fileId === "string" ? { fileId: artifact.fileId } : {}),
+    fileName: String(artifact.fileName),
+    sourcePath: String(artifact.sourcePath),
+    ...(typeof artifact.structurePath === "string" ? { structurePath: artifact.structurePath } : {}),
+    text,
+    charCount: typeof artifact.charCount === "number" ? artifact.charCount : text.length,
+    truncated: typeof artifact.truncated === "boolean" ? artifact.truncated : false,
+  };
+}
+
+function appendPreprocessCompletedEvent(context: WorkerContext, job: StoredJob, preprocessing: PreprocessJobResult): void {
+  appendJobEvent(context.db, job.id, "preprocess.completed", "Preprocessing text collection completed", {
+    artifactCount: preprocessing.artifacts.length,
+    skippedCount: preprocessing.skippedFiles.length,
+    artifacts: preprocessing.artifacts.map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      fileId: artifact.fileId,
+      fileName: artifact.fileName,
+      sourcePath: artifact.sourcePath,
+      structurePath: artifact.structurePath,
+      charCount: artifact.charCount,
+      truncated: artifact.truncated,
+    })),
+    skippedFiles: preprocessing.skippedFiles,
+  });
 }
 
 function findBlockingPreprocessSkip(skippedFiles: Array<{ fileName: string; reason: string }>): { fileName: string; reason: string } | null {
@@ -1496,8 +1852,15 @@ function buildCompletionNotification(job: StoredJob, files: StoredJobFile[], out
   if (outputs.length === 0) {
     return buildJobCompletionMessage(job, files);
   }
+  const hasAgentTranslation = outputs.some((output) => output.kind === "agent_translation");
+  const hasTranscript = outputs.some((output) => output.kind === "stt_transcript");
+  const title = hasAgentTranslation && hasTranscript
+    ? "✅ 업로드한 파일의 전사/자동번역이 완료되었습니다"
+    : hasTranscript
+      ? "✅ 음성 전사가 완료되었습니다"
+      : "✅ 업로드한 파일의 자동번역이 완료되었습니다";
   return [
-    `✅ 업로드한 파일의 자동번역이 완료되었습니다: ${job.id}${job.project ? ` (${job.project})` : ""}`,
+    `${title}: ${job.id}${job.project ? ` (${job.project})` : ""}`,
     ...files.map((file) => `- ${file.originalName ?? file.id}`),
     "",
     "📎 결과 파일은 아래 만료 시각까지 다운로드할 수 있습니다.",
@@ -1653,17 +2016,274 @@ function collectExtractedArtifacts(events: StoredJobEvent[]): RawBundleArtifactI
     if (!isTranscriptionEvent(event.type) || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
       return [];
     }
+    const data = event.data;
+    const artifacts = data.artifacts;
+    if (!Array.isArray(artifacts)) {
+      return [];
+    }
+    return artifacts.flatMap((artifact: unknown) => {
+      if (!isRecord(artifact) || typeof artifact.sourcePath !== "string") {
+        return [];
+      }
+      const kind = typeof artifact.kind === "string" ? artifact.kind : undefined;
+      const result: RawBundleArtifactInput = {
+        sourcePath: artifact.sourcePath,
+      };
+      if (typeof data.fileId === "string" && kind) {
+        result.id = `${data.fileId}:${kind}`;
+      }
+      if (typeof artifact.name === "string") {
+        result.name = artifact.name;
+      }
+      if (kind) {
+        result.kind = kind;
+        result.wikiRole = kind === "transcript_markdown" ? "canonical_text" : "structure";
+      }
+      if (typeof data.fileId === "string") {
+        result.sourceFileId = data.fileId;
+      }
+      return [result];
+    });
+  });
+}
+
+function preprocessedArtifactsToRawBundleInputs(artifacts: PreprocessedTextArtifact[]): RawBundleArtifactInput[] {
+  return artifacts.flatMap((artifact) => {
+    const textInput: RawBundleArtifactInput = {
+      id: artifact.id,
+      sourcePath: artifact.sourcePath,
+      name: artifact.fileName,
+      kind: artifact.kind,
+      wikiRole: "canonical_text",
+    };
+    if (artifact.fileId) {
+      textInput.sourceFileId = artifact.fileId;
+    }
+    const inputs: RawBundleArtifactInput[] = [textInput];
+    if (artifact.structurePath) {
+      const structureInput: RawBundleArtifactInput = {
+        id: `${artifact.id}:structure`,
+        sourcePath: artifact.structurePath,
+        name: path.basename(artifact.structurePath),
+        kind: `${artifact.kind}_structure`,
+        wikiRole: "structure",
+      };
+      if (artifact.fileId) {
+        structureInput.sourceFileId = artifact.fileId;
+      }
+      inputs.push(structureInput);
+    }
+    return inputs;
+  });
+}
+
+function preBundlePreprocessingToRawPaths(
+  preprocessing: PreprocessJobResult,
+  bundleRoot: string,
+  extractedFiles: BundleFileRecord[],
+): PreprocessJobResult {
+  const extractedById = new Map(extractedFiles.flatMap((record) => record.id ? [[record.id, record]] : []));
+  return {
+    ...preprocessing,
+    artifacts: preprocessing.artifacts.map((artifact) => {
+      const rawText = extractedById.get(artifact.id);
+      const rawStructure = extractedById.get(`${artifact.id}:structure`);
+      if (!rawText) {
+        return artifact;
+      }
+      return {
+        ...artifact,
+        fileName: rawText.name,
+        sourcePath: path.join(bundleRoot, rawText.relativePath),
+        ...(rawStructure ? { structurePath: path.join(bundleRoot, rawStructure.relativePath) } : {}),
+      };
+    }),
+  };
+}
+
+function mergePreprocessingResults(...results: PreprocessJobResult[]): PreprocessJobResult {
+  const [first] = results;
+  return {
+    jobId: first?.jobId ?? "unknown",
+    artifacts: results.flatMap((result) => result.artifacts),
+    skippedFiles: results.flatMap((result) => result.skippedFiles),
+  };
+}
+
+async function registerTranscriptOutputs(context: WorkerContext, job: StoredJob): Promise<StoredJobOutput[]> {
+  const events = listJobEvents(context.db, job.id);
+  const registeredSources = new Set(
+    events.flatMap((event) => {
+      if (event.type !== "stt.transcript_output_registered" || !isRecord(event.data) || typeof event.data.sourcePath !== "string") {
+        return [];
+      }
+      return [path.resolve(event.data.sourcePath)];
+    }),
+  );
+  const existingOutputNames = new Set(
+    listJobOutputs(context.db, job.id)
+      .filter((output) => output.kind === "stt_transcript" && !output.deletedAt)
+      .map((output) => output.fileName),
+  );
+  const outputs: StoredJobOutput[] = [];
+
+  for (const artifact of collectTranscriptOutputCandidates(events)) {
+    const sourcePath = path.resolve(artifact.sourcePath);
+    if (
+      registeredSources.has(sourcePath)
+      || existingOutputNames.has(artifact.fileName)
+      || existingOutputNames.has(buildTranscriptOutputFileName(artifact.fileName))
+    ) {
+      continue;
+    }
+    try {
+      await fs.access(sourcePath);
+    } catch {
+      appendJobEvent(context.db, job.id, "stt.transcript_output_skipped", artifact.fileName, {
+        provider: artifact.provider,
+        sourcePath,
+        reason: "source_missing",
+      });
+      continue;
+    }
+    const downloadSource = await createTranscriptDownloadSource(context, job, artifact);
+    const output = await createRuntimeOutput({
+      db: context.db,
+      jobId: job.id,
+      runtimeDir: context.config.runtime.runtimeDir,
+      sourcePath: downloadSource.sourcePath,
+      kind: "stt_transcript",
+      fileName: downloadSource.fileName,
+      mimeType: downloadSource.mimeType,
+    });
+    appendJobEvent(context.db, job.id, "stt.transcript_output_registered", artifact.fileName, {
+      provider: artifact.provider,
+      sourcePath,
+      renderedPath: downloadSource.sourcePath,
+      format: downloadSource.format,
+      outputId: output.id,
+      fileName: output.fileName,
+      expiresAt: output.expiresAt,
+    });
+    registeredSources.add(sourcePath);
+    existingOutputNames.add(output.fileName);
+    outputs.push(output);
+  }
+
+  return outputs;
+}
+
+interface TranscriptOutputCandidate {
+  provider: string;
+  sourcePath: string;
+  fileName: string;
+}
+
+interface TranscriptDownloadSource {
+  sourcePath: string;
+  fileName: string;
+  mimeType: string;
+  format: "docx" | "markdown";
+}
+
+async function createTranscriptDownloadSource(
+  context: WorkerContext,
+  job: StoredJob,
+  artifact: TranscriptOutputCandidate,
+): Promise<TranscriptDownloadSource> {
+  const pandocBin = await findExecutable(process.env.PANDOC_BIN, "pandoc");
+  if (!pandocBin) {
+    appendJobEvent(context.db, job.id, "stt.transcript_docx_skipped", artifact.fileName, {
+      provider: artifact.provider,
+      sourcePath: artifact.sourcePath,
+      reason: "pandoc_missing",
+    });
+    logWorker(`transcript docx render skipped job=${job.id} reason=missing_tool pandoc=missing source=${artifact.fileName}`, "warn", "OUTPUT");
+    return {
+      sourcePath: artifact.sourcePath,
+      fileName: artifact.fileName,
+      mimeType: "text/markdown",
+      format: "markdown",
+    };
+  }
+
+  const renderDir = resolveRuntimePath(context.config.runtime.runtimeDir, "rendered-transcripts", job.id);
+  await fs.mkdir(renderDir, { recursive: true });
+  const docxName = buildTranscriptOutputFileName(artifact.fileName);
+  const markdownPath = path.join(renderDir, `${path.parse(docxName).name}.md`);
+  const docxPath = path.join(renderDir, docxName);
+  const transcriptMarkdown = await fs.readFile(artifact.sourcePath, "utf8");
+  await fs.writeFile(markdownPath, renderTranscriptDownloadMarkdown(job, transcriptMarkdown), "utf8");
+
+  try {
+    await execFileAsync(pandocBin, [
+      markdownPath,
+      "--from",
+      "markdown+raw_tex",
+      "--to",
+      "docx",
+      "--output",
+      docxPath,
+    ], {
+      timeout: COMMAND_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    await normalizeDocxOutputFormatting(docxPath);
+    await validateDocxOutput(docxPath);
+    return {
+      sourcePath: docxPath,
+      fileName: docxName,
+      mimeType: DOCX_MIME_TYPE,
+      format: "docx",
+    };
+  } catch (error) {
+    appendJobEvent(context.db, job.id, "stt.transcript_docx_failed", artifact.fileName, {
+      provider: artifact.provider,
+      sourcePath: artifact.sourcePath,
+      docxPath,
+      error: errorMessage(error),
+    });
+    logWorker(`transcript docx render failed job=${job.id} source=${artifact.fileName} error=${errorMessage(error)}`, "warn", "OUTPUT");
+    return {
+      sourcePath: artifact.sourcePath,
+      fileName: artifact.fileName,
+      mimeType: "text/markdown",
+      format: "markdown",
+    };
+  }
+}
+
+function renderTranscriptDownloadMarkdown(job: StoredJob, transcriptMarkdown: string): string {
+  return [
+    formatOutputJobMetadata(job),
+    "",
+    normalizeMarkdownText(transcriptMarkdown),
+    "",
+  ].join("\n");
+}
+
+function buildTranscriptOutputFileName(transcriptFileName: string): string {
+  const parsed = path.parse(path.basename(transcriptFileName).replace(/\u0000/g, ""));
+  const stem = sanitizeOutputFileStem(parsed.name.replace(/\.transcript$/i, "") || parsed.name || "transcript");
+  return `${stem}_transcript.docx`;
+}
+
+function collectTranscriptOutputCandidates(events: StoredJobEvent[]): TranscriptOutputCandidate[] {
+  return events.flatMap((event) => {
+    if (!isTranscriptionEvent(event.type) || !isRecord(event.data) || !Array.isArray(event.data.artifacts)) {
+      return [];
+    }
+    const provider = event.type === "sensevoice.transcribed" ? "sensevoice" : "rtzr";
     return event.data.artifacts.flatMap((artifact) => {
       if (!isRecord(artifact) || typeof artifact.sourcePath !== "string") {
         return [];
       }
-      const result: RawBundleArtifactInput = {
-        sourcePath: artifact.sourcePath,
-      };
-      if (typeof artifact.name === "string") {
-        result.name = artifact.name;
+      const kind = typeof artifact.kind === "string" ? artifact.kind : "";
+      const name = typeof artifact.name === "string" ? artifact.name : path.basename(artifact.sourcePath);
+      if (kind !== "transcript_markdown" && !name.toLowerCase().endsWith(".transcript.md")) {
+        return [];
       }
-      return [result];
+      return [{ provider, sourcePath: artifact.sourcePath, fileName: name }];
     });
   });
 }
@@ -1725,7 +2345,19 @@ function isTranscriptionEvent(type: string): boolean {
 }
 
 function hasAudioOrVoice(files: ParsedTelegramFile[]): boolean {
-  return files.some((file) => file.kind === "audio" || file.kind === "voice");
+  return files.some((file) => isAudioParsedFile(file));
+}
+
+function isAudioParsedFile(file: ParsedTelegramFile): boolean {
+  if (file.kind === "audio" || file.kind === "voice") {
+    return true;
+  }
+  const mimeType = file.mimeType?.toLowerCase();
+  if (mimeType?.startsWith("audio/")) {
+    return true;
+  }
+  const extension = path.extname(file.fileName ?? "").toLowerCase();
+  return [".mp4", ".m4a", ".mp3", ".amr", ".flac", ".wav", ".ogg", ".opus"].includes(extension);
 }
 
 function isAudioJobFile(file: StoredJobFile): boolean {
@@ -4038,6 +4670,9 @@ function truncateButtonLabel(value: string): string {
 
 function downloadTypeLabel(fileName: string): string {
   const extension = path.extname(fileName).toLowerCase();
+  if (isTranscriptOutputFileName(fileName)) {
+    return "전사 스크립트";
+  }
   switch (extension) {
     case ".pdf":
       return "PDF";
@@ -4052,6 +4687,11 @@ function downloadTypeLabel(fileName: string): string {
     default:
       return "파일";
   }
+}
+
+function isTranscriptOutputFileName(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  return lower.endsWith(".transcript.md") || lower.endsWith(".transcript.docx") || lower.endsWith("_transcript.docx");
 }
 
 function resolveProjectRelativePath(value: string): string {

@@ -15,6 +15,7 @@ import {
   TelegramBotApiClient,
   type FetchLike,
 } from "@telegram-local-ingest/telegram";
+import { parseCommandLine } from "@telegram-local-ingest/wiki-adapter";
 
 export type ReadinessStatus = "ok" | "warn" | "fail";
 
@@ -124,6 +125,11 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
     checks.push(ok("WIKI_INGEST_COMMAND", "configured; wiki adapter can run after raw bundle write"));
   } else {
     checks.push(warn("WIKI_INGEST_COMMAND", "not set; worker will preserve raw bundles and skip wiki adaptation"));
+  }
+  if (config.wiki.chatCommand) {
+    await checkCommandReadable(checks, "WIKI_CHAT_COMMAND", config.wiki.chatCommand, cwd);
+  } else {
+    checks.push(warn("WIKI_CHAT_COMMAND", "not set; plain Telegram chat messages will not call wiki skills"));
   }
 
   await checkAgentPostprocessReadiness(checks, config, cwd, env);
@@ -319,6 +325,29 @@ async function checkReadableFile(checks: ReadinessCheck[], name: string, filePat
       return;
     }
     await checkAccess(checks, name, filePath, fs.constants.R_OK, "readable");
+  } catch (error) {
+    checks.push(fail(name, error instanceof Error ? error.message : String(error)));
+  }
+}
+
+async function checkCommandReadable(checks: ReadinessCheck[], name: string, commandText: string, cwd: string): Promise<void> {
+  try {
+    const [command] = parseCommandLine(commandText);
+    if (!command) {
+      checks.push(fail(name, "command is empty"));
+      return;
+    }
+    const commandPath = resolveCommandPath(cwd, command);
+    if (commandPath.includes(path.sep)) {
+      await checkReadableFile(checks, name, commandPath);
+    } else {
+      const version = await checkCommandVersion(command, ["--version"]);
+      if (version.ok) {
+        checks.push(ok(name, `${command}: ${version.output}`));
+      } else {
+        checks.push(warn(name, `command not version-checkable: ${version.output}`));
+      }
+    }
   } catch (error) {
     checks.push(fail(name, error instanceof Error ? error.message : String(error)));
   }

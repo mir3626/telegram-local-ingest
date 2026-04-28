@@ -33,11 +33,14 @@
 
 - `raw/**` is immutable after finalization.
 - `manifest.yaml` is the machine-readable source of truth.
+- New bundles use schema version 2 and declare `wiki_inputs` roles: `canonical_text`, `translation_aid`, `evidence_original`, and `structure`.
 - `source.md` is the LLM-readable ingest entrypoint.
 - Derived text goes under `extracted/`.
 - Converted media or normalized documents go under `normalized/`.
 - Original files stay under `original/`.
 - `log.md` records processing events and non-fatal warnings.
+- LLMwiki may read only `source.md`, `manifest.yaml`, and manifest-declared canonical wiki inputs by default.
+- User-facing rendered outputs such as `_translated.*`, overlay PDFs, transcript DOCX files, and `runtime/outputs/**` are not wiki source authority.
 
 ## Cross-Platform Rules
 

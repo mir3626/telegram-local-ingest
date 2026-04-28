@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-12-utility-cleanup-polish
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess
-> **Pending**: sprint-13-vault-reconcile-retention
+> **Current**: sprint-21-bootstrap-packaging (not started, started 2026-04-28)
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation
+> **Pending**: sprint-21-bootstrap-packaging, sprint-13-vault-reconcile-retention
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -241,7 +241,7 @@ Telegram mobile/desktop
   - Utility concerns are isolated from wiki/raw capture concerns.
   - Expired output cleanup is repeatable after worker restart.
   - Public/multi-user service constraints are documented.
-- **status**: in progress, implementation-complete except live validation. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent. Current polish also added OCR preprocessing for scanned PDF and image uploads through `pdftoppm` plus `tesseract`, while leaving the existing language preset scope unchanged. The worker now performs expired-output cleanup on startup and then on `WORKER_OUTPUT_CLEANUP_INTERVAL_MS`, and `/status` reports output downloadability, expiry, and discard state. Operator docs record the personal-OAuth-only boundary and API migration path for any future public/multi-user service. User-facing regenerate/discard controls are deliberately parked as low-priority follow-up work.
+- **status**: completed. First slice added hidden `output-discard:<output_id>` and `output-regenerate:<output_id>` callback interfaces. Discard deletes the runtime output file and marks the output deleted; regenerate currently records `output.regenerate_requested` without exposing a Telegram button or re-running the agent. Current polish also added OCR preprocessing for scanned PDF and image uploads through `pdftoppm` plus `tesseract`, while leaving the existing language preset scope unchanged. The worker now performs expired-output cleanup on startup and then on `WORKER_OUTPUT_CLEANUP_INTERVAL_MS`, and `/status` reports output downloadability, expiry, and discard state. Operator docs record the personal-OAuth-only boundary and API migration path for any future public/multi-user service. User-facing regenerate/discard controls are deliberately parked as low-priority follow-up work.
 
 ## Sprint 13 — Vault Reconcile And Retention
 
@@ -258,6 +258,167 @@ Telegram mobile/desktop
   - Manual deletion of `raw/**` or `wiki/**` produces a deterministic drift report instead of silent desync.
   - Dry-run reconcile performs no writes; apply mode requires an explicit operator flag.
   - SQLite can distinguish present, missing, intentionally deleted, and orphaned source/output state.
+
+## Sprint 17 — Automation Registry And CLI Foundation
+
+- **id**: `sprint-17-automation-registry-cli`
+- **goal**: Add a modular automation substrate so batch scripts can be added, removed, enabled, disabled, and run without growing `package.json`.
+- **tasks**:
+  - Add an `automations/<module_id>/manifest.json` convention with schema validation.
+  - Add SQLite tables for automation modules, runs, and run events/log pointers.
+  - Add a small `packages/automation-core` package for manifest discovery and one-shot module execution.
+  - Add `apps/ops-cli` with stable subcommands: `automation list`, `automation run`, `automation enable`, `automation disable`, and `automation logs`.
+  - Keep `package.json` limited to a single product CLI entrypoint.
+- **acceptance criteria**:
+  - Adding an automation folder does not require editing `package.json`.
+  - Disabled modules cannot be run by dispatcher-style commands unless explicitly forced/manual.
+  - Each run has durable stdout/stderr/result paths under `runtime/automation/runs/<run_id>/`.
+  - CLI commands work in tests against a temp SQLite/runtime root.
+- **status**: completed. Added `packages/automation-core`, `apps/ops-cli`, automation manifest discovery, SQLite automation module/run/event tables, durable run log/result files, and a single stable `npm run tlgi -- automation ...` entrypoint. Module-created `result.json` payloads are preserved inside the runner summary, disabled modules require `--force` for manual runs, and missing/deleted module folders remain visible as unavailable registry entries.
+
+## Sprint 18 — Automation Dispatch Scheduler
+
+- **id**: `sprint-18-automation-dispatch-scheduler`
+- **goal**: Run due automations through a one-shot dispatcher suitable for `systemd` timers, without a 24-hour resident worker.
+- **tasks**:
+  - Extend automation manifests with schedule metadata and catch-up policy.
+  - Add `automation dispatch` to run only enabled due modules.
+  - Add schedule state and next-run calculations in SQLite.
+  - Add a user-level `systemd` timer/service installer and uninstaller.
+  - Add retry/backoff recording for failed scheduled runs.
+- **acceptance criteria**:
+  - One systemd timer can drive every enabled automation module.
+  - If the PC was off, dispatcher can backfill according to manifest policy.
+  - Scheduled runs are idempotency-keyed and do not duplicate the same date/window.
+- **status**: completed. Added `automation dispatch`, schedule-window idempotency keys, SQLite `automation_schedule_state`, daily/interval due calculations with catch-up limits, retry-after metadata recording, and user-level systemd service/timer file installation through `automation timer install|status|uninstall`.
+
+## Sprint 19 — FX Koreaexim Daily Module
+
+- **id**: `sprint-19-fx-koreaexim-daily-module`
+- **goal**: Add the first real automation module: daily Korea Eximbank exchange-rate capture into raw bundles and LLMwiki pages.
+- **tasks**:
+  - Add `automations/fx-koreaexim-daily` manifest and runner.
+  - Read `FX_KOREAEXIM_AUTHKEY` plus target currency settings from env/config.
+  - Fetch `exchangeJSON` with `data=AP01`, normalize target currencies, and preserve original JSON.
+  - Write immutable raw bundles with canonical `rates.md`/`rates.csv` wiki inputs.
+  - Invoke the existing wiki ingest adapter after bundle finalization.
+- **acceptance criteria**:
+  - Missing API key is reported as module readiness failure without exposing secrets.
+  - Non-business-day/null responses are recorded as skipped, not failed data.
+  - Re-running the same date is idempotent.
+  - Wiki pages are token-efficient monthly/latest summaries, not raw JSON dumps.
+- **status**: completed. Added `automations/fx-koreaexim-daily` with Korea Eximbank AP01 fetch/fixture support, currency filtering, deterministic `fx_koreaexim_<YYYYMMDD>` raw bundle output, original JSON evidence, canonical Markdown/CSV wiki inputs, optional wiki ingest adapter invocation, idempotent existing-bundle skip behavior, and fixture-backed regression coverage.
+
+## Sprint 20 — Ops Dashboard Automation Controls
+
+- **id**: `sprint-20-ops-dashboard-automation`
+- **goal**: Add a product-owned local operations dashboard for automation modules, separate from the vibe-doctor harness dashboard.
+- **tasks**:
+  - Add `apps/ops-dashboard` served only on localhost.
+  - Show module enabled state, readiness, next run, last run, and failures.
+  - Add enable/disable and manual run controls with local admin guard.
+  - Add run log and result viewers.
+  - Link runs to raw bundles/wiki pages where available.
+- **acceptance criteria**:
+  - Dashboard does not depend on or edit harness `vibe-dashboard` files.
+  - Secrets are never displayed; only present/missing status is shown.
+  - UI actions call the same ops CLI/core boundaries used by tests.
+- **status**: completed. Added `apps/ops-dashboard`, a product-owned localhost-only automation dashboard backed by the same automation-core and SQLite registry/run tables as `apps/ops-cli`. It shows module enabled/available/readiness state, next due time, last/recent runs, durable stdout/stderr/result viewers, raw bundle/wiki source links when recorded, and local enable/disable/manual-run/dispatch controls with optional `OPS_DASHBOARD_TOKEN` admin guard.
+
+## Sprint 21 — Bootstrap Packaging
+
+- **id**: `sprint-21-bootstrap-packaging`
+- **goal**: Package the local ingest, wiki, automation, and dashboard stack into a repeatable one-shot Linux setup path.
+- **tasks**:
+  - Add a top-level bootstrap script that chains dependency setup, npm install/build, `.env` creation, DB migration, automation scan, and optional systemd timer install.
+  - Add a release bundle layout for Linux hosts.
+  - Add setup verification that checks Telegram, document/OCR tools, STT provider, wiki roots, automation registry, and timers.
+  - Document reinstall/upgrade/uninstall paths.
+- **acceptance criteria**:
+  - A fresh Linux machine can install the local solution from one command plus env/secret input.
+  - Bootstrap is idempotent and preserves existing `.env` values.
+  - Packaging excludes runtime data, tokens, and machine-specific secrets.
   - LLMwiki lint findings are linked into the report without being treated as DB authority.
   - Retries never recreate missing raw evidence implicitly; they require restore, reimport, or delete-confirm.
 - **status**: planned after Sprint 12 live validation.
+
+## Iteration iter-2 — LLMwiki Foundation
+
+This iteration turns the completed Telegram ingest utility into a Karpathy-style LLMwiki source pipeline. The core decision is that rendered user deliverables are not wiki raw. Wiki raw is the immutable raw bundle plus deterministic canonical text projections declared by `manifest.yaml` `wiki_inputs`.
+
+### Sprint 14 — Wiki Raw Input Schema
+
+- **id**: `sprint-14-wiki-raw-input-schema`
+- **goal**: Define and implement the raw bundle contract that tells LLMwiki exactly which artifacts may be read.
+- **tasks**:
+  - Add `manifest.yaml` schema version 2 fields for `wiki_inputs`.
+  - Classify entries as `canonical_text`, `translation_aid`, and `evidence_original`.
+  - Update `source.md` so it is an LLM-readable read-order entrypoint, not a large rendered body dump.
+  - Document that `runtime/outputs`, `_translated.*`, overlay PDFs, and transcript DOCX files are excluded from wiki source authority.
+  - Add tests for manifest/source rendering and backwards-safe bundle layout.
+- **acceptance criteria**:
+  - A raw bundle declares canonical wiki inputs without requiring the LLM to inspect rendered DOCX/PDF deliverables.
+  - Every wiki input links back to an original file or extracted deterministic artifact.
+  - `source.md` gives the wiki agent a concise read order and authority policy.
+- **status**: completed. Raw bundles now write `schema_version: 2`, `wiki_policy`, and manifest `wiki_inputs` records for canonical text, structure, translation aids, and evidence originals. `source.md` now gives LLMwiki a concise read order and authority policy, and tests cover direct vault writes plus STT transcript artifact classification.
+
+### Sprint 15 — Pre-Bundle Canonical Artifacts
+
+- **id**: `sprint-15-prebundle-canonical-artifacts`
+- **goal**: Move deterministic text extraction into the raw bundle finalization path so wiki inputs are durable raw artifacts.
+- **tasks**:
+  - Run PDF/DOCX/EML/image/text canonical preprocessing before raw bundle finalization.
+  - Copy canonical text artifacts and structure files into `raw/**/extracted/`.
+  - Keep STT transcript Markdown as the canonical audio input while user-facing transcript DOCX remains runtime output only.
+  - Record preprocessing skips and OCR confidence limits in manifest/log metadata.
+  - Keep language detection and agent postprocess reading the same canonical artifact set after finalization.
+- **acceptance criteria**:
+  - DOCX/PDF/EML/image canonical text no longer exists only under runtime-only preprocess directories.
+  - Retrying a job does not rewrite finalized raw evidence.
+  - Translation/output rendering still works while wiki ingest sees only canonical text inputs.
+- **status**: completed. Deterministic text, DOCX, PDF text/OCR, image OCR, and EML preprocessing now runs before raw bundle finalization and copies canonical artifacts plus structure metadata into finalized `raw/**/extracted/` files. STT transcript Markdown remains the canonical audio input and is copied from STT events into the same extracted layer. `preprocess.completed`, language detection, and agent post-processing now consume finalized raw paths, while retries reuse existing finalized bundles.
+
+### Sprint 16 — LLMwiki Ingest Contract
+
+- **id**: `sprint-16-llmwiki-ingest-contract`
+- **goal**: Provide the LLMwiki adapter schema, prompts, and filesystem contract for maintaining `wiki/**`.
+- **tasks**:
+  - Define `_system/schemas/llmwiki.md` or equivalent repo-owned schema for index, log, source pages, entity/topic pages, and citations.
+  - Add a local adapter wrapper that reads only `source.md`, `manifest.yaml`, and declared `wiki_inputs`.
+  - Require wiki edits to cite canonical input ids/source paths and update `wiki/index.md` plus `wiki/log.md`.
+  - Forbid wiki agents from treating runtime outputs or rendered translated files as source authority.
+  - Add smoke tests with a fake LLMwiki command proving raw immutability and expected wiki file updates.
+- **acceptance criteria**:
+  - LLMwiki can ingest one finalized bundle into `wiki/**` with index/log/citations.
+  - The adapter fails if it attempts to mutate `raw/**`.
+  - Wiki output remains provider-neutral and can be driven by Claude, Codex, or a custom LLMwiki CLI.
+- **status**: completed. The wiki adapter now loads schema v2 `manifest.yaml`, resolves manifest-declared `wiki_inputs`, passes a provider-neutral `telegram-local-ingest.llmwiki.v1` contract with source/manifest/wiki-input/citation/index/log arguments to the configured command, rejects rendered outputs as wiki source inputs, requires `wiki/index.md` and `wiki/log.md` outputs, and keeps raw bundle snapshot checks before and after command execution. `docs/schemas/llmwiki.md` defines page, citation, and output rules, and fake-command tests cover index/log writes plus raw immutability.
+
+### Automation Packaging Continuation
+
+The automation packaging sprints were added to the active iteration after the LLMwiki ingest contract. Full sprint details live in their roadmap sections above; this compact continuation keeps the iteration-scoped preflight order aligned with the current work queue.
+
+- **id**: `sprint-17-automation-registry-cli`
+- **status**: completed.
+- **id**: `sprint-18-automation-dispatch-scheduler`
+- **status**: completed.
+- **id**: `sprint-19-fx-koreaexim-daily-module`
+- **status**: completed.
+- **id**: `sprint-20-ops-dashboard-automation`
+- **status**: completed.
+- **id**: `sprint-21-bootstrap-packaging`
+- **status**: planned next.
+
+### Sprint 13 Carryover — Vault Reconcile And Retention
+
+- **id**: `sprint-13-vault-reconcile-retention`
+- **goal**: Make raw/wiki/output deletion safe after LLMwiki starts depending on durable source bundles.
+- **tasks**:
+  - Preserve the earlier Sprint 13 scope for SQLite tombstones, drift findings, `vault:reconcile`, and managed delete.
+  - Extend reconcile to understand `wiki_inputs` and wiki citations once Sprint 14/16 define them.
+  - Keep LLMwiki lint as a wiki graph health signal only; SQLite remains the authority for source bundle state.
+- **acceptance criteria**:
+  - Manual deletion of `raw/**` or `wiki/**` produces a deterministic drift report.
+  - Missing source evidence is never silently recreated by retry or lint.
+  - Reconcile can tell present, missing, intentionally deleted, and orphaned raw/wiki/output state apart.
+- **status**: planned after the wiki raw/input contract lands.

@@ -40,6 +40,8 @@ import {
   type WorkerContext,
 } from "../apps/worker/src/index.js";
 
+const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 test("runWorkerOnce captures, imports, bundles, completes, and notifies", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "documents/lead.txt", "This customer contract requires translation.");
@@ -68,16 +70,24 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
     assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "COMPLETED");
     assert.equal(fs.existsSync(path.join(fixture.botRoot, "documents", "lead.txt")), false);
     const bundle = mustGetSourceBundleForJob(dbHandle.db, "tg_300_21");
+    const manifest = fs.readFileSync(bundle.manifestPath, "utf8");
     assert.ok(fs.existsSync(bundle.manifestPath));
     assert.equal(bundle.sourceMarkdownPath.endsWith("source.md"), true);
+    assert.equal(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "lead.txt"), "utf8"), "This customer contract requires translation.");
+    assert.match(manifest, /schema_version: 2/);
+    assert.match(manifest, /role: "canonical_text"/);
+    assert.match(manifest, /path: "extracted\/lead\.txt"/);
+    assert.match(manifest, /derived_from: "original\/lead\.txt"/);
     assert.deepEqual(sentMessages.map((message) => message.text), [
       "📥 접수했어요: tg_300_21\n- lead.txt",
       "✅ 처리 완료: tg_300_21 (sales)\n- lead.txt",
     ]);
     const events = listJobEvents(dbHandle.db, "tg_300_21");
     const languageEvent = events.find((event) => event.type === "language.detected");
+    const preprocessEvent = events.find((event) => event.type === "preprocess.completed");
     assert.ok(events.some((event) => event.type === "preprocess.completed"));
     assert.ok(languageEvent);
+    assert.match(JSON.stringify(preprocessEvent?.data), new RegExp(escapeRegExp(path.join(bundle.bundlePath, "extracted", "lead.txt"))));
     assert.equal((languageEvent.data as { primaryLanguage: string }).primaryLanguage, "en");
     assert.equal((languageEvent.data as { translationNeeded: boolean }).translationNeeded, true);
     assert.ok(events.some((event) => event.type === "wiki.skipped"));
@@ -154,6 +164,8 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
     assert.equal(agentInputs[0]?.targetLanguage, "ko");
     assert.equal(agentInputs[0]?.defaultRelation, "business");
     assert.ok(agentInputs[0]?.artifacts.some((artifact) => artifact.fileName === "lead.txt"));
+    const bundle = mustGetSourceBundleForJob(dbHandle.db, "tg_300_21");
+    assert.equal(agentInputs[0]?.artifacts[0]?.sourcePath, path.join(bundle.bundlePath, "extracted", "lead.txt"));
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.kind, "agent_translation");
@@ -832,14 +844,46 @@ test("runWorkerOnce asks for RTZR preset on audio uploads and queues after callb
   }
 });
 
-test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles artifacts", async () => {
+test("runWorkerOnce asks for STT preset when an audio file is uploaded as a document", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const answeredCallbacks: unknown[] = [];
+  try {
+    migrate(dbHandle.db);
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockAudioPresetFetch(sentMessages, answeredCallbacks, "ko", true),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.jobsCreated, 1);
+    assert.equal(result.jobsProcessed, 0);
+    assert.equal(getJob(dbHandle.db, "tg_300_21")?.status, "RECEIVED");
+    assert.match(sentMessages[0]?.text ?? "", /🎧 음성 파일 업로드/);
+    assert.match(JSON.stringify(sentMessages[0]?.reply_markup), /stt:meeting/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles artifacts", async () => {
+  const fixture = createFixture();
+  writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
+  const fakePandoc = writeFakePandoc(path.join(fixture.root, "tools"), "회의 내용입니다");
+  const oldPandoc = process.env.PANDOC_BIN;
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const answeredCallbacks: unknown[] = [];
   const rtzrCalls: Array<{ filePath: string; config: RtzrTranscribeConfig; waitOptions: WaitForTranscriptionOptions }> = [];
   try {
+    process.env.PANDOC_BIN = fakePandoc;
     migrate(dbHandle.db);
     const context: WorkerContext = {
       config: configFixture(fixture),
@@ -863,15 +907,34 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
     assert.equal(rtzrCalls[0]?.config.use_diarization, true);
     assert.equal(rtzrCalls[0]?.waitOptions.pollIntervalMs, 5000);
     assert.match(manifest, /language:/);
+    assert.match(manifest, /schema_version: 2/);
+    assert.match(manifest, /wiki_inputs:/);
+    assert.match(manifest, /role: "canonical_text"/);
+    assert.match(manifest, /role: "structure"/);
+    assert.match(manifest, /derived_from: "original\/call\.m4a"/);
     assert.match(manifest, /model_name: "whisper"/);
     assert.match(manifest, /call\.rtzr\.json/);
     assert.match(manifest, /call\.transcript\.md/);
+    assert.match(fs.readFileSync(bundle.sourceMarkdownPath, "utf8"), /## LLMwiki Read Order/);
     assert.match(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "call.transcript.md"), "utf8"), /회의 내용입니다/);
-    assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "rtzr.transcribed"));
-    const languageEvent = listJobEvents(dbHandle.db, "tg_300_21").find((event) => event.type === "language.detected");
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.kind, "stt_transcript");
+    assert.equal(outputs[0]?.fileName, "call_transcript.docx");
+    assert.equal(outputs[0]?.mimeType, DOCX_MIME_TYPE);
+    const outputDocumentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(outputDocumentXml, /회의 내용입니다/);
+    assert.match(sentMessages.at(-1)?.text ?? "", /음성 전사가 완료되었습니다/);
+    assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /download:/);
+    assert.match(JSON.stringify(sentMessages.at(-1)?.reply_markup), /전사 스크립트 다운로드/);
+    const events = listJobEvents(dbHandle.db, "tg_300_21");
+    assert.ok(events.some((event) => event.type === "rtzr.transcribed"));
+    assert.ok(events.some((event) => event.type === "stt.transcript_output_registered"));
+    const languageEvent = events.find((event) => event.type === "language.detected");
     assert.equal((languageEvent?.data as { primaryLanguage: string }).primaryLanguage, "ko");
     assert.equal((languageEvent?.data as { translationNeeded: boolean }).translationNeeded, false);
   } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
     dbHandle.close();
   }
 });
@@ -879,11 +942,14 @@ test("runWorkerOnce transcribes audio with the selected RTZR preset and bundles 
 test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles artifacts", async () => {
   const fixture = createFixture();
   writeFile(fixture.botRoot, "audio/call.m4a", "fake audio");
+  const fakePandoc = writeFakePandoc(path.join(fixture.root, "tools"), "센스보이스 전사입니다");
+  const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const answeredCallbacks: unknown[] = [];
   const senseVoiceCalls: Array<{ filePath: string; options: SenseVoiceTranscribeOptions }> = [];
   try {
+    process.env.PANDOC_BIN = fakePandoc;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.stt.provider = "sensevoice";
@@ -911,8 +977,16 @@ test("runWorkerOnce transcribes audio with SenseVoice on demand and bundles arti
     assert.match(manifest, /call\.sensevoice\.json/);
     assert.match(manifest, /call\.transcript\.md/);
     assert.match(fs.readFileSync(path.join(bundle.bundlePath, "extracted", "call.transcript.md"), "utf8"), /센스보이스 전사입니다/);
+    const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
+    assert.equal(outputs.length, 1);
+    assert.equal(outputs[0]?.kind, "stt_transcript");
+    assert.equal(outputs[0]?.fileName, "call_transcript.docx");
+    assert.equal(outputs[0]?.mimeType, DOCX_MIME_TYPE);
+    const outputDocumentXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(outputDocumentXml, /센스보이스 전사입니다/);
     assert.ok(listJobEvents(dbHandle.db, "tg_300_21").some((event) => event.type === "sensevoice.transcribed"));
   } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
     dbHandle.close();
   }
 });
@@ -1318,6 +1392,187 @@ test("runWorkerOnce handles operator status without creating a job", async () =>
   }
 });
 
+test("runWorkerOnce routes plain text messages to wiki chat and chunks long replies", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat.mjs", [
+    "const messageIndex = process.argv.indexOf('--message');",
+    "if (process.argv[messageIndex + 1] !== '제품 찾아줘') process.exit(2);",
+    "process.stdout.write('가'.repeat(3600) + '\\n\\n끝');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "제품 찾아줘", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 3);
+    assert.match(sentMessages[0]?.text ?? "", /위키 답변 준비 중/);
+    assert.match(sentMessages[1]?.text ?? "", /^\(1\/2\)/);
+    assert.match(sentMessages[2]?.text ?? "", /^\(2\/2\)/);
+    assert.match(sentMessages[2]?.text ?? "", /끝/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce routes unregistered slash text to wiki chat", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-unknown-slash.mjs", [
+    "const messageIndex = process.argv.indexOf('--message');",
+    "if (process.argv[messageIndex + 1] !== '/wiki 린트를 수행하고 1년 이상 경과된 데이터 삭제 대상 알려줘') process.exit(2);",
+    "process.stdout.write('agent-routed');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/wiki 린트를 수행하고 1년 이상 경과된 데이터 삭제 대상 알려줘", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 2);
+    assert.match(sentMessages[0]?.text ?? "", /위키 답변 준비 중/);
+    assert.equal(sentMessages[1]?.text, "agent-routed");
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce does not treat slash command prefixes as registered commands", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-command-prefix.mjs", [
+    "const messageIndex = process.argv.indexOf('--message');",
+    "if (process.argv[messageIndex + 1] !== '/statusfoo 최근 상태 알려줘') process.exit(2);",
+    "process.stdout.write('agent-routed');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/statusfoo 최근 상태 알려줘", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 2);
+    assert.match(sentMessages[0]?.text ?? "", /위키 답변 준비 중/);
+    assert.equal(sentMessages[1]?.text, "agent-routed");
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce keeps fileless /ingest as a registered command instead of wiki chat", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  try {
+    migrate(dbHandle.db);
+    const context: WorkerContext = {
+      config: configFixture(fixture),
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "/ingest", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 1);
+    assert.match(sentMessages[0]?.text ?? "", /\/ingest는 파일과 함께/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce rejects wiki chat raw mutations", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-raw-mutation.mjs", [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const rawRoot = process.argv[process.argv.indexOf('--raw-root') + 1];",
+    "fs.mkdirSync(rawRoot, { recursive: true });",
+    "fs.writeFileSync(path.join(rawRoot, 'bad.txt'), 'bad', 'utf8');",
+    "process.stdout.write('bad');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  fs.mkdirSync(path.join(fixture.vaultPath, "raw"), { recursive: true });
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockTelegramFetch(sentMessages, "raw 수정해봐", null),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentMessages.length, 2);
+    assert.match(sentMessages[0]?.text ?? "", /위키 답변 준비 중/);
+    assert.match(sentMessages[1]?.text ?? "", /위키 채팅 처리에 실패했습니다/);
+    assert.match(sentMessages[1]?.text ?? "", /modified raw files/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce answers /start with user id before allowlist gating", async () => {
   const fixture = createFixture();
   const dbHandle = openIngestDatabase(":memory:");
@@ -1405,6 +1660,7 @@ test("processRunnableJobs claims multiple jobs while limiting STT concurrency", 
     assert.equal(calls.length, 2);
     releaseSecond.resolve();
     await waitFor(() => getJob(dbHandle.db, "job-a")?.status === "COMPLETED" && getJob(dbHandle.db, "job-b")?.status === "COMPLETED");
+    await waitFor(() => (context.runtimeState?.runningJobIds.size ?? 0) === 0);
   } finally {
     releaseFirst.resolve();
     releaseSecond.resolve();
@@ -1510,7 +1766,9 @@ function configFixture(fixture: { runtimeDir: string; vaultPath: string; botRoot
       maxSingleSegmentTimeMs: 30_000,
       timeoutMs: 60 * 60 * 1000,
     },
-    wiki: {},
+    wiki: {
+      chatTimeoutMs: 5 * 60 * 1000,
+    },
     translation: {
       defaultRelation: "business",
       targetLanguage: "ko",
@@ -1956,6 +2214,21 @@ function mockTelegramFetch(
         },
       });
     }
+    if (method === "editMessageText") {
+      sentMessages.push(body as { chat_id: string; text: string });
+      return jsonResponse({
+        ok: true,
+        result: {
+          message_id: (body as { message_id: number }).message_id,
+          date: 1,
+          chat: { id: Number((body as { chat_id: string }).chat_id), type: "private" },
+          text: (body as { text: string }).text,
+        },
+      });
+    }
+    if (method === "sendChatAction") {
+      return jsonResponse({ ok: true, result: true });
+    }
     return jsonResponse({ ok: false, description: `unexpected method: ${method}`, error_code: 400 }, 400);
   };
 }
@@ -2005,6 +2278,7 @@ function mockAudioPresetFetch(
   sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }>,
   answeredCallbacks: unknown[],
   languageKey = "ko",
+  asDocument = false,
 ): FetchLike {
   return async (input, init) => {
     const method = input.split("/").at(-1);
@@ -2012,6 +2286,13 @@ function mockAudioPresetFetch(
     if (method === "getUpdates") {
       const offset = (body as { offset?: number }).offset;
       if (offset === undefined) {
+        const filePayload = {
+          file_id: "audio-file",
+          file_unique_id: "audio-unique",
+          file_name: "call.m4a",
+          mime_type: "audio/mp4",
+          file_size: 10,
+        };
         return jsonResponse({
           ok: true,
           result: [{
@@ -2021,13 +2302,7 @@ function mockAudioPresetFetch(
               date: 1_777_000_001,
               chat: { id: 300, type: "private" },
               from: { id: 400, is_bot: false, first_name: "Tony" },
-              audio: {
-                file_id: "audio-file",
-                file_unique_id: "audio-unique",
-                file_name: "call.m4a",
-                mime_type: "audio/mp4",
-                file_size: 10,
-              },
+              ...(asDocument ? { document: filePayload } : { audio: filePayload }),
             },
           }],
         });
@@ -2315,6 +2590,10 @@ function mockRtzrTranscriber(
       };
     },
   };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

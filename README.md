@@ -25,6 +25,7 @@ Dropbox is intentionally out of scope for V1. Large files are handled through Te
 
 ```text
 apps/worker                 # long-running local worker
+apps/ops-cli                # product operator CLI
 packages/core               # job model, config, state machine
 packages/telegram           # Telegram Bot API client and update parser
 packages/capture            # Telegram update capture and /ingest job creation
@@ -33,6 +34,8 @@ packages/operator           # /status, /retry, /cancel, notify/report message bu
 packages/rtzr               # RTZR STT client
 packages/vault              # Obsidian raw bundle writer
 packages/wiki-adapter       # protected wiki ingest command boundary
+packages/automation-core    # manifest-based one-shot automation modules
+automations                 # product automation module registry
 docs/context                # project context for AI coding sessions
 docs/plans/sprint-roadmap.md
 .vibe, .claude, scripts     # vibe-doctor development harness
@@ -94,6 +97,31 @@ npm run worker:dev
 8. Use `/cancel <job_id>` for active jobs that should stop.
 
 Operational state is in SQLite at `SQLITE_DB_PATH`. This is sufficient for the later dashboard because jobs, files, source bundles, Telegram offsets, and append-only events are all queryable without scraping logs.
+
+## Automation Modules
+
+Batch and scheduled jobs are registered under `automations/*` instead of being added one-by-one to `package.json`.
+
+```bash
+npm run tlgi -- automation list
+npm run tlgi -- automation enable <module-id>
+npm run tlgi -- automation run <module-id> --force
+npm run tlgi -- automation logs <module-id>
+npm run tlgi -- automation dispatch --dry-run
+npm run tlgi -- automation timer install --interval-minutes 15
+npm run ops:dashboard
+```
+
+Run logs are stored under `runtime/automation/runs/<run_id>/`. Scheduled jobs use a single dispatcher/timer rather than a resident process per automation; `timer install` writes user-level systemd unit files and prints the `systemctl --user` activation command.
+
+`npm run ops:dashboard` starts a product-owned localhost dashboard, separate from the `vibe-doctor` harness dashboard. It shows module readiness without secret values, enable/disable controls, manual run/dispatch actions, and run log/result viewers. `npm run ops:start` also starts this dashboard with the Telegram Local Bot API Server and worker. By default it binds to `127.0.0.1`; set `OPS_DASHBOARD_TOKEN` to require a local admin token for write actions only.
+
+The first bundled module is `fx.koreaexim.daily`. Set `FX_KOREAEXIM_AUTHKEY`, optionally tune `FX_CURRENCIES`, then enable it:
+
+```bash
+npm run tlgi -- automation enable fx.koreaexim.daily
+npm run tlgi -- automation dispatch --dry-run
+```
 
 ## Development Process
 

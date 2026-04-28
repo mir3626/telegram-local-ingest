@@ -1,6 +1,6 @@
 {
   "$schema": "./iteration-history.schema.json",
-  "currentIteration": null,
+  "currentIteration": "iter-2",
   "iterations": [
     {
       "id": "iter-1",
@@ -32,6 +32,41 @@
       ],
       "milestoneProgress": {},
       "summary": "Completed. Sprint 0 seeded the downstream project from vibe-doctor. Sprint 1 added the Telegram Local Bot API baseline, startup checks, tests, and operator setup docs. Sprint 2 added SQLite schema, repository functions, state transitions, retry eligibility, and event history. Sprint 3 added Telegram update parsing, command parsing, allowlist checks, durable offset polling, and /ingest job creation. Sprint 4 added controlled Telegram file import into runtime staging/archive with hashing, duplicate detection, max size policy, and path safety. Sprint 5 added immutable Obsidian raw bundle writing with manifest/source/log files and finalized overwrite protection. Sprint 6 added RTZR STT auth, submit/poll, transcript artifacts, 429 backoff, and ffmpeg helpers. Sprint 7 added a protected wiki ingest adapter command boundary. Sprint 8 added Telegram status/retry/cancel, notification/report text, and operator guidance."
+    },
+    {
+      "id": "iter-2",
+      "label": "llmwiki-foundation",
+      "startedAt": "2026-04-27T06:04:05.000Z",
+      "completedAt": null,
+      "goal": "Build the LLMwiki foundation for telegram-local-ingest by defining immutable raw evidence, deterministic canonical text projections, wiki_inputs schema, disciplined ingest rules, and retention/reconcile boundaries.",
+      "plannedSprints": [
+        "sprint-14-wiki-raw-input-schema",
+        "sprint-15-prebundle-canonical-artifacts",
+        "sprint-16-llmwiki-ingest-contract",
+        "sprint-17-automation-registry-cli",
+        "sprint-18-automation-dispatch-scheduler",
+        "sprint-19-fx-koreaexim-daily-module",
+        "sprint-20-ops-dashboard-automation",
+        "sprint-21-bootstrap-packaging",
+        "sprint-13-vault-reconcile-retention"
+      ],
+      "completedSprints": [
+        "sprint-14-wiki-raw-input-schema",
+        "sprint-15-prebundle-canonical-artifacts",
+        "sprint-16-llmwiki-ingest-contract",
+        "sprint-17-automation-registry-cli",
+        "sprint-18-automation-dispatch-scheduler",
+        "sprint-19-fx-koreaexim-daily-module",
+        "sprint-20-ops-dashboard-automation"
+      ],
+      "milestoneProgress": {},
+      "summary": "Started through vibe-iterate. Carryover: Sprint 12 is passed; STT transcript downloads now render DOCX while raw transcript Markdown remains canonical. New decision: rendered user deliverables are not wiki raw. LLMwiki reads raw bundle source.md, manifest.yaml, and declared canonical wiki_inputs only. Runtime outputs, _translated files, overlay PDFs, and transcript DOCX files are convenience outputs, not source authority. Existing Sprint 13 reconcile/retention remains in scope but is scheduled after the wiki raw/input contract so reconcile can understand wiki_inputs and citations.",
+      "carryoverSummary": "Prior work provides Telegram capture, immutable raw bundle writing, STT, deterministic preprocessing, agent postprocess outputs, durable raw/** canonical wiki inputs, and the provider-neutral LLMwiki ingest contract. Remaining carryover is reconcile/retention: detecting manual raw/wiki/output drift and recording explicit tombstone/deletion state through worker/CLI-owned SQLite boundaries.",
+      "openRisks": [
+        "OCR and STT artifacts may contain recognition errors; wiki schema must mark confidence/source basis.",
+        "Large documents require chunking/read-order policy to avoid wasting tokens.",
+        "Manual raw/wiki deletion still needs deterministic reconcile and tombstone state."
+      ]
     }
   ]
 }
