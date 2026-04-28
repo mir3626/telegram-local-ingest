@@ -55,8 +55,8 @@ export const DASHBOARD_CLIENT_SCRIPT = `    const tokenInput = document.getEleme
       ].join('');
     }
     function metric(label, value, detail, tone, code) {
-      return '<div class="metric" data-tone="' + esc(tone) + '" data-code="' + esc(code) + '">' +
-        '<div class="metric-label-row"><div class="metric-icon">' + esc(code) + '</div><div class="metric-label">' + esc(label) + '</div></div>' +
+      return '<div class="metric" data-tone="' + esc(tone) + '">' +
+        '<div class="metric-label-row"><div class="metric-label">' + esc(label) + '</div><div class="metric-code">' + esc(code) + '</div></div>' +
         '<div class="metric-value">' + esc(value) + '</div>' +
         '<div class="metric-detail">' + esc(detail) + '</div>' +
       '</div>';
