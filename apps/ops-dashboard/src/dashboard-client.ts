@@ -31,15 +31,18 @@ export const DASHBOARD_CLIENT_SCRIPT = `    const tokenInput = document.getEleme
       renderModules(state.modules || []);
       renderRuns(state.runs || []);
       renderArtifactRuns(state.artifactRuns || []);
+      renderDiagnostics(state.diagnostics || []);
     }
     function renderSummary(state) {
       const modules = state.modules || [];
       const runs = state.runs || [];
       const artifacts = state.artifactRuns || [];
+      const diagnostics = state.diagnostics || [];
       const enabledModules = modules.filter((m) => m.enabled && m.available).length;
       const readinessIssues = modules.filter((m) => !m.available || !m.readiness?.ready).length;
       const failedRuns = runs.filter((run) => run.status === 'FAILED').length;
       const runningRuns = runs.filter((run) => run.status === 'RUNNING').length;
+      const failedArtifacts = artifacts.filter((run) => run.status === 'FAILED').length;
       const generatedArtifacts = artifacts.filter((run) => run.rendererMode === 'generated').length;
       const promotableArtifacts = artifacts.filter((run) => run.rendererMode === 'generated' && !run.promotedRendererId).length;
       const nextDueValues = modules.map((m) => m.nextDueAt).filter(Boolean).sort();
@@ -48,10 +51,10 @@ export const DASHBOARD_CLIENT_SCRIPT = `    const tokenInput = document.getEleme
       document.getElementById('summary').innerHTML = [
         metric('스택 연결', sseStatus.textContent || '확인 중', 'SSE 상태와 API 응답 기준', sseStatus.classList.contains('bad') ? 'bad' : sseStatus.classList.contains('ok') ? 'ok' : 'warn', 'NET'),
         metric('활성 모듈', enabledModules + '/' + modules.length, readinessIssues ? readinessIssues + '개 모듈 확인 필요' : '모든 모듈 준비됨', tone(readinessIssues > 0, enabledModules === 0 && modules.length > 0), 'MOD'),
-        metric('실행 상태', runningRuns + ' running', failedRuns ? '최근 실패 ' + failedRuns + '건' : '최근 실패 없음', tone(failedRuns > 0, runningRuns > 0), 'RUN'),
+        metric('실행 상태', runningRuns + ' running', failedRuns ? '자동화 실패 ' + failedRuns + '건' : '자동화 실패 없음', tone(failedRuns > 0, runningRuns > 0), 'RUN'),
         metric('다음 예약', nextDue, '스케줄러 기준 다음 due window', nextDueValues.length ? 'ok' : 'warn', 'DUE'),
-        metric('산출물', String(generatedArtifacts), promotableArtifacts ? '승격 검토 ' + promotableArtifacts + '건' : '대기 없음', promotableArtifacts ? 'warn' : 'ok', 'ART'),
-        metric('로그 대상', logTarget.value || 'worker', '선택 대상 실시간 tail', 'ok', 'LOG'),
+        metric('산출물', String(generatedArtifacts), failedArtifacts ? '산출물 실패 ' + failedArtifacts + '건' : promotableArtifacts ? '승격 검토 ' + promotableArtifacts + '건' : '대기 없음', failedArtifacts ? 'bad' : promotableArtifacts ? 'warn' : 'ok', 'ART'),
+        metric('진단 이벤트', String(diagnostics.length), diagnostics[0] ? '최근 ' + escDiagnosticMessage(diagnostics[0]) : '최근 worker 오류 없음', diagnostics.length ? 'bad' : 'ok', 'ERR'),
       ].join('');
     }
     function metric(label, value, detail, tone, code) {
@@ -113,12 +116,39 @@ export const DASHBOARD_CLIENT_SCRIPT = `    const tokenInput = document.getEleme
         visible.map((run) => '<tr>' +
           '<td><span class="status ' + statusClass(run.status) + '">' + esc(run.status) + '</span></td>' +
           '<td><button class="id-button mono" data-artifact-run="' + esc(run.id) + '">' + esc(run.id) + '</button><br><span class="muted">' + esc(fmt(run.createdAt)) + '</span></td>' +
-          '<td>' + esc(run.artifactKind) + '<br><span class="muted">' + esc(run.artifactId) + '</span></td>' +
-          '<td>' + esc(run.rendererMode) + '<br><span class="muted">' + esc(run.rendererId || run.rendererLanguage || '-') + '</span></td>' +
-          '<td class="prompt-cell">' + esc((run.sourcePrompt || '').slice(0, 180)) + (run.sourcePrompt && run.sourcePrompt.length > 180 ? '...' : '') + '</td>' +
+        '<td>' + esc(run.artifactKind) + '<br><span class="muted">' + esc(run.artifactId) + '</span></td>' +
+        '<td>' + esc(run.rendererMode) + '<br><span class="muted">' + esc(run.rendererId || run.rendererLanguage || '-') + '</span></td>' +
+          '<td class="prompt-cell">' + esc((run.sourcePrompt || '').slice(0, 180)) + (run.sourcePrompt && run.sourcePrompt.length > 180 ? '...' : '') + (run.error ? '<br><span class="status bad">오류</span> <span class="muted">' + esc(String(run.error).slice(0, 120)) + '</span>' : '') + '</td>' +
           '<td>' + (run.rendererMode === 'generated' ? (run.promotedRendererId ? '<span class="status ok">' + esc(run.promotedRendererId) + '</span>' : '<button class="primary" data-promote="' + esc(run.id) + '">Registered로 승격</button>') : '<span class="muted">등록됨</span>') + '</td>' +
         '</tr>').join('') + '</tbody></table></div>' +
         (runs.length > visible.length ? '<div class="table-note">최근 ' + visible.length + '개만 표시 중 / 전체 ' + runs.length + '개</div>' : '');
+    }
+    function renderDiagnostics(diagnostics) {
+      const target = document.getElementById('diagnostics');
+      if (!target) return;
+      if (diagnostics.length === 0) {
+        target.innerHTML = '<div class="empty">최근 worker 오류 진단 이벤트가 없습니다.</div>';
+        return;
+      }
+      target.innerHTML = '<div class="table-scroll diagnostics-scroll"><table><thead><tr><th>시간</th><th>Job</th><th>Phase</th><th>오류</th><th>Stack</th></tr></thead><tbody>' +
+        diagnostics.map((event) => {
+          const data = event.data || {};
+          const context = data.context || {};
+          return '<tr>' +
+            '<td>' + esc(fmt(event.createdAt)) + '</td>' +
+            '<td><span class="mono">' + esc(context.jobId || event.jobId || '-') + '</span></td>' +
+            '<td><span class="status bad">' + esc(context.phase || '-') + '</span></td>' +
+            '<td>' + esc(data.message || event.message || '-') + '</td>' +
+            '<td class="path-cell"><span class="muted mono">' + esc(stackFirstFrame(data.stack || '')) + '</span></td>' +
+          '</tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+    function stackFirstFrame(stack) {
+      return String(stack || '').split('\\n').slice(0, 2).join(' ');
+    }
+    function escDiagnosticMessage(event) {
+      const data = event.data || {};
+      return String(data.message || event.message || '').slice(0, 48);
     }
     async function showRun(id) {
       const detail = await api('/api/runs/' + encodeURIComponent(id));
@@ -134,6 +164,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `    const tokenInput = document.getEleme
           detailKv('Raw', detail.links?.rawBundlePath || '-') +
           detailKv('Wiki', detail.links?.wikiPagePath || '-') +
         '</div>' +
+        (detail.run.error ? logBlock('오류 진단', detail.run.error, true) : '') +
         logBlock('결과 result.json', detail.resultText || '', true) +
         '<div class="log-grid">' +
           logBlock('표준 출력 stdout.log', detail.stdout || '') +
@@ -157,6 +188,7 @@ export const DASHBOARD_CLIENT_SCRIPT = `    const tokenInput = document.getEleme
         '</div>' +
         logBlock('사용자 입력 프롬프트', detail.run.sourcePrompt || '', true) +
         logBlock('Artifact Request', requestText, true) +
+        diagnosticBlock(detail.run.error, detail.run.errorDiagnostic) +
         (detail.generatedCode ? logBlock('Generated Renderer 코드', detail.generatedCode, true) : '') +
         logBlock('결과 result.json', detail.resultText || '', true) +
         '<div class="log-grid">' +
@@ -169,6 +201,11 @@ export const DASHBOARD_CLIENT_SCRIPT = `    const tokenInput = document.getEleme
     }
     function logBlock(title, text, wide) {
       return '<div class="' + (wide ? 'wide-log' : '') + '"><h3>' + esc(title) + '</h3><pre>' + esc(text || '') + '</pre></div>';
+    }
+    function diagnosticBlock(message, diagnostic) {
+      if (!message && !diagnostic) return '';
+      const text = diagnostic ? JSON.stringify(diagnostic, null, 2) : String(message || '');
+      return logBlock('오류 진단 / Stack trace', text, true);
     }
     function ensureLogTarget(value, label) {
       if ([...logTarget.options].some((option) => option.value === value)) return;

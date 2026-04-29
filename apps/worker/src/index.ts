@@ -21,7 +21,14 @@ import {
   type ArtifactRequest,
 } from "@telegram-local-ingest/artifact-core";
 import { createIngestJobFromTelegramMessage, createQueuedJobFromTelegramMessage } from "@telegram-local-ingest/capture";
-import { type AppConfig, ConfigError, loadConfig, loadNearestEnvFile } from "@telegram-local-ingest/core";
+import {
+  type AppConfig,
+  ConfigError,
+  formatErrorForLog,
+  loadConfig,
+  loadNearestEnvFile,
+  serializeError,
+} from "@telegram-local-ingest/core";
 import {
   appendJobEvent,
   claimRunnableJobs,
@@ -564,7 +571,7 @@ export async function processRunnableJobs(
     for (const [index, task] of tasks.entries()) {
       const job = jobs[index];
       void task.catch((error) => {
-        logWorker(`background job failed id=${job?.id ?? "unknown"} error=${errorMessage(error)}`, "warn", "JOB");
+        logWorker(`background job failed id=${job?.id ?? "unknown"} diagnostic=${formatErrorForLog(error, { jobId: job?.id ?? "unknown", async: "background" })}`, "warn", "JOB");
       });
     }
   }
@@ -572,10 +579,13 @@ export async function processRunnableJobs(
 }
 
 export async function processJob(context: WorkerContext, jobId: string): Promise<StoredJob> {
+  let phase = "start";
   try {
+    phase = "load_job";
     let job = mustGetJob(context.db, jobId);
     logWorker(`job processing id=${job.id} status=${job.status}`, "info", "JOB");
     if (job.status === "QUEUED") {
+      phase = "telegram_import";
       logWorker(`importing Telegram files job=${job.id}`, "info", "IMPORT");
       await importTelegramJobFiles(context.db, context.telegram, job.id, {
         runtimeDir: context.config.runtime.runtimeDir,
@@ -586,8 +596,10 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     }
 
     if (job.status === "NORMALIZING") {
+      phase = "normalizing";
       const audioFiles = listJobFiles(context.db, job.id).filter(isAudioJobFile);
       if (audioFiles.length > 0) {
+        phase = "stt";
         logWorker(`STT phase started job=${job.id} provider=${context.config.stt.provider} files=${audioFiles.length}`, "info", "STT");
         await runWithSemaphore(context, "stt", () => runConfiguredSttTranscription(context, job));
         const transcriptOutputs = await registerTranscriptOutputs(context, job);
@@ -611,6 +623,7 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     }
 
     if (job.status === "BUNDLE_WRITING") {
+      phase = "bundle_writing";
       const existingBundle = getSourceBundleForJob(context.db, job.id);
       if (existingBundle && await isReusableSourceBundle(existingBundle)) {
         appendJobEvent(context.db, job.id, "bundle.reused", existingBundle.bundlePath, {
@@ -620,6 +633,7 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
         transitionJob(context.db, job.id, "INGESTING", { message: "Reusing existing Obsidian raw bundle" });
         job = mustGetJob(context.db, job.id);
       } else {
+      phase = "bundle_write";
       logWorker(`writing raw bundle job=${job.id}`, "info", "BUNDLE");
       const events = listJobEvents(context.db, job.id);
       const preBundlePreprocessing = await collectPreprocessedTextArtifacts({
@@ -667,9 +681,11 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     }
 
     if (job.status === "INGESTING") {
+      phase = "preprocessing";
       logWorker(`preprocessing phase started job=${job.id}`, "info", "PREPROCESS");
       await runPreprocessingAndLanguageCheck(context, job);
       logWorker(`preprocessing phase finished job=${job.id}`, "info", "PREPROCESS");
+      phase = "agent_postprocess";
       logWorker(`agent postprocess phase started job=${job.id} provider=${context.config.agent.provider}`, "info", "AGENT");
       if (shouldUseAgentSemaphore(context, job)) {
         await runWithSemaphore(context, "agent", () => runConfiguredAgentPostprocess(context, job));
@@ -681,6 +697,7 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
         return stopped;
       }
       logWorker(`agent postprocess phase finished job=${job.id} provider=${context.config.agent.provider}`, "info", "AGENT");
+      phase = "wiki_adapter";
       logWorker(`wiki adapter phase started job=${job.id}`, "info", "WIKI");
       await runConfiguredWikiAdapter(context, job);
       const wikiStopped = terminalJobIfStopped(context.db, job.id);
@@ -693,6 +710,7 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
     }
 
     if (job.status === "NOTIFYING") {
+      phase = "notifying";
       logWorker(`sending completion notification job=${job.id}`, "info", "NOTIFY");
       if (job.chatId) {
         const files = listJobFiles(context.db, job.id);
@@ -716,6 +734,8 @@ export async function processJob(context: WorkerContext, jobId: string): Promise
 
     return job;
   } catch (error) {
+    recordWorkerError(context.db, jobId, error, { phase });
+    logWorker(`job failed id=${jobId} phase=${phase} diagnostic=${formatErrorForLog(error, { jobId, phase })}`, "warn", "JOB");
     const failed = transitionToFailedIfPossible(context.db, jobId, error);
     if (failed?.status === "CANCELLED" || failed?.status === "COMPLETED") {
       return failed;
@@ -1351,7 +1371,7 @@ async function handleWikiChatMessage(context: WorkerContext, message: ParsedTele
     await handleWikiChatAttachments(context, message, text, [...artifactAttachments, ...result.attachments]);
     logWorker(`wiki chat finished chat=${message.chatId} message=${message.messageId}`, "info", "WIKI");
   } catch (error) {
-    logWorker(`wiki chat failed chat=${message.chatId} message=${message.messageId} error=${error instanceof Error ? error.message : String(error)}`, "warn", "WIKI");
+    logWorker(`wiki chat failed chat=${message.chatId} message=${message.messageId} diagnostic=${formatErrorForLog(error, { chatId: message.chatId, messageId: message.messageId, scope: "wiki_chat" })}`, "warn", "WIKI");
     await sendChunkedTelegramMessage(
       context,
       message.chatId,
@@ -1539,16 +1559,23 @@ async function handleWikiChatArtifactRequests(
       );
       logWorker(`wiki artifact generated run=${runId} bundle=${result.derivedBundlePath}`, "info", "WIKI");
     } catch (error) {
+      const diagnostic = serializeError(error, {
+        runId,
+        artifactId,
+        artifactKind: request.artifactKind,
+        scope: "wiki_chat_artifact",
+      });
       completeArtifactRendererRun(context.db, {
         id: runId,
         status: "FAILED",
-        error: errorMessage(error),
+        error: diagnostic.message,
+        errorDiagnostic: diagnostic,
       });
       await context.telegram.sendMessage(
         message.chatId,
-        `⚠️ 2차 산출물 생성 실패\n\n${request.title}\n${errorMessage(error)}`,
+        `⚠️ 2차 산출물 생성 실패\n\n${request.title}\n${diagnostic.message}`,
       );
-      logWorker(`wiki artifact failed run=${runId} error=${errorMessage(error)}`, "warn", "WIKI");
+      logWorker(`wiki artifact failed run=${runId} diagnostic=${JSON.stringify(diagnostic)}`, "warn", "WIKI");
     }
   }
   return attachments;
@@ -2186,6 +2213,7 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
     appendAgentPostprocessFailedEvent(context, job, {
       error: errorMessage(error),
       reason: "agent_command_failed",
+      diagnostic: serializeError(error, { jobId: job.id, phase: "agent_postprocess" }),
     });
     throw error;
   }
@@ -2193,10 +2221,12 @@ async function runConfiguredAgentPostprocess(context: WorkerContext, job: Stored
   const generatedFiles = await listGeneratedFiles(result.outputDir);
   if (generatedFiles.length === 0) {
     const error = `Agent postprocess did not create any output files: ${result.outputDir}`;
+    const diagnostic = serializeError(new Error(error), { jobId: job.id, phase: "agent_postprocess" });
     appendAgentPostprocessFailedEvent(context, job, {
       result,
       error,
       reason: "no_output_files",
+      diagnostic,
     });
     throw new Error(error);
   }
@@ -2250,6 +2280,7 @@ function appendAgentPostprocessFailedEvent(
   input: {
     error: string;
     reason: string;
+    diagnostic?: unknown;
     result?: AgentPostprocessResult;
   },
 ): void {
@@ -2257,6 +2288,7 @@ function appendAgentPostprocessFailedEvent(
     provider: context.config.agent.provider,
     reason: input.reason,
     error: input.error,
+    ...(input.diagnostic ? { diagnostic: input.diagnostic } : {}),
     ...(input.result
       ? {
           command: input.result.command,
@@ -2443,8 +2475,22 @@ function transitionToFailedIfPossible(db: DatabaseSync, jobId: string, error: un
   });
 }
 
+function recordWorkerError(
+  db: DatabaseSync,
+  jobId: string,
+  error: unknown,
+  context: Record<string, unknown> = {},
+): void {
+  try {
+    const diagnostic = serializeError(error, { jobId, ...context });
+    appendJobEvent(db, jobId, "worker.error", diagnostic.message, diagnostic);
+  } catch (eventError) {
+    logWorker(`worker error event failed job=${jobId} diagnostic=${formatErrorForLog(eventError, { jobId })}`, "warn", "JOB");
+  }
+}
+
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return serializeError(error).message;
 }
 
 function logWorker(message: string, level: "info" | "warn" = "info", tag = "GENERAL"): void {
@@ -5324,7 +5370,19 @@ async function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
   });
 }
 
+function installProcessErrorHandlers(): void {
+  process.on("uncaughtException", (error) => {
+    logWorker(`uncaught exception diagnostic=${formatErrorForLog(error, { scope: "process" })}`, "warn", "FATAL");
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    logWorker(`unhandled rejection diagnostic=${formatErrorForLog(reason, { scope: "process" })}`, "warn", "FATAL");
+    process.exitCode = 1;
+  });
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  installProcessErrorHandlers();
   try {
     await main();
   } catch (error) {

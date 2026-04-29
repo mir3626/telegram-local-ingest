@@ -87,6 +87,8 @@ export const DASHBOARD_STYLES = `    :root {
     .metric[data-tone="bad"] { border-top-color: #c24141; background: #fffafa; }
     .ops-grid { display: grid; grid-template-columns: minmax(0, 1.48fr) minmax(360px, .82fr); gap: 14px; align-items: start; }
     .runs-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; align-items: start; }
+    .diagnostics-surface { margin-bottom: 14px; }
+    .diagnostics-scroll { max-height: 260px; }
     .detail-surface { margin-top: 14px; }
     .live-log { min-height: 304px; max-height: 430px; margin: 10px 0 0; background: #111714; color: #d8e7df; border: 1px solid #24342e; box-shadow: inset 3px 0 0 rgba(58, 156, 108, .65), inset 0 0 0 1px rgba(255,255,255,.02); }
     .detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 14px; }

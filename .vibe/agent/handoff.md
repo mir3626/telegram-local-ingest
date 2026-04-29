@@ -10,6 +10,12 @@
 
 ## Status
 
+### Generated Renderer Source Glob Debug — 2026-04-29
+
+Wiki chat generated renderer requests now support constrained source glob expansion before renderer execution. The failing request `wiki/sources/fx_koreaexim_2025{04..10}*.md` was being passed to `fs.stat()` as a literal filename, causing `ENOENT`. `packages/artifact-core` now expands numeric brace ranges, comma brace lists, `*`, `?`, and simple character classes inside the vault, then validates every concrete file against the existing raw/wiki/derived artifact source allowlist before snapshotting. Unmatched globs fail with an explicit "matched no files" error.
+
+Regression coverage was added in `test/artifact-core.test.ts`; the brittle generated-artifact worker test no longer hard-codes `2026-04-28` for a date generated from the current clock. Verification passed: focused artifact-core test, focused worker test, `npm run typecheck`, full `npm test`, and touched-file UTF-8/mojibake checks. The local stack was restarted after the fix and is running at `http://127.0.0.1:58991/` with Bot API pid `932875`, worker pid `933150`, and ops dashboard pid `933161`.
+
 ### Dashboard Refactor Checkpoint — 2026-04-28
 
 The product ops dashboard has been split into focused source modules to make the next visual pass and any Claude/Codex delegated UI work easier to scope. `apps/ops-dashboard/src/index.ts` is now only the CLI entrypoint and public re-export surface. `apps/ops-dashboard/src/server.ts` owns the HTTP routes, SSE/log tail, automation/artifact actions, and runtime path resolution. `dashboard-page.ts` composes the HTML document, while `dashboard-styles.ts` and `dashboard-client.ts` hold the page CSS and browser-side JavaScript.
@@ -240,6 +246,7 @@ Continue from /home/tony/workspace/telegram-local-ingest on branch `main`. Read 
 
 ## Latest Verification
 
+- Latest verification after observability/structured diagnostics hardening: reviewed the image-generated dashboard mockup and kept live log files as human-readable text streams while moving structured stack/context into SQLite/API. Worker failures now emit `worker.error` events with serialized diagnostics and artifact renderer failures persist `error_json`; the ops dashboard shows recent diagnostics and detail Inspector stack/context. Verification: `npm run typecheck` passed; focused `node --import tsx --test test/db.test.ts test/worker.test.ts test/ops-dashboard.test.ts` passed (`49`); `npm run build` passed; full `npm test` passed (`473` passed, `1` skipped); `git diff --check` passed; touched-file UTF-8/mojibake checks passed.
 - Latest verification after dashboard UI redesign: imagegen mockup was used as visual reference; Playwright desktop `1440x1000` and mobile `390x900` smoke passed with no console/page errors and no horizontal overflow; screenshots were written to `/tmp/tlgi-dashboard-polished-desktop.png` and `/tmp/tlgi-dashboard-polished-mobile.png`; focused `node --import tsx --test test/ops-dashboard.test.ts` passed (`5`); `npm run typecheck` passed; `npm run build` passed; full `npm test` passed (`471` passed, `1` skipped); `git diff --check` passed; `bash -n` passed for stack helper scripts; `bash scripts/local-stack-status.sh` passed and reported Bot API/worker/ops dashboard pids; timeout-based tail helper smokes passed; `npm run ops:restart` passed.
 - Latest verification after dashboard SSE observability: focused `node --import tsx --test test/ops-dashboard.test.ts` passed (`5`); `npm run typecheck` passed; full `npm test` passed (`471` passed, `1` skipped); `npm run build` passed; `git diff --check` passed; `node --import tsx scripts/vibe-validate-state.ts` passed.
 - Latest verification after derived artifact pipeline and generated renderer dashboard support: `npm run typecheck` passed; `node --import tsx --test test/artifact-core.test.ts` passed; `node --import tsx --test test/ops-dashboard.test.ts` passed (`4`); focused `node --import tsx --test test/worker.test.ts` passed (`36`); `node --check` passed for `yoni-llm-wiki/scripts/chat.mjs` and `renderers/fx-chart-1y/render.mjs`.

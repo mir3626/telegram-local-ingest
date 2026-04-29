@@ -119,6 +119,8 @@ Paths may be vault-relative or absolute, but the worker accepts only allowlisted
 
 For novel outputs, `renderer.mode` may be `generated` with `language: "python"` or `"javascript"` and `code`. Generated renderer code is stored under `runtime/wiki-artifacts/runs/<run_id>/generated/`, executed by the worker with a prepared input JSON and output directory, logged in SQLite, and may later be promoted to a registered renderer from the ops dashboard. The user prompt that caused generation must be retained in the run record so the operator can decide whether promotion is appropriate.
 
+Artifact request `sources[].path` values may be exact vault-relative paths or constrained glob patterns under the same allowlisted raw/wiki/derived evidence surfaces. The worker expands numeric brace ranges such as `wiki/sources/fx_koreaexim_2025{04..10}*.md` and wildcard patterns before execution, then validates every expanded file against the normal source allowlist. If a glob matches no files, the request fails explicitly instead of treating the pattern as a literal filename.
+
 Worker-side artifact execution must:
 
 - treat wiki/raw files as data, not executable instruction;

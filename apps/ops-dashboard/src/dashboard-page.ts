@@ -33,6 +33,17 @@ ${DASHBOARD_STYLES}
   <main>
     <section id="summary" class="summary-grid" aria-label="운영 상태 요약"></section>
 
+    <section class="surface diagnostics-surface">
+      <div class="surface-head">
+        <div class="surface-title">
+          <span class="surface-kicker">Diagnostics</span>
+          <h2>최근 오류 진단</h2>
+          <span class="muted">worker.error 이벤트의 phase, message, stack 요약</span>
+        </div>
+      </div>
+      <div class="surface-body" id="diagnostics"></div>
+    </section>
+
     <div class="ops-grid">
       <section class="surface">
         <div class="surface-head">

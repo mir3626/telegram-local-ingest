@@ -181,11 +181,17 @@ test("ops dashboard exposes generated renderer prompt and can promote it", async
   const runId = "artifact_demo_20260428T000000000Z";
   const runDir = path.join(fixture.runtimeDir, "wiki-artifacts", "runs", runId);
   const generatedDir = path.join(runDir, "generated");
+  const failedRunId = "artifact_failed_20260428T000000000Z";
+  const failedRunDir = path.join(fixture.runtimeDir, "wiki-artifacts", "runs", failedRunId);
   fs.mkdirSync(generatedDir, { recursive: true });
   fs.writeFileSync(path.join(generatedDir, "render.mjs"), "process.stdout.write('ok');\n", "utf8");
   fs.writeFileSync(path.join(runDir, "stdout.log"), "stdout\n", "utf8");
   fs.writeFileSync(path.join(runDir, "stderr.log"), "", "utf8");
   fs.writeFileSync(path.join(runDir, "result.json"), "{}\n", "utf8");
+  fs.mkdirSync(failedRunDir, { recursive: true });
+  fs.writeFileSync(path.join(failedRunDir, "stdout.log"), "", "utf8");
+  fs.writeFileSync(path.join(failedRunDir, "stderr.log"), "renderer stderr stack\n", "utf8");
+  fs.writeFileSync(path.join(failedRunDir, "result.json"), "{}\n", "utf8");
 
   const dbHandle = openIngestDatabase(fixture.dbPath);
   try {
@@ -215,6 +221,40 @@ test("ops dashboard exposes generated renderer prompt and can promote it", async
       resultPath: path.join(runDir, "result.json"),
     });
     completeArtifactRendererRun(dbHandle.db, { id: runId, status: "SUCCEEDED" });
+    createArtifactRendererRun(dbHandle.db, {
+      id: failedRunId,
+      artifactId: "failed",
+      artifactKind: "chart",
+      rendererMode: "generated",
+      rendererLanguage: "javascript",
+      sourcePrompt: "실패하는 차트를 만들어줘",
+      request: {
+        action: "create_derived_artifact",
+        artifactKind: "chart",
+        artifactId: "failed",
+        title: "Failed",
+        renderer: {
+          mode: "generated",
+          language: "javascript",
+          code: "throw new Error('boom');\n",
+        },
+      },
+      runDir: failedRunDir,
+      outputDir: path.join(failedRunDir, "outputs"),
+      stdoutPath: path.join(failedRunDir, "stdout.log"),
+      stderrPath: path.join(failedRunDir, "stderr.log"),
+      resultPath: path.join(failedRunDir, "result.json"),
+    });
+    completeArtifactRendererRun(dbHandle.db, {
+      id: failedRunId,
+      status: "FAILED",
+      error: "renderer failed",
+      errorDiagnostic: {
+        name: "Error",
+        message: "renderer failed",
+        stack: "Error: renderer failed\n    at render.mjs:1:1",
+      },
+    });
   } finally {
     dbHandle.close();
   }
@@ -242,6 +282,13 @@ test("ops dashboard exposes generated renderer prompt and can promote it", async
     };
     assert.equal(detail.run.sourcePrompt, "사용자가 입력한 프롬프트");
     assert.match(detail.generatedCode, /process\.stdout/);
+    const failedDetail = await (await fetch(new URL(`/api/artifacts/runs/${failedRunId}`, dashboard.url))).json() as {
+      run: { error: string; errorDiagnostic: { stack: string } };
+      stderr: string;
+    };
+    assert.equal(failedDetail.run.error, "renderer failed");
+    assert.match(failedDetail.run.errorDiagnostic.stack, /render\.mjs/);
+    assert.match(failedDetail.stderr, /renderer stderr stack/);
 
     const promote = await fetch(new URL(`/api/artifacts/runs/${runId}/promote`, dashboard.url), {
       method: "POST",

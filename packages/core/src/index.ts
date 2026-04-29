@@ -135,6 +135,141 @@ export class ConfigError extends Error {
   }
 }
 
+export interface SerializedError {
+  name: string;
+  message: string;
+  stack?: string;
+  code?: string | number;
+  errno?: string | number;
+  syscall?: string;
+  path?: string;
+  exitCode?: number;
+  signal?: string;
+  cause?: SerializedError;
+  context?: Record<string, unknown>;
+}
+
+const MAX_ERROR_TEXT_LENGTH = 12_000;
+
+export function serializeError(error: unknown, context?: Record<string, unknown>): SerializedError {
+  const serialized = serializeErrorInner(error, new Set<unknown>());
+  const sanitizedContext = context ? sanitizeDiagnosticValue(context) : undefined;
+  if (isRecord(sanitizedContext)) {
+    serialized.context = sanitizedContext;
+  }
+  return serialized;
+}
+
+export function formatErrorForLog(error: unknown, context?: Record<string, unknown>): string {
+  return JSON.stringify(serializeError(error, context));
+}
+
+function serializeErrorInner(error: unknown, seen: Set<unknown>): SerializedError {
+  if (error instanceof Error) {
+    if (seen.has(error)) {
+      return { name: error.name || "Error", message: "[Circular error]" };
+    }
+    seen.add(error);
+    const record = error as Error & {
+      code?: unknown;
+      errno?: unknown;
+      syscall?: unknown;
+      path?: unknown;
+      exitCode?: unknown;
+      signal?: unknown;
+      cause?: unknown;
+    };
+    const result: SerializedError = {
+      name: redactDiagnosticText(error.name || "Error"),
+      message: redactDiagnosticText(error.message),
+    };
+    assignSerialized(result, "stack", typeof error.stack === "string" ? redactDiagnosticText(error.stack) : undefined);
+    assignSerialized(result, "code", diagnosticScalar(record.code));
+    assignSerialized(result, "errno", diagnosticScalar(record.errno));
+    assignSerialized(result, "syscall", diagnosticString(record.syscall));
+    assignSerialized(result, "path", diagnosticString(record.path));
+    assignSerialized(result, "exitCode", diagnosticNumber(record.exitCode));
+    assignSerialized(result, "signal", diagnosticString(record.signal));
+    if (record.cause !== undefined) {
+      result.cause = serializeErrorInner(record.cause, seen);
+    }
+    return result;
+  }
+
+  return {
+    name: "NonError",
+    message: redactDiagnosticText(
+      typeof error === "string" ? error : (JSON.stringify(sanitizeDiagnosticValue(error)) ?? String(error)),
+    ),
+  };
+}
+
+function assignSerialized<K extends keyof SerializedError>(
+  target: SerializedError,
+  key: K,
+  value: SerializedError[K] | undefined,
+): void {
+  if (value !== undefined && value !== "") {
+    target[key] = value;
+  }
+}
+
+function diagnosticScalar(value: unknown): string | number | undefined {
+  if (typeof value === "string") {
+    return redactDiagnosticText(value);
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  return undefined;
+}
+
+function diagnosticString(value: unknown): string | undefined {
+  return typeof value === "string" ? redactDiagnosticText(value) : undefined;
+}
+
+function diagnosticNumber(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function sanitizeDiagnosticValue(value: unknown, depth = 0): unknown {
+  if (depth > 5) {
+    return "[MaxDepth]";
+  }
+  if (typeof value === "string") {
+    return redactDiagnosticText(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 50).map((item) => sanitizeDiagnosticValue(item, depth + 1));
+  }
+  if (isRecord(value)) {
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value).slice(0, 80)) {
+      output[key] = isSensitiveDiagnosticKey(key) ? "[redacted]" : sanitizeDiagnosticValue(item, depth + 1);
+    }
+    return output;
+  }
+  return String(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSensitiveDiagnosticKey(key: string): boolean {
+  return /token|secret|password|authkey|api[_-]?key|client[_-]?secret/i.test(key);
+}
+
+function redactDiagnosticText(value: string): string {
+  return value
+    .slice(0, MAX_ERROR_TEXT_LENGTH)
+    .replace(/\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g, "[redacted:telegram_bot_token]")
+    .replace(/((?:token|secret|password|authkey|api[_-]?key|client[_-]?secret)\s*[=:]\s*)([^,\s;]+)/gi, "$1[redacted]");
+}
+
 export function loadNearestEnvFile(startDir = process.cwd(), env: NodeJS.ProcessEnv = process.env): string | null {
   let current = path.resolve(startDir);
   while (true) {

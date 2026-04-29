@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { IngestSource, JobStatus } from "@telegram-local-ingest/core";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export interface DbHandle {
   db: DatabaseSync;
@@ -241,6 +241,7 @@ export interface CompleteArtifactRendererRunInput {
   derivedBundlePath?: string;
   wikiPagePath?: string;
   error?: string;
+  errorDiagnostic?: unknown;
   endedAt?: string;
 }
 
@@ -266,6 +267,7 @@ export interface StoredArtifactRendererRun {
   createdAt: string;
   endedAt?: string;
   error?: string;
+  errorDiagnostic?: unknown;
 }
 
 export interface ClaimRunnableJobsInput {
@@ -366,6 +368,10 @@ export function migrate(db: DatabaseSync): void {
     if (current < 7) {
       applyV7(db);
       recordMigration(db, 7);
+    }
+    if (current < 8) {
+      applyV8(db);
+      recordMigration(db, 8);
     }
     db.exec("COMMIT;");
   } catch (error) {
@@ -676,6 +682,13 @@ export function listJobEvents(db: DatabaseSync, jobId: string): StoredJobEvent[]
   return db
     .prepare("SELECT * FROM job_events WHERE job_id = ? ORDER BY id ASC")
     .all(jobId)
+    .map((row) => mapJobEvent(row as unknown as JobEventRow));
+}
+
+export function listJobEventsByType(db: DatabaseSync, type: string, limit = 50): StoredJobEvent[] {
+  return db
+    .prepare("SELECT * FROM job_events WHERE type = ? ORDER BY created_at DESC, id DESC LIMIT ?")
+    .all(type, limit)
     .map((row) => mapJobEvent(row as unknown as JobEventRow));
 }
 
@@ -1077,7 +1090,7 @@ export function completeArtifactRendererRun(
   const endedAt = input.endedAt ?? nowIso();
   db.prepare(`
     UPDATE artifact_renderer_runs
-    SET status = ?, ended_at = ?, derived_bundle_path = ?, wiki_page_path = ?, error = ?
+    SET status = ?, ended_at = ?, derived_bundle_path = ?, wiki_page_path = ?, error = ?, error_json = ?
     WHERE id = ?
   `).run(
     input.status,
@@ -1085,6 +1098,7 @@ export function completeArtifactRendererRun(
     input.derivedBundlePath ?? null,
     input.wikiPagePath ?? null,
     input.error ?? null,
+    input.errorDiagnostic === undefined ? null : JSON.stringify(input.errorDiagnostic),
     input.id,
   );
   return mustGetArtifactRendererRun(db, input.id);
@@ -1339,6 +1353,14 @@ function applyV7(db: DatabaseSync): void {
   `);
 }
 
+function applyV8(db: DatabaseSync): void {
+  if (!hasTableColumn(db, "artifact_renderer_runs", "error_json")) {
+    db.exec(`
+      ALTER TABLE artifact_renderer_runs ADD COLUMN error_json TEXT;
+    `);
+  }
+}
+
 function recordMigration(db: DatabaseSync, version: number): void {
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(version, nowIso());
 }
@@ -1542,6 +1564,7 @@ function mapArtifactRendererRun(row: ArtifactRendererRunRow): StoredArtifactRend
   assignDefined(run, "promotedRendererId", definedString(row.promoted_renderer_id));
   assignDefined(run, "endedAt", definedString(row.ended_at));
   assignDefined(run, "error", definedString(row.error));
+  assignDefined(run, "errorDiagnostic", parseOptionalJson(row.error_json));
   return run;
 }
 
@@ -1688,4 +1711,5 @@ interface ArtifactRendererRunRow {
   created_at: string;
   ended_at: string | null;
   error: string | null;
+  error_json: string | null;
 }

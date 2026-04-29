@@ -8,6 +8,8 @@ import {
   addJobFile,
   canRetry,
   claimRunnableJobs,
+  completeArtifactRendererRun,
+  createArtifactRendererRun,
   createJob,
   createJobOutput,
   createSourceBundle,
@@ -15,6 +17,7 @@ import {
   getJob,
   getJobClaim,
   getJobOutput,
+  getArtifactRendererRun,
   getTelegramOffset,
   isValidTransition,
   listExpiredJobOutputs,
@@ -153,6 +156,52 @@ test("events reconstruct job history and files remain queryable for dashboards",
     assert.equal(files.length, 1);
     assert.equal(files[0]?.sha256, "abc123");
     assert.equal(files[0]?.sizeBytes, 1234);
+  } finally {
+    handle.close();
+  }
+});
+
+test("artifact renderer runs retain structured error diagnostics", () => {
+  const handle = openIngestDatabase(":memory:");
+  try {
+    migrate(handle.db);
+    createArtifactRendererRun(handle.db, {
+      id: "artifact-run-1",
+      artifactId: "demo",
+      artifactKind: "chart",
+      rendererMode: "generated",
+      rendererLanguage: "javascript",
+      sourcePrompt: "차트 생성",
+      request: { action: "create_derived_artifact" },
+      runDir: "/tmp/run",
+      outputDir: "/tmp/run/outputs",
+      stdoutPath: "/tmp/run/stdout.log",
+      stderrPath: "/tmp/run/stderr.log",
+      resultPath: "/tmp/run/result.json",
+      now: NOW,
+    });
+    completeArtifactRendererRun(handle.db, {
+      id: "artifact-run-1",
+      status: "FAILED",
+      error: "source glob matched no files",
+      errorDiagnostic: {
+        name: "Error",
+        message: "source glob matched no files",
+        stack: "Error: source glob matched no files\n    at buildSourceSnapshot",
+        context: { phase: "artifact_source_snapshot" },
+      },
+      endedAt: NOW,
+    });
+
+    const run = getArtifactRendererRun(handle.db, "artifact-run-1");
+    assert.equal(run?.status, "FAILED");
+    assert.equal(run?.error, "source glob matched no files");
+    assert.deepEqual(run?.errorDiagnostic, {
+      name: "Error",
+      message: "source glob matched no files",
+      stack: "Error: source glob matched no files\n    at buildSourceSnapshot",
+      context: { phase: "artifact_source_snapshot" },
+    });
   } finally {
     handle.close();
   }

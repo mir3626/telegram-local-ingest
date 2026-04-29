@@ -239,12 +239,20 @@ test("runWorkerOnce records agent diagnostics when command exits without outputs
       stderr?: string;
       outputDir?: string;
       command?: string;
+      diagnostic?: { message?: string; stack?: string; context?: { phase?: string } };
     };
     assert.equal(data.reason, "no_output_files");
     assert.equal(data.command, "custom-agent");
     assert.equal(data.stdout, "agent completed without writing files");
     assert.equal(data.stderr, "no tool error");
     assert.match(data.outputDir ?? "", /agent-postprocess\/tg_300_21\/outputs$/);
+    assert.match(data.diagnostic?.message ?? "", /Agent postprocess did not create any output files/);
+    assert.match(data.diagnostic?.stack ?? "", /Agent postprocess did not create any output files/);
+    const workerError = listJobEvents(dbHandle.db, "tg_300_21").find((event) => event.type === "worker.error");
+    assert.ok(workerError);
+    const workerErrorData = workerError.data as { message?: string; stack?: string; context?: { phase?: string } };
+    assert.match(workerErrorData.message ?? "", /Agent postprocess did not create any output files/);
+    assert.equal(workerErrorData.context?.phase, "agent_postprocess");
     assert.match(sentMessages.at(-1)?.text ?? "", /Agent postprocess did not create any output files/);
   } finally {
     dbHandle.close();
@@ -1566,7 +1574,7 @@ test("runWorkerOnce executes wiki chat artifact requests and sends generated art
     assert.equal(result.jobsCreated, 0);
     assert.equal(sentDocuments.length, 1);
     assert.equal(sentDocuments[0]?.document, "demo_chart.png");
-    assert.match(sentDocuments[0]?.caption ?? "", /derived\/2026-04-28\/demo_chart\/artifacts\/demo_chart\.png/);
+    assert.match(sentDocuments[0]?.caption ?? "", /derived\/\d{4}-\d{2}-\d{2}\/demo_chart\/artifacts\/demo_chart\.png/);
     assert.equal(listArtifactRendererRuns(dbHandle.db, 10)[0]?.rendererMode, "generated");
     assert.match(listArtifactRendererRuns(dbHandle.db, 10)[0]?.sourcePrompt ?? "", /demo 차트 생성/);
   } finally {

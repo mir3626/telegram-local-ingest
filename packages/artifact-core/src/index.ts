@@ -676,35 +676,168 @@ async function buildSourceSnapshot(
   roots: { vaultRoot: string; rawRoot: string; wikiRoot: string; derivedRoot: string },
 ): Promise<ArtifactSourceSnapshot[]> {
   const snapshots: ArtifactSourceSnapshot[] = [];
+  const seen = new Set<string>();
   for (const source of sources) {
-    const absolutePath = path.resolve(path.isAbsolute(source.path) ? source.path : path.join(roots.vaultRoot, source.path));
-    const vaultRelative = path.relative(roots.vaultRoot, absolutePath).replace(/\\/g, "/");
-    if (vaultRelative.startsWith("..") || path.isAbsolute(vaultRelative)) {
-      throw new Error(`Artifact source is outside vault root: ${source.path}`);
+    const absolutePaths = await expandArtifactSourcePaths(source.path, roots);
+    for (const absolutePath of absolutePaths) {
+      const vaultRelative = path.relative(roots.vaultRoot, absolutePath).replace(/\\/g, "/");
+      if (seen.has(vaultRelative)) {
+        continue;
+      }
+      seen.add(vaultRelative);
+      assertAllowedArtifactSource(absolutePath, roots);
+      const stat = await fs.stat(absolutePath);
+      if (!stat.isFile()) {
+        throw new Error(`Artifact source is not a file: ${source.path}`);
+      }
+      const snapshot: ArtifactSourceSnapshot = {
+        path: vaultRelative,
+        absolutePath,
+        sizeBytes: stat.size,
+        sha256: await sha256File(absolutePath),
+      };
+      if (source.label) {
+        snapshot.label = source.label;
+      }
+      if (source.type) {
+        snapshot.type = source.type;
+      }
+      if (isTextLike(absolutePath) && stat.size <= MAX_SOURCE_TEXT_BYTES) {
+        snapshot.text = await fs.readFile(absolutePath, "utf8");
+      }
+      snapshots.push(snapshot);
     }
-    assertAllowedArtifactSource(absolutePath, roots);
-    const stat = await fs.stat(absolutePath);
-    if (!stat.isFile()) {
-      throw new Error(`Artifact source is not a file: ${source.path}`);
-    }
-    const snapshot: ArtifactSourceSnapshot = {
-      path: vaultRelative,
-      absolutePath,
-      sizeBytes: stat.size,
-      sha256: await sha256File(absolutePath),
-    };
-    if (source.label) {
-      snapshot.label = source.label;
-    }
-    if (source.type) {
-      snapshot.type = source.type;
-    }
-    if (isTextLike(absolutePath) && stat.size <= MAX_SOURCE_TEXT_BYTES) {
-      snapshot.text = await fs.readFile(absolutePath, "utf8");
-    }
-    snapshots.push(snapshot);
   }
   return snapshots;
+}
+
+async function expandArtifactSourcePaths(
+  sourcePath: string,
+  roots: { vaultRoot: string; rawRoot: string; wikiRoot: string; derivedRoot: string },
+): Promise<string[]> {
+  const expandedPatterns = expandBracePatterns(sourcePath);
+  const matches: string[] = [];
+  const unmatchedGlobPatterns: string[] = [];
+  for (const pattern of expandedPatterns) {
+    const absolutePattern = path.resolve(path.isAbsolute(pattern) ? pattern : path.join(roots.vaultRoot, pattern));
+    const vaultRelativePattern = path.relative(roots.vaultRoot, absolutePattern).replace(/\\/g, "/");
+    if (vaultRelativePattern.startsWith("..") || path.isAbsolute(vaultRelativePattern)) {
+      throw new Error(`Artifact source is outside vault root: ${sourcePath}`);
+    }
+    if (!hasGlobMeta(vaultRelativePattern)) {
+      matches.push(absolutePattern);
+      continue;
+    }
+
+    const searchRoot = artifactSourceSearchRoot(vaultRelativePattern, roots);
+    const candidates = await listFilesIfExists(searchRoot);
+    const matcher = globPatternToRegExp(vaultRelativePattern);
+    const patternMatches = candidates
+      .filter((candidate) => matcher.test(path.relative(roots.vaultRoot, candidate).replace(/\\/g, "/")))
+      .sort((left, right) => left.localeCompare(right));
+    if (patternMatches.length === 0) {
+      unmatchedGlobPatterns.push(pattern);
+    }
+    matches.push(...patternMatches);
+  }
+  const unique = [...new Set(matches)].sort((left, right) => {
+    const leftRelative = path.relative(roots.vaultRoot, left).replace(/\\/g, "/");
+    const rightRelative = path.relative(roots.vaultRoot, right).replace(/\\/g, "/");
+    return leftRelative.localeCompare(rightRelative);
+  });
+  if (unique.length === 0 && unmatchedGlobPatterns.length > 0) {
+    throw new Error(`Artifact source glob matched no files: ${sourcePath}`);
+  }
+  return unique;
+}
+
+function artifactSourceSearchRoot(
+  vaultRelativePattern: string,
+  roots: { vaultRoot: string; rawRoot: string; wikiRoot: string; derivedRoot: string },
+): string {
+  if (vaultRelativePattern.startsWith("wiki/")) {
+    return roots.wikiRoot;
+  }
+  if (vaultRelativePattern.startsWith("raw/")) {
+    return roots.rawRoot;
+  }
+  if (vaultRelativePattern.startsWith("derived/")) {
+    return roots.derivedRoot;
+  }
+  return roots.vaultRoot;
+}
+
+async function listFilesIfExists(root: string): Promise<string[]> {
+  try {
+    return await listFiles(root);
+  } catch (error) {
+    if (isNotFound(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function hasGlobMeta(value: string): boolean {
+  return /[*?[\]]/.test(value);
+}
+
+function expandBracePatterns(pattern: string): string[] {
+  const rangeMatch = pattern.match(/\{(\d+)\.\.(\d+)\}/);
+  if (rangeMatch?.[0] && rangeMatch[1] && rangeMatch[2]) {
+    const start = Number(rangeMatch[1]);
+    const end = Number(rangeMatch[2]);
+    const width = Math.max(rangeMatch[1].length, rangeMatch[2].length);
+    const step = start <= end ? 1 : -1;
+    const expanded: string[] = [];
+    for (let value = start; step > 0 ? value <= end : value >= end; value += step) {
+      const replacement = String(value).padStart(width, "0");
+      expanded.push(...expandBracePatterns(pattern.replace(rangeMatch[0], replacement)));
+    }
+    return expanded;
+  }
+
+  const listMatch = pattern.match(/\{([^{}]+)\}/);
+  if (listMatch?.[0] && listMatch[1]?.includes(",")) {
+    return listMatch[1]
+      .split(",")
+      .flatMap((value) => expandBracePatterns(pattern.replace(listMatch[0], value.trim())));
+  }
+
+  return [pattern];
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  let source = "^";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "*") {
+      if (pattern[index + 1] === "*") {
+        source += ".*";
+        index += 1;
+      } else {
+        source += "[^/]*";
+      }
+    } else if (char === '?') {
+      source += "[^/]";
+    } else if (char === "[") {
+      const close = pattern.indexOf("]", index + 1);
+      if (close > index + 1) {
+        source += pattern.slice(index, close + 1);
+        index = close;
+      } else {
+        source += "\\[";
+      }
+    } else {
+      source += escapeRegExp(char ?? "");
+    }
+  }
+  source += "$";
+  return new RegExp(source);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
 
 function assertAllowedArtifactSource(

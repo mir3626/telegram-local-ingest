@@ -31,6 +31,7 @@ import {
   listArtifactRendererRuns,
   listAutomationModules,
   listAutomationRuns,
+  listJobEventsByType,
   markArtifactRendererRunPromoted,
   markAutomationModulesUnavailableExcept,
   migrate,
@@ -235,6 +236,7 @@ async function readDashboardState(context: DashboardContext): Promise<unknown> {
       links: await readRunArtifactLinks(context, run),
     })));
     const artifactRuns = listArtifactRendererRuns(db, RECENT_RUN_LIMIT);
+    const diagnostics = listJobEventsByType(db, "worker.error", 20);
     return {
       project: {
         root: context.paths.projectRoot,
@@ -246,6 +248,7 @@ async function readDashboardState(context: DashboardContext): Promise<unknown> {
       modules,
       runs,
       artifactRuns,
+      diagnostics,
       admin: {
         tokenRequired: Boolean(context.env.OPS_DASHBOARD_TOKEN?.trim()),
       },
@@ -1047,4 +1050,3 @@ class DashboardHttpError extends Error {
     this.name = "DashboardHttpError";
   }
 }
-

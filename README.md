@@ -96,7 +96,7 @@ npm run worker:dev
 7. Use `/retry <job_id>` only for failed jobs.
 8. Use `/cancel <job_id>` for active jobs that should stop.
 
-Operational state is in SQLite at `SQLITE_DB_PATH`. This is sufficient for the later dashboard because jobs, files, source bundles, Telegram offsets, and append-only events are all queryable without scraping logs.
+Operational state is in SQLite at `SQLITE_DB_PATH`. This is sufficient for the dashboard because jobs, files, source bundles, Telegram offsets, append-only events, and structured error diagnostics are all queryable without scraping logs.
 
 ## Automation Modules
 
@@ -114,7 +114,7 @@ npm run ops:dashboard
 
 Run logs are stored under `runtime/automation/runs/<run_id>/`. Scheduled jobs use a single dispatcher/timer rather than a resident process per automation; `timer install` writes user-level systemd unit files and prints the `systemctl --user` activation command.
 
-`npm run ops:dashboard` starts a product-owned localhost dashboard, separate from the `vibe-doctor` harness dashboard. It shows module readiness without secret values, enable/disable controls, manual run/dispatch actions, and run log/result viewers. `npm run ops:start` also starts this dashboard with the Telegram Local Bot API Server and worker. By default it binds to `127.0.0.1`; set `OPS_DASHBOARD_TOKEN` to require a local admin token for write actions only.
+`npm run ops:dashboard` starts a product-owned localhost dashboard, separate from the `vibe-doctor` harness dashboard. It shows module readiness without secret values, enable/disable controls, manual run/dispatch actions, live logs, structured diagnostics, generated artifact runs, and result viewers. `npm run ops:start` also starts this dashboard with the Telegram Local Bot API Server and worker. By default it binds to `127.0.0.1`; set `OPS_DASHBOARD_TOKEN` to require a local admin token for write actions only.
 
 The first bundled module is `fx.koreaexim.daily`. Set `FX_KOREAEXIM_AUTHKEY`, optionally tune `FX_CURRENCIES`, then enable it:
 
