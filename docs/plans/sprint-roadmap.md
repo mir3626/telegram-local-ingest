@@ -440,7 +440,7 @@ Telegram mobile/desktop
   - High-value repeated actions run as registered renderers rather than ad hoc generated code.
   - Each renderer writes provenance-rich derived packages and declares supported artifact kinds.
   - Generated renderer promotion remains the path for discovering future reusable renderers.
-- **status**: planned. Partial precursor completed: `notebooklm.export-pack` was added in `llmwiki-runtime-kit` as a registered renderer for local/manual NotebookLM upload packs, without Google OAuth, NotebookLM CLI calls, or automatic external upload.
+- **status**: in progress. Sprint 25A completed the first registered renderer batch in `llmwiki-runtime-kit`: `report.summary`, `table.compare`, `timeline.extract`, `invoice.vendor-summary`, `fx.stats.period`, `meeting.actions`, `glossary.extract`, `wiki.index.topic`, and `notebooklm.export-pack`. Remaining follow-up: broaden generic chart formats beyond current PNG-first FX statistics and improve semantic quality where deterministic extraction is too shallow.
 
 ## Iteration iter-2 — LLMwiki Foundation
 
