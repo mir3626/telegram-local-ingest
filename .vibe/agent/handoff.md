@@ -10,6 +10,12 @@
 
 ## Status
 
+### Data Cleanup — FX-Only Vault State — 2026-04-29
+
+The live local data has been reset without tombstones per user request. All old Telegram ingest job rows and cascaded job files/events/source bundles/outputs were deleted from SQLite; `telegram_offsets` was kept so the bot does not replay old updates. `vault_tombstones` is empty. FX automation state was kept: `automation_runs=532` and `automation_events=1064` for `fx.koreaexim.daily`.
+
+The live `yoni-llm-wiki` vault now contains only canonical Korea Eximbank FX raw/wiki source data: `488` `raw/**/fx_koreaexim_*` bundles and `488` `wiki/sources/fx_koreaexim_*.md` pages. Non-FX raw/wiki source pages were removed, and derived artifact bundles/pages were removed so the active wiki starts from canonical FX source pages only. Runtime Telegram staging/extracted/agent-postprocess/output/archive/smoke caches were also cleared. `npm run tlgi -- vault reconcile --json` reports zero issues after cleanup.
+
 ### Sprint 13 CLI Slice Closed — Vault Reconcile And Retention — 2026-04-29
 
 Safe vault cleanup now has a deterministic product-owned CLI path. SQLite schema version 9 adds `vault_tombstones`; DB helpers can list source bundles/all outputs and create/list tombstones. `npm run tlgi -- vault reconcile [--json]` compares SQLite plus automation run result metadata against the configured vault/runtime filesystem and reports missing raw bundle parts, missing wiki source pages, missing active output files, orphan raw/derived bundle folders, orphan wiki source/derived pages, and tombstoned deleted state without mutating files. Automation raw bundles recorded in `moduleResult.bundlePath` are treated as expected evidence, so scheduled FX bundles are not reported as orphan raw folders simply because they were not created by the worker job queue. Skipped automation runs with `reason: "no_source_rows"` are ignored for bundle-existence checks.
