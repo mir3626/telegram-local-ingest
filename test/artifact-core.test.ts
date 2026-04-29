@@ -132,8 +132,9 @@ test("artifact renderer expands allowed wiki source glob patterns", async () => 
         "import path from 'node:path';",
         "const [inputPath, outputDir, resultPath] = process.argv.slice(2);",
         "const input = JSON.parse(await fs.readFile(inputPath, 'utf8'));",
+        "const readable = await Promise.all(input.sources.map((source) => fs.readFile(path.join(input.vaultRoot, source.path), 'utf8')));",
         "const reportPath = path.join(outputDir, 'summary.md');",
-        "await fs.writeFile(reportPath, `sources=${input.sources.length}\\n${input.sources.map((source) => source.path).join('\\n')}\\n`, 'utf8');",
+        "await fs.writeFile(reportPath, `sources=${input.sources.length}\\n${input.sources.map((source) => source.path).join('\\n')}\\n${readable.join('\\n')}`, 'utf8');",
         "await fs.writeFile(resultPath, JSON.stringify({artifacts:[{path:'summary.md',role:'report',mediaType:'text/markdown'}]}), 'utf8');",
         "",
       ].join("\n"),
@@ -154,15 +155,74 @@ test("artifact renderer expands allowed wiki source glob patterns", async () => 
     });
 
     const inputSnapshot = JSON.parse(fs.readFileSync(result.inputSnapshotPath, "utf8")) as {
+      vaultRoot?: string;
+      wikiRoot?: string;
       sources: Array<{ path: string }>;
     };
+    assert.equal(inputSnapshot.vaultRoot, fixture.vaultRoot);
+    assert.equal(inputSnapshot.wikiRoot, path.join(fixture.vaultRoot, "wiki"));
     assert.deepEqual(inputSnapshot.sources.map((source) => source.path), [
       "wiki/sources/fx_koreaexim_20250401.md",
       "wiki/sources/fx_koreaexim_20250501.md",
     ]);
     const summary = fs.readFileSync(path.join(result.derivedBundlePath, "artifacts", "summary.md"), "utf8");
     assert.match(summary, /sources=2/);
+    assert.match(summary, /FX 2025-04-01/);
     assert.doesNotMatch(summary, /20251101/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("python artifact renderers prefer WIKI_ARTIFACT_PYTHON_BIN", async () => {
+  const fixture = createFixture();
+  const sourcesDir = path.join(fixture.vaultRoot, "wiki", "sources");
+  fs.mkdirSync(sourcesDir, { recursive: true });
+  fs.writeFileSync(path.join(sourcesDir, "demo.md"), "# Demo\n", "utf8");
+  const markerPath = path.join(fixture.root, "python-used.txt");
+  const wrapperPath = writeExecutable(
+    fixture.root,
+    "artifact-python",
+    `#!/usr/bin/env bash\necho used > ${shellQuote(markerPath)}\nexec python3 "$@"`,
+  );
+  const request = artifactRequestSchema.parse({
+    action: "create_derived_artifact",
+    artifactKind: "report",
+    artifactId: "python_demo",
+    title: "Python Demo",
+    renderer: {
+      mode: "generated",
+      language: "python",
+      suggestedId: "python_demo",
+      code: [
+        "import json, sys",
+        "from pathlib import Path",
+        "import os",
+        "input_path, output_dir, result_path = sys.argv[1:4]",
+        "assert os.environ['TLGI_VAULT_ROOT']",
+        "Path(output_dir).mkdir(parents=True, exist_ok=True)",
+        "Path(output_dir, 'summary.md').write_text('# Python generated\\n', encoding='utf-8')",
+        "Path(result_path).write_text(json.dumps({'artifacts':[{'path':'summary.md','mediaType':'text/markdown'}]}), encoding='utf-8')",
+        "",
+      ].join("\n"),
+    },
+    sources: [{ path: "wiki/sources/demo.md", type: "wiki_source" }],
+    parameters: {},
+  }) satisfies ArtifactRequest;
+
+  try {
+    const result = await runArtifactRequest({
+      request,
+      runId: "artifact_python_demo_20260429T000000000Z",
+      vaultRoot: fixture.vaultRoot,
+      runtimeDir: fixture.runtimeDir,
+      sourcePrompt: "python renderer test",
+      now: new Date("2026-04-29T00:00:00.000Z"),
+      env: { ...process.env, WIKI_ARTIFACT_PYTHON_BIN: wrapperPath },
+    });
+
+    assert.equal(fs.existsSync(markerPath), true);
+    assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.md")), true);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -176,4 +236,16 @@ function createFixture(): { root: string; vaultRoot: string; runtimeDir: string;
     runtimeDir: path.join(root, "runtime"),
     renderersRoot: path.join(root, "vault", "renderers"),
   };
+}
+
+function writeExecutable(root: string, fileName: string, content: string): string {
+  const filePath = path.join(root, fileName);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${content}\n`, "utf8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

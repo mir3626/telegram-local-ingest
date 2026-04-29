@@ -104,6 +104,12 @@ Install/update Linux document, OCR, font, and media tools with:
 npm run setup:linux
 ```
 
+Refresh only the Python virtualenv used by wiki artifact chart renderers with:
+
+```bash
+npm run setup:wiki-artifacts
+```
+
 Install optional local CPU SenseVoice STT dependencies and model cache with:
 
 ```bash

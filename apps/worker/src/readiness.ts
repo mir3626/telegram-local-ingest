@@ -143,6 +143,7 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
     "WIKI_ARTIFACT_ALLOW_GENERATED_RENDERERS",
     config.artifact.allowGeneratedRenderers ? "enabled" : "disabled",
   ));
+  await checkArtifactRendererReadiness(checks, cwd, env, config.artifact.allowGeneratedRenderers);
   if (config.artifact.derivedIngestCommand) {
     await checkCommandReadable(checks, "WIKI_DERIVED_INGEST_COMMAND", config.artifact.derivedIngestCommand, cwd);
   }
@@ -167,6 +168,36 @@ export async function checkLiveSmokeReadiness(options: ReadinessOptions = {}): P
   }
 
   return finish(envPath, checks);
+}
+
+async function checkArtifactRendererReadiness(
+  checks: ReadinessCheck[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  allowGeneratedRenderers: boolean,
+): Promise<void> {
+  const pythonCommand = resolveCommandPath(cwd, env.WIKI_ARTIFACT_PYTHON_BIN || env.PYTHON_BIN || "python3");
+  const version = await checkCommandVersion(pythonCommand, ["--version"]);
+  if (version.ok) {
+    checks.push(ok("WIKI_ARTIFACT_PYTHON_BIN", `${pythonCommand}: ${version.output}`));
+  } else {
+    checks.push(warn("WIKI_ARTIFACT_PYTHON_BIN", `${pythonCommand} is not runnable: ${version.output}`));
+    return;
+  }
+
+  if (!allowGeneratedRenderers) {
+    return;
+  }
+
+  const matplotlib = await checkCommandVersion(pythonCommand, ["-c", "import matplotlib; print('matplotlib ok')"]);
+  if (matplotlib.ok) {
+    checks.push(ok("Artifact Python dependencies", "matplotlib import succeeded"));
+  } else {
+    checks.push(warn(
+      "Artifact Python dependencies",
+      "matplotlib missing; Python generated chart renderers will fail. Run npm run setup:wiki-artifacts or set WIKI_ARTIFACT_PYTHON_BIN.",
+    ));
+  }
 }
 
 async function checkAgentPostprocessReadiness(

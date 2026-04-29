@@ -149,6 +149,37 @@ start_worker() {
   echo "telegram-local-ingest worker started: pid=$(cat "$WORKER_PID"), log=$WORKER_LOG"
 }
 
+start_automation_timer() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl not found; automation timer was not started"
+    return
+  fi
+
+  if ! systemctl --user list-timers >/dev/null 2>&1; then
+    echo "systemd user session is unavailable; automation timer was not started"
+    return
+  fi
+
+  local interval_minutes="${AUTOMATION_TIMER_INTERVAL_MINUTES:-15}"
+  echo "Installing automation dispatcher timer files..."
+  if [[ -f "$HOME/.nvm/nvm.sh" ]]; then
+    # shellcheck disable=SC1090
+    . "$HOME/.nvm/nvm.sh"
+  fi
+  npm run tlgi -- automation timer install --interval-minutes "$interval_minutes"
+
+  echo "Starting automation dispatcher timer..."
+  systemctl --user daemon-reload
+  systemctl --user enable telegram-local-ingest-automation.timer
+  systemctl --user restart telegram-local-ingest-automation.timer
+  echo "automation dispatcher timer active: interval=${interval_minutes}min"
+
+  if [[ "${AUTOMATION_DISPATCH_ON_START:-1}" != "0" ]]; then
+    echo "Running one-shot automation dispatch for missed due windows..."
+    npm run tlgi -- automation dispatch
+  fi
+}
+
 start_ops_dashboard() {
   local dashboard_pid
   dashboard_pid="$(pid_from_file "$OPS_DASHBOARD_PID")"
@@ -201,6 +232,7 @@ start_bot_api
 sleep 2
 start_worker
 start_ops_dashboard
+start_automation_timer
 
 echo
 echo "Local ingest stack is running."
@@ -208,5 +240,6 @@ echo "Logs:"
 echo "  Bot API: $BOT_API_LOG"
 echo "  Worker : $WORKER_LOG"
 echo "  Ops UI : $OPS_DASHBOARD_LOG"
+echo "  Timer  : telegram-local-ingest-automation.timer"
 echo
 echo "Dashboard: http://${OPS_DASHBOARD_HOST:-127.0.0.1}:${OPS_DASHBOARD_PORT:-58991}/"

@@ -82,9 +82,29 @@ stop_pid_file() {
   rm -f "$pid_file"
 }
 
+stop_automation_timer() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl not found; automation timer stop skipped"
+    return
+  fi
+  if ! systemctl --user list-timers >/dev/null 2>&1; then
+    echo "systemd user session is unavailable; automation timer stop skipped"
+    return
+  fi
+  if systemctl --user list-unit-files telegram-local-ingest-automation.timer >/dev/null 2>&1; then
+    echo "Stopping automation dispatcher timer..."
+    systemctl --user disable --now telegram-local-ingest-automation.timer >/dev/null 2>&1 || true
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    echo "automation dispatcher timer stopped"
+  else
+    echo "automation dispatcher timer not installed"
+  fi
+}
+
 RUNTIME_DIR="$(resolve_path "${INGEST_RUNTIME_DIR:-./runtime}")"
 PID_DIR="${INGEST_PID_DIR:-$RUNTIME_DIR/pids}"
 
+stop_automation_timer
 stop_pid_file "ops dashboard" "$PID_DIR/ops-dashboard.pid"
 stop_pid_file "telegram-local-ingest worker" "$PID_DIR/worker.pid"
 stop_pid_file "Telegram Local Bot API Server" "$PID_DIR/bot-api.pid"

@@ -183,6 +183,47 @@ test("checkLiveSmokeReadiness checks configured Claude postprocess wrapper", asy
   assert.match(renderReadinessReport(report), /claude wrapper ok/);
 });
 
+test("checkLiveSmokeReadiness reports artifact Python dependencies", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-readiness-artifact-python-"));
+  const vault = path.join(root, "vault");
+  const telegramFiles = path.join(root, "telegram-files");
+  const tools = path.join(root, "tools");
+  fs.mkdirSync(vault);
+  fs.mkdirSync(telegramFiles);
+  fs.mkdirSync(tools);
+  const fakePython = writeExecutable(tools, "artifact-python", [
+    "#!/usr/bin/env bash",
+    "if [ \"$1\" = \"--version\" ]; then echo 'Python 3.12.0'; exit 0; fi",
+    "if [ \"$1\" = \"-c\" ]; then echo 'matplotlib ok'; exit 0; fi",
+    "exit 1",
+  ].join("\n"));
+  fs.writeFileSync(
+    path.join(root, ".env"),
+    [
+      "TELEGRAM_BOT_TOKEN=123:abc",
+      "TELEGRAM_ALLOWED_USER_IDS=42",
+      "TELEGRAM_BOT_API_BASE_URL=http://127.0.0.1:8081",
+      `TELEGRAM_LOCAL_FILES_ROOT=${telegramFiles}`,
+      `OBSIDIAN_VAULT_PATH=${vault}`,
+      "OBSIDIAN_RAW_ROOT=raw",
+      `WIKI_ARTIFACT_PYTHON_BIN=${fakePython}`,
+      "WIKI_ARTIFACT_ALLOW_GENERATED_RENDERERS=true",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const report = await checkLiveSmokeReadiness({
+    cwd: root,
+    env: {},
+    checkTelegram: false,
+  });
+
+  assert.equal(report.ready, true);
+  assert.equal(report.checks.some((check) => check.name === "WIKI_ARTIFACT_PYTHON_BIN" && check.status === "ok"), true);
+  assert.equal(report.checks.some((check) => check.name === "Artifact Python dependencies" && check.status === "ok"), true);
+});
+
 function writeExecutable(root: string, fileName: string, content: string): string {
   const filePath = path.join(root, fileName);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

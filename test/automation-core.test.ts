@@ -238,7 +238,7 @@ test("ops CLI installs and removes the user systemd automation timer files", () 
     const servicePath = path.join(configHome, "systemd", "user", "telegram-local-ingest-automation.service");
     const timerPath = path.join(configHome, "systemd", "user", "telegram-local-ingest-automation.timer");
     assert.match(fs.readFileSync(servicePath, "utf8"), /automation dispatch/);
-    assert.match(fs.readFileSync(timerPath, "utf8"), /OnUnitActiveSec=7min/);
+    assert.match(fs.readFileSync(timerPath, "utf8"), /OnCalendar=\*:0\/7/);
 
     const status = runCli(["automation", "timer", "status"], baseEnv);
     assert.equal(status.status, 0, status.stderr);

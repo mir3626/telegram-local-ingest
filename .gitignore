@@ -3,6 +3,7 @@ dist/
 coverage/
 runtime/
 .venv-sensevoice/
+.venv-wiki-artifacts/
 __pycache__/
 *.pyc
 .vscode/

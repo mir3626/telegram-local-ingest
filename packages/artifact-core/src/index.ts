@@ -235,6 +235,10 @@ export async function runArtifactRequest(input: ArtifactRunInput): Promise<Artif
     fs.writeFile(inputSnapshotPath, `${JSON.stringify({
       request,
       sourcePrompt: input.sourcePrompt,
+      vaultRoot,
+      wikiRoot,
+      rawRoot,
+      derivedRoot,
       sources: sourceSnapshot.map((source) => ({
         path: source.path,
         label: source.label,
@@ -266,6 +270,10 @@ export async function runArtifactRequest(input: ArtifactRunInput): Promise<Artif
       outputDir,
       resultPath,
       inputSnapshotPath,
+      vaultRoot,
+      rawRoot,
+      wikiRoot,
+      derivedRoot,
       allowGeneratedRenderers: input.allowGeneratedRenderers ?? true,
       ...(input.env ? { env: input.env } : {}),
     });
@@ -386,7 +394,7 @@ async function runRegisteredRenderer(input: {
   ) {
     throw new Error(`Renderer ${renderer.manifest.id} does not support artifact kind ${input.request.artifactKind}`);
   }
-  const executable = renderer.manifest.runtime === "node" ? process.execPath : (input.env?.PYTHON_BIN ?? "python3");
+  const executable = renderer.manifest.runtime === "node" ? process.execPath : artifactPythonBin(input.env);
   const args = renderer.manifest.runtime === "node" ? [renderer.entryPath] : [renderer.entryPath];
   return executeRenderer({
     command: executable,
@@ -415,6 +423,10 @@ async function runGeneratedRenderer(input: {
   outputDir: string;
   resultPath: string;
   inputSnapshotPath: string;
+  vaultRoot: string;
+  rawRoot: string;
+  wikiRoot: string;
+  derivedRoot: string;
   allowGeneratedRenderers: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<RendererExecutionResult> {
@@ -431,14 +443,24 @@ async function runGeneratedRenderer(input: {
   const scriptPath = path.join(generatedDir, entryName);
   await fs.writeFile(scriptPath, input.request.renderer.code, "utf8");
   const executable = input.request.renderer.language === "python"
-    ? (input.env?.PYTHON_BIN ?? "python3")
+    ? artifactPythonBin(input.env)
     : process.execPath;
   return executeRenderer({
     command: executable,
     args: [scriptPath, input.inputSnapshotPath, input.outputDir, input.resultPath],
     cwd: generatedDir,
     timeoutMs: DEFAULT_TIMEOUT_MS,
-    env: input.env ?? process.env,
+    env: {
+      ...(input.env ?? process.env),
+      TLGI_ARTIFACT_REQUEST_PATH: path.join(input.runDir, "request.json"),
+      TLGI_ARTIFACT_INPUT_JSON: input.inputSnapshotPath,
+      TLGI_ARTIFACT_OUTPUT_DIR: input.outputDir,
+      TLGI_ARTIFACT_RESULT_PATH: input.resultPath,
+      TLGI_VAULT_ROOT: input.vaultRoot,
+      TLGI_RAW_ROOT: input.rawRoot,
+      TLGI_WIKI_ROOT: input.wikiRoot,
+      TLGI_DERIVED_ROOT: input.derivedRoot,
+    },
     outputDir: input.outputDir,
     resultPath: input.resultPath,
     generatedScriptPath: scriptPath,
@@ -908,6 +930,10 @@ function validateGeneratedRendererCode(code: string, language: "python" | "javas
   if (hit) {
     throw new Error(`Generated renderer code failed safety check: ${hit}`);
   }
+}
+
+function artifactPythonBin(env?: NodeJS.ProcessEnv): string {
+  return env?.WIKI_ARTIFACT_PYTHON_BIN ?? env?.PYTHON_BIN ?? "python3";
 }
 
 async function availableArtifactId(derivedRoot: string, datePart: string, preferred: string, runId: string): Promise<string> {

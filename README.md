@@ -68,6 +68,8 @@ npm run setup:linux
 
 Fill `.env` with local values. Keep `.env` out of git.
 
+Generated Python artifact renderers, such as ad hoc wiki-data charts, use `WIKI_ARTIFACT_PYTHON_BIN`. `npm run setup:linux` creates `./.venv-wiki-artifacts` with `matplotlib` and fills this env value; `npm run setup:wiki-artifacts` can refresh only that renderer virtualenv.
+
 For optional local CPU SenseVoice STT, run the heavier model setup separately:
 
 ```bash
@@ -112,7 +114,7 @@ npm run tlgi -- automation timer install --interval-minutes 15
 npm run ops:dashboard
 ```
 
-Run logs are stored under `runtime/automation/runs/<run_id>/`. Scheduled jobs use a single dispatcher/timer rather than a resident process per automation; `timer install` writes user-level systemd unit files and prints the `systemctl --user` activation command.
+Run logs are stored under `runtime/automation/runs/<run_id>/`. Scheduled jobs use a single dispatcher/timer rather than a resident process per automation; `timer install` writes user-level systemd unit files and prints the `systemctl --user` activation command. `scripts/start-local-stack.sh` installs/enables that timer, then runs one immediate dispatch by default so missed due windows are caught when the local solution starts. Set `AUTOMATION_DISPATCH_ON_START=0` to skip that startup catch-up dispatch.
 
 `npm run ops:dashboard` starts a product-owned localhost dashboard, separate from the `vibe-doctor` harness dashboard. It shows module readiness without secret values, enable/disable controls, manual run/dispatch actions, live logs, structured diagnostics, generated artifact runs, and result viewers. `npm run ops:start` also starts this dashboard with the Telegram Local Bot API Server and worker. By default it binds to `127.0.0.1`; set `OPS_DASHBOARD_TOKEN` to require a local admin token for write actions only.
 

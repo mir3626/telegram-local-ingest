@@ -61,6 +61,27 @@ pid_state() {
   return 1
 }
 
+timer_state() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    printf 'unavailable: systemctl not found\n'
+    return 1
+  fi
+  if ! systemctl --user list-timers >/dev/null 2>&1; then
+    printf 'unavailable: systemd user session unavailable\n'
+    return 1
+  fi
+  if systemctl --user is-active --quiet telegram-local-ingest-automation.timer; then
+    printf 'active\n'
+    return 0
+  fi
+  if systemctl --user list-unit-files telegram-local-ingest-automation.timer >/dev/null 2>&1; then
+    printf 'installed but inactive\n'
+    return 1
+  fi
+  printf 'missing\n'
+  return 1
+}
+
 RUNTIME_DIR="$(resolve_path "${INGEST_RUNTIME_DIR:-./runtime}")"
 PID_DIR="${INGEST_PID_DIR:-$RUNTIME_DIR/pids}"
 BOT_API_PID="$PID_DIR/bot-api.pid"
@@ -82,16 +103,22 @@ if dashboard_state="$(pid_state "$OPS_DASHBOARD_PID")"; then
 else
   dashboard_running=1
 fi
+if automation_timer_state="$(timer_state)"; then
+  automation_timer_running=0
+else
+  automation_timer_running=1
+fi
 
 echo "Local ingest stack status:"
 echo "  Telegram Local Bot API Server: $bot_state"
 echo "  telegram-local-ingest worker : $worker_state"
 echo "  ops dashboard                : $dashboard_state"
+echo "  automation dispatcher timer  : $automation_timer_state"
 
-if [[ "$bot_running" -eq 0 && "$worker_running" -eq 0 && "$dashboard_running" -eq 0 ]]; then
+if [[ "$bot_running" -eq 0 && "$worker_running" -eq 0 && "$dashboard_running" -eq 0 && "$automation_timer_running" -eq 0 ]]; then
   exit 0
 fi
-if [[ "$bot_running" -eq 0 || "$worker_running" -eq 0 || "$dashboard_running" -eq 0 ]]; then
+if [[ "$bot_running" -eq 0 || "$worker_running" -eq 0 || "$dashboard_running" -eq 0 || "$automation_timer_running" -eq 0 ]]; then
   exit 2
 fi
 exit 1

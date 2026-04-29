@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WITH_SENSEVOICE=0
+WITH_ARTIFACT_PYTHON=1
 SKIP_APT=0
 UPDATE_ENV=1
 
@@ -17,9 +18,12 @@ Installs Linux dependencies used by telegram-local-ingest:
   - tesseract OCR with English, Korean, Simplified Chinese, and Japanese packs
   - Noto CJK fonts for Korean/Chinese/Japanese PDF rendering
   - Python venv/pip build prerequisites for optional local SenseVoice STT
+  - Python virtualenv with matplotlib for wiki artifact chart renderers
 
 Options:
   --with-sensevoice  Also run scripts/setup-sensevoice-cpu.sh after system setup.
+  --skip-artifact-python
+                      Skip the wiki artifact Python virtualenv setup.
   --skip-apt         Skip apt-get package installation and only update .env/check tools.
   --no-env           Do not create or update .env safe defaults.
   -h, --help         Show this help.
@@ -30,6 +34,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-sensevoice)
       WITH_SENSEVOICE=1
+      shift
+      ;;
+    --skip-artifact-python)
+      WITH_ARTIFACT_PYTHON=0
       shift
       ;;
     --skip-apt)
@@ -184,6 +192,9 @@ update_env_defaults() {
   set_env_default "$env_file" "PDFTOPPM_BIN" "$(command_path pdftoppm)"
   set_env_default "$env_file" "TESSERACT_BIN" "$(command_path tesseract)"
   set_env_default "$env_file" "PDF_FONT_PATH" "$(find_noto_cjk_font)"
+  if [[ -x "$ROOT_DIR/.venv-wiki-artifacts/bin/python" ]]; then
+    set_env_default "$env_file" "WIKI_ARTIFACT_PYTHON_BIN" "$ROOT_DIR/.venv-wiki-artifacts/bin/python"
+  fi
 }
 
 print_versions() {
@@ -231,12 +242,26 @@ print_versions() {
   else
     echo "  fontconfig: not found"
   fi
+  local artifact_python="${WIKI_ARTIFACT_PYTHON_BIN:-$ROOT_DIR/.venv-wiki-artifacts/bin/python}"
+  if [[ -x "$artifact_python" ]]; then
+    "$artifact_python" --version 2>&1 | sed 's/^/  artifact python: /'
+    "$artifact_python" -c "import matplotlib; print('matplotlib ok')" 2>&1 | sed 's/^/  artifact python: /'
+  else
+    echo "  artifact python: not found"
+  fi
 }
 
 if [[ "$SKIP_APT" -eq 0 ]]; then
   install_apt_packages
 else
   echo "Skipping apt package installation."
+fi
+
+if [[ "$WITH_ARTIFACT_PYTHON" -eq 1 ]]; then
+  bash "$ROOT_DIR/scripts/setup-wiki-artifacts-python.sh"
+else
+  echo
+  echo "Wiki artifact Python setup was skipped."
 fi
 
 if [[ "$UPDATE_ENV" -eq 1 ]]; then
