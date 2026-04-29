@@ -13,7 +13,9 @@ import {
   createJob,
   createJobOutput,
   createSourceBundle,
+  createVaultTombstone,
   getCurrentSchemaVersion,
+  getVaultTombstone,
   getJob,
   getJobClaim,
   getJobOutput,
@@ -21,9 +23,12 @@ import {
   getTelegramOffset,
   isValidTransition,
   listExpiredJobOutputs,
+  listAllJobOutputs,
   listJobEvents,
   listJobFiles,
   listJobOutputs,
+  listSourceBundles,
+  listVaultTombstones,
   markJobOutputDeleted,
   migrate,
   openIngestDatabase,
@@ -55,6 +60,7 @@ test("migrate creates the dashboard-ready operational schema", () => {
     assert.ok(tableNames.includes("source_bundles"));
     assert.ok(tableNames.includes("job_outputs"));
     assert.ok(tableNames.includes("job_claims"));
+    assert.ok(tableNames.includes("vault_tombstones"));
   } finally {
     handle.close();
   }
@@ -229,6 +235,7 @@ test("telegram offsets and source bundles are persisted", () => {
     });
 
     assert.equal(bundle.finalizedAt, NOW);
+    assert.deepEqual(listSourceBundles(handle.db).map((item) => item.id), ["bundle-1"]);
     assert.equal(listJobEvents(handle.db, "job-4").at(-1)?.type, "bundle.created");
   } finally {
     handle.close();
@@ -257,6 +264,7 @@ test("job outputs track downloadable files with expiry and deletion state", () =
     assert.equal(output.fileName, "translated.md");
     assert.equal(getJobOutput(handle.db, "out-1")?.kind, "agent_translation");
     assert.equal(listJobOutputs(handle.db, "job-outputs").length, 1);
+    assert.equal(listAllJobOutputs(handle.db).length, 1);
     assert.equal(listExpiredJobOutputs(handle.db, "2026-04-23T08:29:59.000Z").length, 0);
     assert.equal(listExpiredJobOutputs(handle.db, "2026-04-23T08:30:00.000Z").length, 1);
 
@@ -265,6 +273,34 @@ test("job outputs track downloadable files with expiry and deletion state", () =
     assert.equal(listExpiredJobOutputs(handle.db, "2026-04-24T00:00:00.000Z").length, 0);
     assert.ok(listJobEvents(handle.db, "job-outputs").some((event) => event.type === "output.created"));
     assert.ok(listJobEvents(handle.db, "job-outputs").some((event) => event.type === "output.deleted"));
+  } finally {
+    handle.close();
+  }
+});
+
+test("vault tombstones preserve managed deletion history", () => {
+  const handle = openIngestDatabase(":memory:");
+  try {
+    migrate(handle.db);
+    createJob(handle.db, { id: "job-tombstone", source: "telegram-local-bot-api", now: NOW });
+
+    const tombstone = createVaultTombstone(handle.db, {
+      id: "vault-delete-1",
+      targetType: "source_bundle",
+      targetId: "bundle-delete-1",
+      jobId: "job-tombstone",
+      reason: "operator cleanup",
+      paths: ["/vault/raw/2026-04-22/bundle-delete-1", "/vault/wiki/sources/bundle-delete-1.md"],
+      metadata: { deleted: 2 },
+      createdBy: "test",
+      now: NOW,
+    });
+
+    assert.equal(tombstone.targetType, "source_bundle");
+    assert.deepEqual(tombstone.paths, ["/vault/raw/2026-04-22/bundle-delete-1", "/vault/wiki/sources/bundle-delete-1.md"]);
+    assert.deepEqual(getVaultTombstone(handle.db, "vault-delete-1")?.metadata, { deleted: 2 });
+    assert.equal(listVaultTombstones(handle.db).length, 1);
+    assert.ok(listJobEvents(handle.db, "job-tombstone").some((event) => event.type === "vault.tombstone"));
   } finally {
     handle.close();
   }

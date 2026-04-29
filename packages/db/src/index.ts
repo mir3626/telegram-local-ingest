@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { IngestSource, JobStatus } from "@telegram-local-ingest/core";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export interface DbHandle {
   db: DatabaseSync;
@@ -270,6 +270,32 @@ export interface StoredArtifactRendererRun {
   errorDiagnostic?: unknown;
 }
 
+export type VaultTombstoneTargetType = "source_bundle" | "derived_artifact" | "job_output" | "path";
+
+export interface CreateVaultTombstoneInput {
+  id: string;
+  targetType: VaultTombstoneTargetType;
+  targetId: string;
+  jobId?: string;
+  reason: string;
+  paths?: string[];
+  metadata?: unknown;
+  createdBy?: string;
+  now?: string;
+}
+
+export interface StoredVaultTombstone {
+  id: string;
+  targetType: VaultTombstoneTargetType;
+  targetId: string;
+  jobId?: string;
+  reason: string;
+  paths: string[];
+  metadata?: unknown;
+  createdBy?: string;
+  createdAt: string;
+}
+
 export interface ClaimRunnableJobsInput {
   workerId: string;
   limit: number;
@@ -372,6 +398,10 @@ export function migrate(db: DatabaseSync): void {
     if (current < 8) {
       applyV8(db);
       recordMigration(db, 8);
+    }
+    if (current < 9) {
+      applyV9(db);
+      recordMigration(db, 9);
     }
     db.exec("COMMIT;");
   } catch (error) {
@@ -741,6 +771,13 @@ export function mustGetSourceBundle(db: DatabaseSync, id: string): StoredSourceB
   return mapSourceBundle(row);
 }
 
+export function listSourceBundles(db: DatabaseSync, limit = 1000): StoredSourceBundle[] {
+  return db
+    .prepare("SELECT * FROM source_bundles ORDER BY finalized_at DESC LIMIT ?")
+    .all(limit)
+    .map((row) => mapSourceBundle(row as unknown as SourceBundleRow));
+}
+
 export function getSourceBundleForJob(db: DatabaseSync, jobId: string): StoredSourceBundle | null {
   const row = db.prepare("SELECT * FROM source_bundles WHERE job_id = ?").get(jobId) as SourceBundleRow | undefined;
   return row ? mapSourceBundle(row) : null;
@@ -799,6 +836,13 @@ export function listJobOutputs(db: DatabaseSync, jobId: string): StoredJobOutput
   return db
     .prepare("SELECT * FROM job_outputs WHERE job_id = ? ORDER BY created_at ASC")
     .all(jobId)
+    .map((row) => mapJobOutput(row as unknown as JobOutputRow));
+}
+
+export function listAllJobOutputs(db: DatabaseSync, limit = 5000): StoredJobOutput[] {
+  return db
+    .prepare("SELECT * FROM job_outputs ORDER BY created_at DESC LIMIT ?")
+    .all(limit)
     .map((row) => mapJobOutput(row as unknown as JobOutputRow));
 }
 
@@ -1141,6 +1185,54 @@ export function markArtifactRendererRunPromoted(
   return mustGetArtifactRendererRun(db, id);
 }
 
+export function createVaultTombstone(db: DatabaseSync, input: CreateVaultTombstoneInput): StoredVaultTombstone {
+  const timestamp = input.now ?? nowIso();
+  db.prepare(`
+    INSERT INTO vault_tombstones (
+      id, target_type, target_id, job_id, reason, paths_json, metadata_json, created_by, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.id,
+    input.targetType,
+    input.targetId,
+    input.jobId ?? null,
+    input.reason,
+    JSON.stringify(input.paths ?? []),
+    input.metadata === undefined ? null : JSON.stringify(input.metadata),
+    input.createdBy ?? null,
+    timestamp,
+  );
+  if (input.jobId) {
+    appendJobEvent(db, input.jobId, "vault.tombstone", input.reason, {
+      tombstoneId: input.id,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      paths: input.paths ?? [],
+    }, timestamp);
+  }
+  return mustGetVaultTombstone(db, input.id);
+}
+
+export function getVaultTombstone(db: DatabaseSync, id: string): StoredVaultTombstone | null {
+  const row = db.prepare("SELECT * FROM vault_tombstones WHERE id = ?").get(id) as VaultTombstoneRow | undefined;
+  return row ? mapVaultTombstone(row) : null;
+}
+
+export function mustGetVaultTombstone(db: DatabaseSync, id: string): StoredVaultTombstone {
+  const tombstone = getVaultTombstone(db, id);
+  if (!tombstone) {
+    throw new Error(`Vault tombstone not found: ${id}`);
+  }
+  return tombstone;
+}
+
+export function listVaultTombstones(db: DatabaseSync, limit = 1000): StoredVaultTombstone[] {
+  return db
+    .prepare("SELECT * FROM vault_tombstones ORDER BY created_at DESC LIMIT ?")
+    .all(limit)
+    .map((row) => mapVaultTombstone(row as unknown as VaultTombstoneRow));
+}
+
 function applyV1(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE jobs (
@@ -1361,6 +1453,29 @@ function applyV8(db: DatabaseSync): void {
   }
 }
 
+function applyV9(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vault_tombstones (
+      id TEXT PRIMARY KEY,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+      reason TEXT NOT NULL,
+      paths_json TEXT NOT NULL DEFAULT '[]',
+      metadata_json TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_vault_tombstones_target
+      ON vault_tombstones(target_type, target_id);
+    CREATE INDEX IF NOT EXISTS idx_vault_tombstones_job
+      ON vault_tombstones(job_id);
+    CREATE INDEX IF NOT EXISTS idx_vault_tombstones_created
+      ON vault_tombstones(created_at DESC);
+  `);
+}
+
 function recordMigration(db: DatabaseSync, version: number): void {
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(version, nowIso());
 }
@@ -1568,6 +1683,21 @@ function mapArtifactRendererRun(row: ArtifactRendererRunRow): StoredArtifactRend
   return run;
 }
 
+function mapVaultTombstone(row: VaultTombstoneRow): StoredVaultTombstone {
+  const tombstone: StoredVaultTombstone = {
+    id: row.id,
+    targetType: row.target_type as VaultTombstoneTargetType,
+    targetId: row.target_id,
+    reason: row.reason,
+    paths: parseJsonArray(row.paths_json),
+    createdAt: row.created_at,
+  };
+  assignDefined(tombstone, "jobId", definedString(row.job_id));
+  assignDefined(tombstone, "metadata", parseOptionalJson(row.metadata_json));
+  assignDefined(tombstone, "createdBy", definedString(row.created_by));
+  return tombstone;
+}
+
 function assignDefined<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | undefined): void {
   if (value !== undefined) {
     target[key] = value;
@@ -1712,4 +1842,16 @@ interface ArtifactRendererRunRow {
   ended_at: string | null;
   error: string | null;
   error_json: string | null;
+}
+
+interface VaultTombstoneRow {
+  id: string;
+  target_type: string;
+  target_id: string;
+  job_id: string | null;
+  reason: string;
+  paths_json: string;
+  metadata_json: string | null;
+  created_by: string | null;
+  created_at: string;
 }

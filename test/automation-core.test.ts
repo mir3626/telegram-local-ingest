@@ -11,9 +11,14 @@ import {
   runAutomationModule,
 } from "@telegram-local-ingest/automation-core";
 import {
+  createJob,
+  createJobOutput,
+  createSourceBundle,
   getAutomationScheduleState,
   listAutomationModules,
   listAutomationRuns,
+  listJobOutputs,
+  listVaultTombstones,
   migrate,
   openIngestDatabase,
   setAutomationModuleEnabled,
@@ -249,6 +254,125 @@ test("ops CLI installs and removes the user systemd automation timer files", () 
     assert.equal(uninstall.status, 0, uninstall.stderr);
     assert.equal(fs.existsSync(servicePath), false);
     assert.equal(fs.existsSync(timerPath), false);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("ops CLI vault reconcile reports SQLite/filesystem drift", () => {
+  const fixture = createFixture();
+  const vaultPath = path.join(fixture.root, "vault");
+  fs.mkdirSync(path.join(vaultPath, "raw", "2026-04-22", "orphan-bundle"), { recursive: true });
+  fs.writeFileSync(path.join(vaultPath, "raw", "2026-04-22", "orphan-bundle", ".finalized"), "done\n", "utf8");
+  const dbHandle = openIngestDatabase(fixture.dbPath);
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, { id: "job-drift", source: "telegram-local-bot-api", now: "2026-04-22T00:00:00.000Z" });
+    createSourceBundle(dbHandle.db, {
+      id: "missing-bundle",
+      jobId: "job-drift",
+      bundlePath: path.join(vaultPath, "raw", "2026-04-22", "missing-bundle"),
+      manifestPath: path.join(vaultPath, "raw", "2026-04-22", "missing-bundle", "manifest.yaml"),
+      sourceMarkdownPath: path.join(vaultPath, "raw", "2026-04-22", "missing-bundle", "source.md"),
+      now: "2026-04-22T00:00:00.000Z",
+    });
+  } finally {
+    dbHandle.close();
+  }
+
+  try {
+    const result = runCli(["vault", "reconcile", "--json"], {
+      ...process.env,
+      INGEST_RUNTIME_DIR: fixture.runtimeDir,
+      SQLITE_DB_PATH: fixture.dbPath,
+      OBSIDIAN_VAULT_PATH: vaultPath,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout) as {
+      summary: { error: number; warn: number };
+      issues: Array<{ code: string; targetId: string }>;
+    };
+    assert.ok(report.summary.error > 0);
+    assert.ok(report.summary.warn > 0);
+    assert.ok(report.issues.some((issue) => issue.code === "missing_path" && issue.targetId === "missing-bundle"));
+    assert.ok(report.issues.some((issue) => issue.code === "orphan_raw_bundle" && issue.targetId === "orphan-bundle"));
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("ops CLI vault delete removes related files and records tombstones only with apply", () => {
+  const fixture = createFixture();
+  const vaultPath = path.join(fixture.root, "vault");
+  const bundlePath = path.join(vaultPath, "raw", "2026-04-22", "bundle-delete");
+  const wikiSourcePath = path.join(vaultPath, "wiki", "sources", "bundle-delete.md");
+  const outputPath = path.join(fixture.runtimeDir, "outputs", "bundle-delete", "translated.md");
+  fs.mkdirSync(bundlePath, { recursive: true });
+  fs.mkdirSync(path.dirname(wikiSourcePath), { recursive: true });
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(path.join(bundlePath, "manifest.yaml"), "id: bundle-delete\n", "utf8");
+  fs.writeFileSync(path.join(bundlePath, "source.md"), "# Source\n", "utf8");
+  fs.writeFileSync(path.join(bundlePath, ".finalized"), "done\n", "utf8");
+  fs.writeFileSync(wikiSourcePath, "# Wiki source\n", "utf8");
+  fs.writeFileSync(outputPath, "# Translation\n", "utf8");
+
+  const dbHandle = openIngestDatabase(fixture.dbPath);
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, { id: "job-delete", source: "telegram-local-bot-api", now: "2026-04-22T00:00:00.000Z" });
+    createSourceBundle(dbHandle.db, {
+      id: "bundle-delete",
+      jobId: "job-delete",
+      bundlePath,
+      manifestPath: path.join(bundlePath, "manifest.yaml"),
+      sourceMarkdownPath: path.join(bundlePath, "source.md"),
+      now: "2026-04-22T00:00:00.000Z",
+    });
+    createJobOutput(dbHandle.db, {
+      id: "output-delete",
+      jobId: "job-delete",
+      kind: "agent_translation",
+      filePath: outputPath,
+      fileName: "translated.md",
+      createdAt: "2026-04-22T00:00:00.000Z",
+      expiresAt: "2026-04-23T00:00:00.000Z",
+    });
+  } finally {
+    dbHandle.close();
+  }
+
+  try {
+    const env = {
+      ...process.env,
+      INGEST_RUNTIME_DIR: fixture.runtimeDir,
+      SQLITE_DB_PATH: fixture.dbPath,
+      OBSIDIAN_VAULT_PATH: vaultPath,
+    };
+    const dryRun = runCli(["vault", "delete", "job-delete"], env);
+    assert.equal(dryRun.status, 0, dryRun.stderr);
+    assert.match(dryRun.stdout, /dry-run managed delete source_bundle bundle-delete/);
+    assert.equal(fs.existsSync(bundlePath), true);
+    assert.equal(fs.existsSync(wikiSourcePath), true);
+    assert.equal(fs.existsSync(outputPath), true);
+
+    const apply = runCli(["vault", "delete", "job-delete", "--apply", "--reason", "test cleanup"], env);
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.match(apply.stdout, /applied managed delete source_bundle bundle-delete/);
+    assert.equal(fs.existsSync(bundlePath), false);
+    assert.equal(fs.existsSync(wikiSourcePath), false);
+    assert.equal(fs.existsSync(outputPath), false);
+
+    const verify = openIngestDatabase(fixture.dbPath);
+    try {
+      migrate(verify.db);
+      assert.equal(listJobOutputs(verify.db, "job-delete")[0]?.deletedAt !== undefined, true);
+      const tombstones = listVaultTombstones(verify.db);
+      assert.equal(tombstones.length, 1);
+      assert.equal(tombstones[0]?.targetId, "bundle-delete");
+      assert.equal(tombstones[0]?.reason, "test cleanup");
+    } finally {
+      verify.close();
+    }
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }

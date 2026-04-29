@@ -1,9 +1,9 @@
 # Sprint Roadmap
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
-> **Current**: sprint-25-derived-action-library (planned)
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign
-> **Pending**: sprint-13-vault-reconcile-retention, sprint-25-derived-action-library
+> **Current**: next-sprint-planning
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library
+> **Pending**: sprint-21-bootstrap-packaging (deferred)
 <!-- END:VIBE:CURRENT-SPRINT -->
 
 ## Background
@@ -258,6 +258,7 @@ Telegram mobile/desktop
   - Manual deletion of `raw/**` or `wiki/**` produces a deterministic drift report instead of silent desync.
   - Dry-run reconcile performs no writes; apply mode requires an explicit operator flag.
   - SQLite can distinguish present, missing, intentionally deleted, and orphaned source/output state.
+- **status**: completed for the product CLI maintenance path. Added SQLite `vault_tombstones`, `npm run tlgi -- vault reconcile [--json]`, and `npm run tlgi -- vault delete <id> [--apply] [--reason <text>] [--json]`. Reconcile reports SQLite/filesystem drift across raw bundles, wiki source pages, derived bundles/pages, and runtime outputs without mutating state. Managed delete dry-runs by default and only removes managed vault/runtime paths under explicit `--apply`, then marks outputs deleted, writes tombstones, and appends job events. Telegram buttons/status messaging for these maintenance actions remain a future operator UX layer.
 
 ## Sprint 17 — Automation Registry And CLI Foundation
 
@@ -527,4 +528,4 @@ The automation sprints were added to the active iteration after the LLMwiki inge
   - Manual deletion of `raw/**` or `wiki/**` produces a deterministic drift report.
   - Missing source evidence is never silently recreated by retry or lint.
   - Reconcile can tell present, missing, intentionally deleted, and orphaned raw/wiki/output state apart.
-- **status**: planned after the wiki raw/input contract lands.
+- **status**: completed as the CLI/SQLite carryover slice. Future refinements should add dashboard/Telegram surfaces on top of the same `npm run tlgi -- vault ...` commands rather than bypassing tombstones.

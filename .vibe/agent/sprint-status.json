@@ -150,9 +150,16 @@
     {
       "id": "sprint-13-vault-reconcile-retention",
       "name": "Vault Reconcile And Retention",
-      "status": "planned",
+      "status": "passed",
       "startedAt": "2026-04-27T06:04:05.000Z",
-      "planPromptPath": "docs/prompts/sprint-sprint-13-vault-reconcile-retention-plan.md"
+      "planPromptPath": "docs/prompts/sprint-sprint-13-vault-reconcile-retention-plan.md",
+      "completedAt": "2026-04-29T12:24:22.000Z",
+      "actualLoc": {
+        "added": 999,
+        "deleted": 12,
+        "net": 987,
+        "filesChanged": 8
+      }
     },
     {
       "id": "sprint-17-automation-registry-cli",
@@ -239,13 +246,14 @@
     {
       "id": "sprint-25-derived-action-library",
       "name": "Derived Action Library",
-      "status": "planned",
-      "startedAt": "2026-04-28T09:35:00.000Z"
+      "status": "passed",
+      "startedAt": "2026-04-28T09:35:00.000Z",
+      "completedAt": "2026-04-29T07:26:52.000Z"
     }
   ],
   "handoff": {
-    "currentSprintId": "sprint-25-derived-action-library",
-    "lastActionSummary": "Polished the single-page ops dashboard visual system from a fresh image-generated mockup and fixed remaining stack status/tail helpers to parse .env safely. Sprint 25 remains planned for reusable derived action renderers.",
+    "currentSprintId": "idle",
+    "lastActionSummary": "Implemented the Sprint 13 CLI/SQLite vault reconcile and managed delete slice; Sprint 25A reusable derived action renderers are also in place.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -265,7 +273,7 @@
       "Dashboard visual changes should preserve the polished operations-console style: command bar, compact metric ribbon, thin bordered surfaces, restrained status accents, and dark live-log terminal"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-28T10:49:05.000Z"
+    "updatedAt": "2026-04-29T12:28:47.020Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -406,16 +414,16 @@
     "test/ops-dashboard.test.ts"
   ],
   "sprintsSinceLastAudit": 1,
-  "stateUpdatedAt": "2026-04-28T10:49:05.000Z",
-  "verifiedAt": "2026-04-28T10:49:05.000Z",
+  "stateUpdatedAt": "2026-04-29T12:28:47.020Z",
+  "verifiedAt": "2026-04-29T12:28:47.020Z",
   "verificationCommands": [
     {
       "id": "typecheck",
       "command": "npm run typecheck"
     },
     {
-      "id": "automation-core-tests",
-      "command": "node --import tsx --test test/automation-core.test.ts"
+      "id": "db-ops-cli-tests",
+      "command": "node --import tsx --test test/db.test.ts test/automation-core.test.ts"
     },
     {
       "id": "test",
