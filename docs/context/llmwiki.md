@@ -73,6 +73,8 @@ Generated renderer runs are auditable. SQLite stores the original user prompt, r
 
 Registered renderers live under the wiki vault `renderers/` directory by default. Each renderer has a `manifest.json` with an id, supported artifact kinds, runtime, entrypoint, and timeout. The local `yoni-llm-wiki` vault registers `fx.chart.1y`, which wraps the existing FX line-chart script and lets natural-language requests generate, package, ingest, and send the chart through the worker-owned pipeline.
 
+NotebookLM integration is intentionally manual for now. The wiki runtime provides `notebooklm.export-pack`, a registered renderer that creates a local ZIP with selected source Markdown, a consolidated upload file, source map, provenance, redaction notes, and NotebookLM-ready prompts. It does not call NotebookLM, authenticate with Google, or upload data. The operator receives the ZIP through Telegram, reviews it locally, and decides whether to upload files to NotebookLM manually.
+
 ## Operational Rule
 
 Preprocessing that creates canonical wiki text must happen before raw bundle finalization or be copied into the finalized raw bundle before wiki ingest. Runtime-only preprocessing artifacts are not sufficient for LLMwiki because they are not durable source evidence. Current worker flow extracts text/DOCX/PDF/EML/image canonical artifacts before `writeRawBundle`, copies them into `raw/**/extracted/`, and points `preprocess.completed` at those finalized raw paths. STT transcript Markdown is copied from STT events into the same raw extracted layer and cleaned before language scoring.

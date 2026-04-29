@@ -440,7 +440,7 @@ Telegram mobile/desktop
   - High-value repeated actions run as registered renderers rather than ad hoc generated code.
   - Each renderer writes provenance-rich derived packages and declares supported artifact kinds.
   - Generated renderer promotion remains the path for discovering future reusable renderers.
-- **status**: planned.
+- **status**: planned. Partial precursor completed: `notebooklm.export-pack` was added in `llmwiki-runtime-kit` as a registered renderer for local/manual NotebookLM upload packs, without Google OAuth, NotebookLM CLI calls, or automatic external upload.
 
 ## Iteration iter-2 — LLMwiki Foundation
 

@@ -119,6 +119,38 @@ Paths may be vault-relative or absolute, but the worker accepts only allowlisted
 
 For novel outputs, `renderer.mode` may be `generated` with `language: "python"` or `"javascript"` and `code`. Generated renderer code is stored under `runtime/wiki-artifacts/runs/<run_id>/generated/`, executed by the worker with a prepared input JSON and output directory, logged in SQLite, and may later be promoted to a registered renderer from the ops dashboard. The user prompt that caused generation must be retained in the run record so the operator can decide whether promotion is appropriate.
 
+NotebookLM-style outputs should use the registered `notebooklm.export-pack` renderer rather than a direct NotebookLM CLI/API call. The expected request uses `artifactKind: "notebooklm_export"` and creates a local ZIP for manual operator review/upload:
+
+```json
+{
+  "schemaVersion": "tlgi.artifact.request.v1",
+  "action": "create_derived_artifact",
+  "artifactKind": "notebooklm_export",
+  "artifactId": "notebooklm_export_pack",
+  "title": "NotebookLM 수동 업로드용 자료",
+  "renderer": {
+    "mode": "registered",
+    "id": "notebooklm.export-pack"
+  },
+  "sources": [
+    {
+      "path": "wiki/sources/example.md",
+      "type": "wiki_source"
+    }
+  ],
+  "parameters": {
+    "purpose": "NotebookLM에 직접 업로드할 편집 자료",
+    "desiredOutputs": ["briefing", "audio_overview", "quiz", "flashcards", "slides", "infographic"],
+    "language": "ko",
+    "redactionMode": "none"
+  },
+  "delivery": {
+    "sendToTelegram": true,
+    "ingestDerived": true
+  }
+}
+```
+
 Artifact request `sources[].path` values may be exact vault-relative paths or constrained glob patterns under the same allowlisted raw/wiki/derived evidence surfaces. The worker expands numeric brace ranges such as `wiki/sources/fx_koreaexim_2025{04..10}*.md` and wildcard patterns before execution, then validates every expanded file against the normal source allowlist. If a glob matches no files, the request fails explicitly instead of treating the pattern as a literal filename.
 
 Worker-side artifact execution must:
