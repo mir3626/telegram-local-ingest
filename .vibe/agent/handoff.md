@@ -10,6 +10,12 @@
 
 ## Status
 
+### Sprint 26 Closed — FX Wiki Workflow Acceptance — 2026-04-29
+
+The live FX-only LLMwiki workflow now has an acceptance smoke: `npm run smoke:fx-wiki`. It checks `vault reconcile --json` before and after, runs registered renderers `fx.stats.period`, `table.compare`, and `notebooklm.export-pack` against the configured `yoni-llm-wiki` FX source pages, verifies finalized `derived/**` packages, verifies `wiki/derived/**` pages, and confirms SQLite `artifact_renderer_runs` records are `registered` and `SUCCEEDED`.
+
+`ops-cli artifact run` now falls back to the vault-local `scripts/ingest-derived.mjs` when `WIKI_DERIVED_INGEST_COMMAND` is unset, matching the worker behavior. `llmwiki-runtime-kit/scripts/chat.mjs` was updated and deployed to the live vault so custom FX date-range chart/stat requests use `fx.stats.period` instead of generated Python.
+
 ### Data Cleanup — FX-Only Vault State — 2026-04-29
 
 The live local data has been reset without tombstones per user request. All old Telegram ingest job rows and cascaded job files/events/source bundles/outputs were deleted from SQLite; `telegram_offsets` was kept so the bot does not replay old updates. `vault_tombstones` is empty. FX automation state was kept: `automation_runs=532` and `automation_events=1064` for `fx.koreaexim.daily`.

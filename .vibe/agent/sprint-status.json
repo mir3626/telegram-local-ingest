@@ -249,11 +249,18 @@
       "status": "passed",
       "startedAt": "2026-04-28T09:35:00.000Z",
       "completedAt": "2026-04-29T07:26:52.000Z"
+    },
+    {
+      "id": "sprint-26-fx-wiki-workflow-acceptance",
+      "name": "FX Wiki Workflow Acceptance",
+      "status": "passed",
+      "startedAt": "2026-04-29T15:45:00.000Z",
+      "completedAt": "2026-04-29T16:05:00.000Z"
     }
   ],
   "handoff": {
     "currentSprintId": "idle",
-    "lastActionSummary": "Clean-deleted old non-FX Telegram ingest/runtime/vault data without tombstones; live vault now reconciles cleanly with only FX raw/wiki source data.",
+    "lastActionSummary": "Completed Sprint 26 FX wiki workflow acceptance: registered renderer smoke now proves FX stats, comparison table, and NotebookLM export-pack derived artifacts create packages/pages, record SQLite runs, and leave vault reconcile clean.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -366,64 +373,34 @@
     }
   ],
   "lastSprintScope": [
-    ".env.example",
-    "README.md",
-    "automations/README.md",
-    "automations/fx-koreaexim-daily/README.md",
-    "automations/fx-koreaexim-daily/manifest.json",
-    "automations/fx-koreaexim-daily/run.mjs",
     "apps/ops-cli/package.json",
     "apps/ops-cli/src/index.ts",
-    "docs/context/automation.md",
-    "docs/context/architecture.md",
-    "docs/context/product.md",
+    "docs/context/llmwiki.md",
     "docs/plans/sprint-roadmap.md",
     "package.json",
-    "package-lock.json",
-    "packages/db/src/index.ts",
-    "packages/automation-core/package.json",
-    "packages/automation-core/src/index.ts",
-    "test/automation-core.test.ts",
-    ".vibe/agent/sprint-status.json",
-    "apps/ops-dashboard/package.json",
-    "apps/ops-dashboard/src/index.ts",
-    "test/ops-dashboard.test.ts"
+    "scripts/smoke-fx-wiki-workflow.mjs",
+    ".vibe/agent/sprint-status.json"
   ],
   "lastSprintScopeGlob": [
-    ".env.example",
-    "README.md",
-    "automations/README.md",
-    "automations/fx-koreaexim-daily/README.md",
-    "automations/fx-koreaexim-daily/manifest.json",
-    "automations/fx-koreaexim-daily/run.mjs",
     "apps/ops-cli/package.json",
     "apps/ops-cli/src/index.ts",
-    "docs/context/automation.md",
-    "docs/context/architecture.md",
-    "docs/context/product.md",
+    "docs/context/llmwiki.md",
     "docs/plans/sprint-roadmap.md",
     "package.json",
-    "package-lock.json",
-    "packages/db/src/index.ts",
-    "packages/automation-core/package.json",
-    "packages/automation-core/src/index.ts",
-    "test/automation-core.test.ts",
-    ".vibe/agent/sprint-status.json",
-    "apps/ops-dashboard/package.json",
-    "apps/ops-dashboard/src/index.ts",
-    "test/ops-dashboard.test.ts"
+    "scripts/smoke-fx-wiki-workflow.mjs",
+    ".vibe/agent/sprint-status.json"
   ],
-  "sprintsSinceLastAudit": 1,
-  "stateUpdatedAt": "2026-04-29T12:37:50.000Z",
-  "verifiedAt": "2026-04-29T12:37:50.000Z",
+  "sprintsSinceLastAudit": 2,
+  "stateUpdatedAt": "2026-04-29T16:05:00.000Z",
+  "verifiedAt": "2026-04-29T16:05:00.000Z",
   "verificationCommands": [
     {
       "id": "typecheck",
       "command": "npm run typecheck"
     },
     {
-      "id": "db-ops-cli-tests",
-      "command": "node --import tsx --test test/db.test.ts test/automation-core.test.ts"
+      "id": "fx-wiki-smoke",
+      "command": "npm run smoke:fx-wiki"
     },
     {
       "id": "test",
@@ -436,6 +413,10 @@
     {
       "id": "diff-check",
       "command": "git diff --check"
+    },
+    {
+      "id": "vault-reconcile",
+      "command": "npm run tlgi -- vault reconcile --json"
     }
   ]
 }

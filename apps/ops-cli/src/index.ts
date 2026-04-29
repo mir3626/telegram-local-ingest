@@ -1117,6 +1117,10 @@ async function resolveRuntimePaths(): Promise<RuntimePaths> {
   const vaultRoot = process.env.OBSIDIAN_VAULT_PATH?.trim()
     ? path.resolve(process.env.OBSIDIAN_VAULT_PATH)
     : undefined;
+  const configuredDerivedIngestCommand = process.env.WIKI_DERIVED_INGEST_COMMAND?.trim();
+  const localDerivedIngestScript = vaultRoot ? path.join(vaultRoot, "scripts", "ingest-derived.mjs") : undefined;
+  const derivedIngestCommand = configuredDerivedIngestCommand
+    || (localDerivedIngestScript && await fileExists(localDerivedIngestScript) ? `${process.execPath} ${localDerivedIngestScript}` : undefined);
   return {
     projectRoot,
     runtimeDir,
@@ -1125,7 +1129,7 @@ async function resolveRuntimePaths(): Promise<RuntimePaths> {
     renderersRoot: path.resolve(vaultRoot ?? projectRoot, process.env.WIKI_RENDERERS_DIR ?? "renderers"),
     automationRunsDir: path.resolve(projectRoot, process.env.AUTOMATION_RUNS_DIR ?? path.join(runtimeDir, "automation", "runs")),
     ...(vaultRoot ? { vaultRoot } : {}),
-    ...(process.env.WIKI_DERIVED_INGEST_COMMAND?.trim() ? { derivedIngestCommand: process.env.WIKI_DERIVED_INGEST_COMMAND.trim() } : {}),
+    ...(derivedIngestCommand ? { derivedIngestCommand } : {}),
   };
 }
 
@@ -1145,6 +1149,14 @@ async function findProjectRoot(startDir: string): Promise<string> {
       throw new Error("Could not find telegram-local-ingest project root");
     }
     current = parent;
+  }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.stat(filePath)).isFile();
+  } catch {
+    return false;
   }
 }
 
