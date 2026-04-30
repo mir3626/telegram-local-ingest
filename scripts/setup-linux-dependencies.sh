@@ -18,7 +18,7 @@ Installs Linux dependencies used by telegram-local-ingest:
   - tesseract OCR with English, Korean, Simplified Chinese, and Japanese packs
   - Noto CJK fonts for Korean/Chinese/Japanese PDF rendering
   - Python venv/pip build prerequisites for optional local SenseVoice STT
-  - Python virtualenv with matplotlib for wiki artifact chart renderers
+  - Python virtualenv with matplotlib and pandas for wiki artifact renderers
 
 Options:
   --with-sensevoice  Also run scripts/setup-sensevoice-cpu.sh after system setup.
@@ -246,6 +246,7 @@ print_versions() {
   if [[ -x "$artifact_python" ]]; then
     "$artifact_python" --version 2>&1 | sed 's/^/  artifact python: /'
     "$artifact_python" -c "import matplotlib; print('matplotlib ok')" 2>&1 | sed 's/^/  artifact python: /'
+    "$artifact_python" -c "import pandas; print('pandas ok')" 2>&1 | sed 's/^/  artifact python: /'
   else
     echo "  artifact python: not found"
   fi

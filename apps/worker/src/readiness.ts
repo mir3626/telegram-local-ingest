@@ -189,13 +189,13 @@ async function checkArtifactRendererReadiness(
     return;
   }
 
-  const matplotlib = await checkCommandVersion(pythonCommand, ["-c", "import matplotlib; print('matplotlib ok')"]);
-  if (matplotlib.ok) {
-    checks.push(ok("Artifact Python dependencies", "matplotlib import succeeded"));
+  const artifactDeps = await checkCommandVersion(pythonCommand, ["-c", "import matplotlib, pandas; print('matplotlib+pandas ok')"]);
+  if (artifactDeps.ok) {
+    checks.push(ok("Artifact Python dependencies", "matplotlib and pandas imports succeeded"));
   } else {
     checks.push(warn(
       "Artifact Python dependencies",
-      "matplotlib missing; Python generated chart renderers will fail. Run npm run setup:wiki-artifacts or set WIKI_ARTIFACT_PYTHON_BIN.",
+      "matplotlib or pandas missing; Python generated chart/data renderers may fail. Run npm run setup:wiki-artifacts or set WIKI_ARTIFACT_PYTHON_BIN.",
     ));
   }
 }

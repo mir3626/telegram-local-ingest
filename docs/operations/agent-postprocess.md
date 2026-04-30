@@ -110,6 +110,8 @@ Refresh only the Python virtualenv used by wiki artifact chart renderers with:
 npm run setup:wiki-artifacts
 ```
 
+This installs the artifact-renderer Python baseline, currently `matplotlib` and `pandas`.
+
 Install optional local CPU SenseVoice STT dependencies and model cache with:
 
 ```bash

@@ -10,6 +10,10 @@
 
 ## Status
 
+### Artifact Python Dependency Update — 2026-04-30
+
+Installed `pandas` into the local artifact renderer virtualenv at `.venv-wiki-artifacts` and updated setup/readiness scripts so future Linux/bootstrap installs include both `matplotlib` and `pandas`. `npm run smoke:ready` now verifies both imports under `WIKI_ARTIFACT_PYTHON_BIN`.
+
 ### Registered Renderer Hotfix — 2026-04-30
 
 Fixed the live registered-renderer issues reported from Telegram testing. `llmwiki-runtime-kit/scripts/fx_chart.py` no longer imports pandas; `fx.chart.1y` now uses only matplotlib plus standard-library CSV/date handling and picks the latest available FX source date for the one-year window. The runtime kit was allowlist-deployed to `yoni-llm-wiki`, and the live renderer was verified directly with `WIKI_ARTIFACT_PYTHON_BIN=/home/tony/workspace/telegram-local-ingest/.venv-wiki-artifacts/bin/python`.

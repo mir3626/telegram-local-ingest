@@ -10,7 +10,7 @@ usage() {
 Usage: bash scripts/setup-wiki-artifacts-python.sh
 
 Creates a local Python virtualenv for worker-owned wiki artifact renderers and
-installs chart/report dependencies used by generated Python renderers.
+installs chart/report/dataframe dependencies used by generated Python renderers.
 
 Environment:
   WIKI_ARTIFACT_PYTHON_VENV_DIR  Override virtualenv path.
@@ -25,6 +25,6 @@ fi
 
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip wheel setuptools
-"$VENV_DIR/bin/python" -m pip install --upgrade matplotlib
+"$VENV_DIR/bin/python" -m pip install --upgrade matplotlib pandas
 
 echo "WIKI_ARTIFACT_PYTHON_BIN=$VENV_DIR/bin/python"
