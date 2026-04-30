@@ -1668,7 +1668,13 @@ async function loadWikiChatAttachments(
     if (!isRecord(record) || typeof record.path !== "string") {
       continue;
     }
-    const attachment = await resolveWikiChatAttachment(record, { vaultRoot, rawRoot, wikiRoot });
+    let attachment: ResolvedWikiChatAttachment;
+    try {
+      attachment = await resolveWikiChatAttachment(record, { vaultRoot, rawRoot, wikiRoot });
+    } catch (error) {
+      logWorker(`wiki chat attachment ignored path=${record.path} error=${errorMessage(error)}`, "warn", "WIKI");
+      continue;
+    }
     if (seen.has(attachment.absolutePath)) {
       continue;
     }

@@ -800,41 +800,16 @@ async function writePresentationDocx(input: {
     ["rels", "application/vnd.openxmlformats-package.relationships+xml"],
     ["xml", "application/xml"],
   ]);
-  const body: string[] = [
-    paragraphXml(input.title, "Title"),
-    paragraphXml(`Artifact kind: ${input.artifactKind}`, "Subtitle"),
-    paragraphXml(`Generated: ${input.generatedAt}`, "Muted"),
-    headingXml("Overview", 1),
-    tableXml([
-      ["Field", "Value"],
-      ["Title", input.title],
-      ["Artifact kind", input.artifactKind],
-      ["Content artifacts", String(input.artifacts.length)],
-      ["Source pages", String(input.sourceSnapshot.length)],
-    ], true),
-  ];
-
-  const prompt = input.sourcePrompt.trim();
-  if (prompt) {
-    body.push(headingXml("User Request", 1));
-    body.push(...plainTextParagraphs(prompt, "BodyText"));
-  }
-
-  body.push(headingXml("Generated Content", 1));
-  body.push(tableXml([
-    ["File", "Role", "Type", "Size"],
-    ...input.artifacts.map((artifact) => [
-      artifact.path.replace(/^artifacts\//, ""),
-      artifact.role,
-      artifact.mediaType,
-      formatBytes(artifact.sizeBytes),
-    ]),
-  ], true));
+  const body: string[] = [paragraphXml(input.title, "Title")];
+  const supplementalFiles: PackagedArtifact[] = [];
 
   for (const artifact of input.artifacts) {
     const artifactPath = path.join(input.bundlePath, artifact.path);
-    body.push(headingXml(artifact.path.replace(/^artifacts\//, ""), 2));
+    const heading = presentationArtifactHeading(artifact, input.artifacts.length);
     if (isEmbeddableDocxImage(artifact)) {
+      if (heading) {
+        body.push(headingXml(heading, 1));
+      }
       const mediaName = safeFileName(path.basename(artifact.path));
       const relationshipId = `rId${relationships.length + 1}`;
       relationships.push({
@@ -851,6 +826,9 @@ async function writePresentationDocx(input: {
     if (artifact.mediaType === "text/csv") {
       const csvTable = await csvPreviewTable(artifactPath);
       if (csvTable.length > 0) {
+        if (heading) {
+          body.push(headingXml(heading, 1));
+        }
         body.push(tableXml(csvTable, true));
         continue;
       }
@@ -858,26 +836,25 @@ async function writePresentationDocx(input: {
 
     const preview = await textPreview(artifactPath, artifact);
     if (preview) {
+      if (heading) {
+        body.push(headingXml(heading, 1));
+      }
       body.push(...plainTextParagraphs(preview, "BodyText"));
     } else {
-      body.push(paragraphXml(`Included as file: ${artifact.path} (${artifact.mediaType}, ${formatBytes(artifact.sizeBytes)})`, "Muted"));
+      supplementalFiles.push(artifact);
     }
   }
 
-  if (input.sourceSnapshot.length > 0) {
-    body.push(headingXml("Source Basis", 1));
+  if (supplementalFiles.length > 0) {
+    body.push(headingXml("Additional Files", 1));
     body.push(tableXml([
-      ["Source", "Type", "Size", "SHA-256"],
-      ...input.sourceSnapshot.slice(0, 30).map((source) => [
-        source.path,
-        source.type ?? "",
-        formatBytes(source.sizeBytes),
-        source.sha256.slice(0, 16),
+      ["File", "Type", "Size"],
+      ...supplementalFiles.map((artifact) => [
+        artifact.path.replace(/^artifacts\//, ""),
+        artifact.mediaType,
+        formatBytes(artifact.sizeBytes),
       ]),
     ], true));
-    if (input.sourceSnapshot.length > 30) {
-      body.push(paragraphXml(`Additional sources omitted from this readable view: ${input.sourceSnapshot.length - 30}`, "Muted"));
-    }
   }
 
   entries.push(
@@ -913,6 +890,34 @@ async function renderPresentationPdf(input: {
 
 function isEmbeddableDocxImage(artifact: PackagedArtifact): boolean {
   return ["image/png", "image/jpeg"].includes(artifact.mediaType);
+}
+
+function presentationArtifactHeading(artifact: PackagedArtifact, artifactCount: number): string | null {
+  if (artifactCount <= 1 && artifact.role === "visualization") {
+    return null;
+  }
+  switch (artifact.role) {
+    case "visualization":
+      return "Chart";
+    case "table":
+      return "Table";
+    case "report":
+      return "Summary";
+    case "index":
+      return "Index";
+    case "presentation":
+      return null;
+    default:
+      return readableArtifactName(artifact.path);
+  }
+}
+
+function readableArtifactName(artifactPath: string): string {
+  return path.basename(artifactPath)
+    .replace(/\.[^.]+$/, "")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    || "Content";
 }
 
 async function textPreview(filePath: string, artifact: PackagedArtifact): Promise<string | null> {

@@ -10,6 +10,12 @@
 
 ## Status
 
+### Registered Renderer Hotfix — 2026-04-30
+
+Fixed the live registered-renderer issues reported from Telegram testing. `llmwiki-runtime-kit/scripts/fx_chart.py` no longer imports pandas; `fx.chart.1y` now uses only matplotlib plus standard-library CSV/date handling and picks the latest available FX source date for the one-year window. The runtime kit was allowlist-deployed to `yoni-llm-wiki`, and the live renderer was verified directly with `WIKI_ARTIFACT_PYTHON_BIN=/home/tony/workspace/telegram-local-ingest/.venv-wiki-artifacts/bin/python`.
+
+Wiki chat attachment handling now avoids treating glob/brace source patterns such as `wiki/sources/fx_koreaexim_2025{0401,0701,1001}.md` as concrete downloadable files, and the worker ignores invalid attachment entries instead of failing the whole chat response. Derived presentation DOCX files were simplified for user readability: internal fields such as artifact kind, generated timestamp, user prompt, source SHA table, and source-basis metadata stay in `source.md`/`provenance.json` but are no longer rendered into the user-facing DOCX.
+
 ### Sprint 29 Closed — Vault Trash Tombstone UX — 2026-04-30
 
 The product now has an Obsidian-friendly vault trash layer. Users can move unwanted active wiki pages into `_trash/wiki/**`; `npm run tlgi -- vault trash-apply --apply` resolves linked source bundles, automation raw bundles, derived packages, and runtime outputs, moves vault evidence into `_trash/raw/**` or `_trash/derived/**`, deletes runtime-only outputs, writes `_trash/tombstones/<id>.md`, and records SQLite `vault_tombstones`. `vault trash <path_or_id> --apply` performs the same move directly, `vault trash-list` shows pending trash plus recorded tombstones, and `vault restore <tombstone_id> --apply` moves trash files back and removes the SQLite tombstone.

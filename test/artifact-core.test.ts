@@ -93,7 +93,9 @@ test("generated artifact renderer creates a derived package and records promotab
     const presentationPath = path.join(result.derivedBundlePath, "artifacts", "demo_report_Demo_Report.docx");
     assert.equal(fs.existsSync(presentationPath), true);
     assert.equal(result.artifacts.some((artifact) => artifact.role === "presentation" && artifact.path.endsWith("_Demo_Report.docx")), true);
-    assert.match(fs.readFileSync(presentationPath).toString("utf8"), /Demo Report/);
+    const presentationText = fs.readFileSync(presentationPath).toString("utf8");
+    assert.match(presentationText, /Demo Report/);
+    assert.doesNotMatch(presentationText, /Artifact kind|User Request|Source Basis|SHA-256/);
     assert.match(fs.readFileSync(path.join(result.derivedBundlePath, "provenance.json"), "utf8"), /demo wiki data/);
     assert.equal(listArtifactRendererRuns(dbHandle.db, 10).length, 1);
     assert.equal(getArtifactRendererRun(dbHandle.db, runId)?.sourcePrompt, prompt);
@@ -173,6 +175,60 @@ test("artifact renderer expands allowed wiki source glob patterns", async () => 
     assert.match(summary, /sources=2/);
     assert.match(summary, /FX 2025-04-01/);
     assert.doesNotMatch(summary, /20251101/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("artifact renderer expands comma brace lists before exact source stat", async () => {
+  const fixture = createFixture();
+  const sourcesDir = path.join(fixture.vaultRoot, "wiki", "sources");
+  fs.mkdirSync(sourcesDir, { recursive: true });
+  fs.writeFileSync(path.join(sourcesDir, "fx_koreaexim_20250401.md"), "# FX 2025-04-01\n", "utf8");
+  fs.writeFileSync(path.join(sourcesDir, "fx_koreaexim_20250701.md"), "# FX 2025-07-01\n", "utf8");
+  fs.writeFileSync(path.join(sourcesDir, "fx_koreaexim_20251001.md"), "# FX 2025-10-01\n", "utf8");
+
+  const request = artifactRequestSchema.parse({
+    action: "create_derived_artifact",
+    artifactKind: "table",
+    artifactId: "fx_selected_dates",
+    title: "FX Selected Dates",
+    renderer: {
+      mode: "generated",
+      language: "javascript",
+      suggestedId: "fx_selected_dates",
+      code: [
+        "import fs from 'node:fs/promises';",
+        "import path from 'node:path';",
+        "const [inputPath, outputDir, resultPath] = process.argv.slice(2);",
+        "const input = JSON.parse(await fs.readFile(inputPath, 'utf8'));",
+        "const reportPath = path.join(outputDir, 'selected.md');",
+        "await fs.writeFile(reportPath, input.sources.map((source) => source.path).join('\\n'), 'utf8');",
+        "await fs.writeFile(resultPath, JSON.stringify({artifacts:[{path:'selected.md',role:'report',mediaType:'text/markdown'}]}), 'utf8');",
+        "",
+      ].join("\n"),
+    },
+    sources: [{ path: "wiki/sources/fx_koreaexim_2025{0401,0701,1001}.md", type: "wiki_source" }],
+    parameters: {},
+  }) satisfies ArtifactRequest;
+
+  try {
+    const result = await runArtifactRequest({
+      request,
+      runId: "artifact_fx_selected_dates_20260429T000000000Z",
+      vaultRoot: fixture.vaultRoot,
+      runtimeDir: fixture.runtimeDir,
+      sourcePrompt: "세 날짜 환율 비교표를 만들어줘",
+      now: new Date("2026-04-29T00:00:00.000Z"),
+      env: process.env,
+    });
+
+    const selected = fs.readFileSync(path.join(result.derivedBundlePath, "artifacts", "selected.md"), "utf8");
+    assert.deepEqual(selected.trim().split("\n"), [
+      "wiki/sources/fx_koreaexim_20250401.md",
+      "wiki/sources/fx_koreaexim_20250701.md",
+      "wiki/sources/fx_koreaexim_20251001.md",
+    ]);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }

@@ -1520,6 +1520,47 @@ test("runWorkerOnce sends wiki chat attachments immediately for fewer than five 
   }
 });
 
+test("runWorkerOnce ignores invalid wiki chat attachment patterns without failing reply", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-invalid-attachment.mjs", [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const attachmentDir = process.argv[process.argv.indexOf('--attachment-dir') + 1];",
+    "fs.mkdirSync(attachmentDir, { recursive: true });",
+    "fs.writeFileSync(path.join(attachmentDir, 'attachments.json'), JSON.stringify({ attachments: [{ path: 'wiki/sources/fx_koreaexim_2025{0401,0701,1001}.md' }] }), 'utf8');",
+    "process.stdout.write('비교표 생성을 준비합니다.');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockWikiChatAttachmentFetch({ sentMessages, sentDocuments, text: "세 날짜 환율 비교표 보여줘" }),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentDocuments.length, 0);
+    assert.match(sentMessages.at(-1)?.text ?? "", /비교표 생성을 준비합니다/);
+    assert.doesNotMatch(sentMessages.at(-1)?.text ?? "", /위키 채팅 처리에 실패/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce executes wiki chat artifact requests and sends generated artifacts", async () => {
   const fixture = createFixture();
   const dbHandle = openIngestDatabase(":memory:");
