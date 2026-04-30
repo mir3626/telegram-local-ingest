@@ -10,6 +10,12 @@
 
 ## Status
 
+### Sprint 27 Closed — Chart Format Expansion — 2026-04-30
+
+`fx.stats.period` in `llmwiki-runtime-kit` now supports requested chart formats through `parameters.chartFormats` or `parameters.formats`. Supported values are `png`, `svg`, and `pdf`; the default remains `png` so ordinary Telegram chart requests stay compact. The renderer declares the correct media types for generated chart artifacts.
+
+The live `yoni-llm-wiki` vault was updated through allowlist deploy with no framework drift. `npm run smoke:fx-wiki` now requests all three chart formats for the FX stats acceptance run and verifies `chart.png`, `chart.svg`, and `chart.pdf` are finalized into `derived/**`, ingested into `wiki/derived/**`, and recorded as a registered renderer run.
+
 ### Sprint 26 Closed — FX Wiki Workflow Acceptance — 2026-04-29
 
 The live FX-only LLMwiki workflow now has an acceptance smoke: `npm run smoke:fx-wiki`. It checks `vault reconcile --json` before and after, runs registered renderers `fx.stats.period`, `table.compare`, and `notebooklm.export-pack` against the configured `yoni-llm-wiki` FX source pages, verifies finalized `derived/**` packages, verifies `wiki/derived/**` pages, and confirms SQLite `artifact_renderer_runs` records are `registered` and `SUCCEEDED`.

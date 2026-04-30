@@ -256,11 +256,18 @@
       "status": "passed",
       "startedAt": "2026-04-29T15:45:00.000Z",
       "completedAt": "2026-04-29T16:05:00.000Z"
+    },
+    {
+      "id": "sprint-27-chart-format-expansion",
+      "name": "Chart Format Expansion",
+      "status": "passed",
+      "startedAt": "2026-04-30T01:30:00.000Z",
+      "completedAt": "2026-04-30T01:35:00.000Z"
     }
   ],
   "handoff": {
     "currentSprintId": "idle",
-    "lastActionSummary": "Completed Sprint 26 FX wiki workflow acceptance: registered renderer smoke now proves FX stats, comparison table, and NotebookLM export-pack derived artifacts create packages/pages, record SQLite runs, and leave vault reconcile clean.",
+    "lastActionSummary": "Completed Sprint 27 chart format expansion: fx.stats.period now supports requested PNG/SVG/PDF chart outputs, and smoke:fx-wiki verifies all three formats.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -390,9 +397,9 @@
     "scripts/smoke-fx-wiki-workflow.mjs",
     ".vibe/agent/sprint-status.json"
   ],
-  "sprintsSinceLastAudit": 2,
-  "stateUpdatedAt": "2026-04-29T16:05:00.000Z",
-  "verifiedAt": "2026-04-29T16:05:00.000Z",
+  "sprintsSinceLastAudit": 3,
+  "stateUpdatedAt": "2026-04-30T01:35:00.000Z",
+  "verifiedAt": "2026-04-30T01:35:00.000Z",
   "verificationCommands": [
     {
       "id": "typecheck",

@@ -40,10 +40,10 @@ async function main() {
       title: "FX acceptance USD 2025 Apr-Oct",
       renderer: { mode: "registered", id: "fx.stats.period" },
       sources: [{ path: "wiki/sources/fx_koreaexim_2025{04..10}*.md", type: "wiki_source" }],
-      parameters: { currency: "USD", startDate: "2025-04-01", endDate: "2025-10-31" },
+      parameters: { currency: "USD", startDate: "2025-04-01", endDate: "2025-10-31", chartFormats: ["png", "svg", "pdf"] },
       delivery: { sendToTelegram: false, ingestDerived: true },
     },
-    expectedFiles: ["artifacts/chart.png", "artifacts/stats.csv", "artifacts/summary.md"],
+    expectedFiles: ["artifacts/chart.png", "artifacts/chart.svg", "artifacts/chart.pdf", "artifacts/stats.csv", "artifacts/summary.md"],
   }));
   runs.push(await runArtifact({
     requestDir,

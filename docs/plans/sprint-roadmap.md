@@ -2,7 +2,7 @@
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
 > **Current**: next-sprint-planning
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library, sprint-26-fx-wiki-workflow-acceptance
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library, sprint-26-fx-wiki-workflow-acceptance, sprint-27-chart-format-expansion
 > **Pending**: sprint-21-bootstrap-packaging (deferred)
 <!-- END:VIBE:CURRENT-SPRINT -->
 
@@ -459,6 +459,22 @@ Telegram mobile/desktop
   - Natural-language custom FX period requests are guided to registered renderers before generated renderers.
 - **status**: completed. Added `scripts/smoke-fx-wiki-workflow.mjs`, `npm run smoke:fx-wiki`, CLI derived-ingest fallback, and deployed runtime-kit chat guidance. Live smoke created registered FX statistics, comparison table, and NotebookLM export pack derived packages/pages, with `npm run tlgi -- vault reconcile --json` still clean.
 
+## Sprint 27 — Chart Format Expansion
+
+- **id**: `sprint-27-chart-format-expansion`
+- **goal**: Extend the registered FX chart/statistics renderer beyond PNG-only output while keeping ordinary Telegram chart requests compact.
+- **tasks**:
+  - Add `chartFormats`/`formats` support to `fx.stats.period`.
+  - Support `png`, `svg`, and `pdf` chart outputs with declared media types.
+  - Keep the default chart output to PNG unless the user explicitly asks for more formats.
+  - Update wiki chat routing guidance so agents can request SVG/PDF when needed.
+  - Extend the FX wiki smoke to prove PNG/SVG/PDF artifacts are packaged and ingested.
+- **acceptance criteria**:
+  - Registered FX period requests can produce `chart.png`, `chart.svg`, and `chart.pdf`.
+  - `npm run smoke:fx-wiki` verifies all three chart formats and leaves reconcile clean.
+  - No generated renderer is needed for common FX chart export format requests.
+- **status**: completed. `fx.stats.period` now accepts `parameters.chartFormats` or `parameters.formats`, defaults to PNG, and can emit PNG/SVG/PDF. The live vault was updated through runtime-kit allowlist deploy, and the product smoke now validates all three chart formats.
+
 ## Iteration iter-2 — LLMwiki Foundation
 
 This iteration turns the completed Telegram ingest utility into a Karpathy-style LLMwiki source pipeline. The core decision is that rendered user deliverables are not wiki raw. Wiki raw is the immutable raw bundle plus deterministic canonical text projections declared by `manifest.yaml` `wiki_inputs`.
@@ -532,6 +548,8 @@ The automation sprints were added to the active iteration after the LLMwiki inge
 - **id**: `sprint-25-derived-action-library`
 - **status**: completed.
 - **id**: `sprint-26-fx-wiki-workflow-acceptance`
+- **status**: completed.
+- **id**: `sprint-27-chart-format-expansion`
 - **status**: completed.
 
 ### Sprint 13 Carryover — Vault Reconcile And Retention
