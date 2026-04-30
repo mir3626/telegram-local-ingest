@@ -10,6 +10,12 @@
 
 ## Status
 
+### Business Pandoc Reference Template — 2026-05-01
+
+Added a sample business-style Pandoc reference document to `llmwiki-runtime-kit` at `templates/pandoc/business-reference.docx`, with companion usage notes in `templates/pandoc/README.md`. The template uses A4 sizing, practical report margins, Arial/Noto Sans CJK KR fonts, left-aligned report title/subtitle, muted navy/slate headings, light table borders, pale blue table headers, and a subtle quote/callout style. It was deployed to `/home/tony/workspace/yoni-llm-wiki/templates/pandoc/business-reference.docx`, and the local product `.env` now points `PANDOC_REFERENCE_DOCX` at that live-vault path.
+
+Verification passed by rendering Markdown through Pandoc with the live-vault reference doc, converting the resulting DOCX to PDF/PNG for visual inspection, running runtime-kit `npm run lint`, and running product `npm run smoke:ready`.
+
 ### Derived DOCX Pandoc Rendering — 2026-05-01
 
 Derived Markdown-to-DOCX rendering now prefers local Pandoc before falling back to the built-in lightweight DOCX writer. In `packages/artifact-core`, renderer-declared Markdown artifacts are converted through Pandoc during finalization, and the worker-owned presentation DOCX is also composed as Markdown and rendered through Pandoc so headings, lists, images, and pipe tables are handled by the mature document converter. `PANDOC_REFERENCE_DOCX` or `TLGI_PANDOC_REFERENCE_DOCX` can point at an optional Word reference template for styling. If Pandoc is missing or fails, the previous lightweight XML renderer remains as fallback.
