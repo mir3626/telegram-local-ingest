@@ -10,6 +10,14 @@
 
 ## Status
 
+### Registered Renderer Source Guards — 2026-05-01
+
+Reviewed the remaining registered renderers for wrong-source or wrong-interpretation risks after the exact-date FX comparison fix. The highest-risk case was `fx.chart.1y`: it wrapped the global one-year FX chart script and ignored artifact `sources`/`parameters`, so a custom date/currency request routed to that renderer could silently produce the default chart. `llmwiki-runtime-kit/renderers/fx-chart-1y/render.mjs` now rejects explicit sources, currencies, dates, `windowDays`, and chart format parameters and instructs callers to use `fx.stats.period` for custom requests. `scripts/chat.mjs` now emits `fx.chart.1y` with empty `sources`/`parameters` only for generic recent one-year FX chart requests.
+
+`fx.stats.period` now fails if any requested currency is absent from the selected source/date range instead of returning a partial chart. Generic amount extraction was tightened to require currency symbols/codes, units/percent, or comma-grouped numeric values, reducing source-id/date-fragment leakage into business amount fields. `invoice.vendor-summary` and `meeting.actions` now filter to invoice-like and meeting/STT/transcript-like sources respectively; unrelated source selections produce empty reports with applicability notes instead of misleading rows. The runtime-kit update was allowlist-deployed to `/home/tony/workspace/yoni-llm-wiki` and `npm run vault:diff -- --vault ../yoni-llm-wiki` reports no framework drift.
+
+Verification passed: runtime-kit `npm run lint`; direct renderer smokes for valid generic `fx.chart.1y`, rejected custom `fx.chart.1y`, valid `fx.stats.period`, rejected missing-currency `fx.stats.period`, invoice/meeting false-positive guards, and exact-date `table.compare`; product `npm run typecheck`, `npm run build`, full `npm test`, `npm run smoke:fx-wiki`, and `npm run tlgi -- vault reconcile --json` all passed.
+
 ### FX Exact-Date Comparison Renderer Fix — 2026-05-01
 
 The request `2025년 4월 1일, 2025년 7월 1일, 2025년 10월 1일 환율 데이터를 비교표로 만들어줘` exposed that `table.compare` was producing a generic source metadata comparison instead of parsing Korea Eximbank FX rows. The data existed in `wiki/sources/fx_koreaexim_20250401.md`, `fx_koreaexim_20250701.md`, and `fx_koreaexim_20251001.md`; the renderer was using headings/detected-number heuristics rather than the embedded `cur_unit/deal_bas_r` CSV block.
