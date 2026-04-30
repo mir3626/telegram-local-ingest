@@ -10,6 +10,14 @@
 
 ## Status
 
+### FX Exact-Date Comparison Renderer Fix — 2026-05-01
+
+The request `2025년 4월 1일, 2025년 7월 1일, 2025년 10월 1일 환율 데이터를 비교표로 만들어줘` exposed that `table.compare` was producing a generic source metadata comparison instead of parsing Korea Eximbank FX rows. The data existed in `wiki/sources/fx_koreaexim_20250401.md`, `fx_koreaexim_20250701.md`, and `fx_koreaexim_20251001.md`; the renderer was using headings/detected-number heuristics rather than the embedded `cur_unit/deal_bas_r` CSV block.
+
+`llmwiki-runtime-kit/renderers/comparison-table/render.mjs` now detects Korea Eximbank FX CSV blocks and outputs a date-by-currency deal-basis comparison table with change and change percentage. `scripts/chat.mjs` now tells the wiki agent to use `table.compare` with exact FX source pages for exact-date FX comparison requests. Product presentation CSV preview was widened so the user-facing DOCX presentation can include the full small FX comparison table. The fixed renderer was deployed to `/home/tony/workspace/yoni-llm-wiki` with no framework drift.
+
+Verification passed by running the exact request through `npm run tlgi -- artifact run`, confirming the generated CSV/DOCX contains USD/EUR/JPY(100)/CNH rows and values such as USD `1,470.6`, `1,353.6`, `1,403.2`, `-67.4`, `-4.58%`; `npm run smoke:fx-wiki`, `npm run tlgi -- vault reconcile --json`, runtime-kit `npm run lint`, product focused artifact-core test, `npm run typecheck`, `npm run build`, and diff checks all passed.
+
 ### Business Pandoc Reference Template — 2026-05-01
 
 Added a sample business-style Pandoc reference document to `llmwiki-runtime-kit` at `templates/pandoc/business-reference.docx`, with companion usage notes in `templates/pandoc/README.md`. The template uses A4 sizing, practical report margins, Arial/Noto Sans CJK KR fonts, left-aligned report title/subtitle, muted navy/slate headings, light table borders, pale blue table headers, and a subtle quote/callout style. It was deployed to `/home/tony/workspace/yoni-llm-wiki/templates/pandoc/business-reference.docx`, and the local product `.env` now points `PANDOC_REFERENCE_DOCX` at that live-vault path.

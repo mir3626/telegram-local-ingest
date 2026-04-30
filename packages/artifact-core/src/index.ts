@@ -1078,7 +1078,7 @@ function textPreviewBlocks(text: string, artifact: PresentationContentArtifact):
 
 async function csvPreviewTable(filePath: string): Promise<string[][]> {
   const text = await fs.readFile(filePath, "utf8");
-  const rows = parseCsvRows(text).slice(0, 9).map((row) => row.slice(0, 6));
+  const rows = parseCsvRows(text).slice(0, 31).map((row) => row.slice(0, 10));
   return rows.length > 0 ? rows : [];
 }
 
