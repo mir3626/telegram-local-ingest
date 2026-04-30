@@ -22,6 +22,7 @@
     "smoke:agent:ready:claude": "bash scripts/smoke-agent-postprocess.sh --ready --provider claude",
     "smoke:agent:live:claude": "bash scripts/smoke-agent-postprocess.sh --live --provider claude",
     "smoke:fx-wiki": "node scripts/smoke-fx-wiki-workflow.mjs",
+    "smoke:wiki-renderers": "node --import tsx scripts/smoke-wiki-renderers.ts",
     "setup:wiki-artifacts": "bash scripts/setup-wiki-artifacts-python.sh",
     "setup:linux": "bash scripts/setup-linux-dependencies.sh",
     "setup:linux:sensevoice": "bash scripts/setup-linux-dependencies.sh --with-sensevoice",

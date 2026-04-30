@@ -2,7 +2,7 @@
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
 > **Current**: next-sprint-planning
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library, sprint-26-fx-wiki-workflow-acceptance, sprint-27-chart-format-expansion, sprint-28-derived-presentation-documents, sprint-29-vault-trash-tombstone-ux
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library, sprint-26-fx-wiki-workflow-acceptance, sprint-27-chart-format-expansion, sprint-28-derived-presentation-documents, sprint-29-vault-trash-tombstone-ux, sprint-30-registered-renderer-qa-matrix
 > **Pending**: sprint-21-bootstrap-packaging (deferred)
 <!-- END:VIBE:CURRENT-SPRINT -->
 
@@ -446,7 +446,7 @@ Telegram mobile/desktop
 ## Sprint 26 — FX Wiki Workflow Acceptance
 
 - **id**: `sprint-26-fx-wiki-workflow-acceptance`
-- **goal**: Prove the current FX-only LLMwiki state can answer common natural-language derived-output requests through registered renderers, not ad hoc generated code.
+- **goal**: Prove the FX LLMwiki source set can answer common natural-language derived-output requests through registered renderers, not ad hoc generated code.
 - **tasks**:
   - Add a product-side smoke command that checks vault reconcile before and after FX workflow runs.
   - Exercise `fx.stats.period`, `table.compare`, and `notebooklm.export-pack` against the live FX wiki source set.
@@ -454,7 +454,7 @@ Telegram mobile/desktop
   - Align `ops-cli artifact run` derived-ingest fallback with the worker so local CLI and Telegram execution produce the same wiki side effects.
   - Strengthen wiki chat routing guidance so custom FX date-range chart requests use `fx.stats.period`.
 - **acceptance criteria**:
-  - `npm run smoke:fx-wiki` passes on the local FX-only vault.
+  - `npm run smoke:fx-wiki` passes when Korea Eximbank FX source pages exist in the local vault.
   - The smoke leaves reconcile clean and produces inspectable derived artifacts/pages.
   - Natural-language custom FX period requests are guided to registered renderers before generated renderers.
 - **status**: completed. Added `scripts/smoke-fx-wiki-workflow.mjs`, `npm run smoke:fx-wiki`, CLI derived-ingest fallback, and deployed runtime-kit chat guidance. Live smoke created registered FX statistics, comparison table, and NotebookLM export pack derived packages/pages, with `npm run tlgi -- vault reconcile --json` still clean.
@@ -508,6 +508,22 @@ Telegram mobile/desktop
   - `vault restore <tombstone_id> --apply` restores trash files and removes the SQLite tombstone.
   - Normal wiki chat rules exclude `_trash/**` unless the user explicitly asks for inactive/deleted data.
 - **status**: completed. The product CLI now supports trash, trash-apply, trash-list, and restore. Reconcile reports untombstoned `_trash/**` entries as `trash_pending`. Runtime-kit bootstrap creates `_trash/`, rules mark it inactive, and the chat prompt excludes it by default.
+
+## Sprint 30 — Registered Renderer QA Matrix
+
+- **id**: `sprint-30-registered-renderer-qa-matrix`
+- **goal**: Prove every registered renderer routes to the right data, rejects known wrong-source cases, and produces inspectable final artifacts from real local test documents.
+- **tasks**:
+  - Add a renderer QA matrix covering request shape, required source shape, expected outputs, and guard cases for every registered renderer.
+  - Add a product smoke command that ingests local test documents from the configured vault's `to-be-removed/` directory.
+  - Exercise registered renderers for FX charts/statistics, comparison tables, summary reports, timelines, invoice summaries, meeting action items, glossary extraction, topic indexes, and NotebookLM export packs.
+  - Include guard cases for custom `fx.chart.1y`, missing-currency `fx.stats.period`, invoice false positives, and meeting false positives.
+  - Copy generated final artifacts into `to-be-removed-result/<timestamp>/` for manual inspection.
+- **acceptance criteria**:
+  - `npm run smoke:wiki-renderers` imports the local test documents, runs all renderer success cases, runs guard cases, copies final artifacts, and leaves `vault reconcile --json` clean.
+  - Runtime-kit documentation records the matrix so future registered renderers can add rows and smoke expectations before promotion.
+  - Existing `smoke:fx-wiki`, typecheck, build, full tests, and checkpoint remain green.
+- **status**: completed. Added `scripts/smoke-wiki-renderers.ts` and `npm run smoke:wiki-renderers`; it imports the real local files under `yoni-llm-wiki/to-be-removed`, creates raw bundles/wiki source pages, runs the full registered renderer matrix and guard cases, and copies derived artifacts plus metadata into `yoni-llm-wiki/to-be-removed-result/<timestamp>/`. Runtime-kit now documents the renderer QA matrix in `docs/renderer-qa-matrix.md`.
 
 ## Iteration iter-2 — LLMwiki Foundation
 

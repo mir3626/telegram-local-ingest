@@ -277,11 +277,23 @@
       "status": "passed",
       "startedAt": "2026-04-30T09:00:00.000Z",
       "completedAt": "2026-04-30T09:10:00.000Z"
+    },
+    {
+      "id": "sprint-30-registered-renderer-qa-matrix",
+      "name": "Registered Renderer QA Matrix",
+      "status": "passed",
+      "completedAt": "2026-04-30T20:34:56.035Z",
+      "actualLoc": {
+        "added": 11,
+        "deleted": 2,
+        "net": 9,
+        "filesChanged": 3
+      }
     }
   ],
   "handoff": {
-    "currentSprintId": "idle",
-    "lastActionSummary": "Completed Sprint 27 chart format expansion: fx.stats.period now supports requested PNG/SVG/PDF chart outputs, and smoke:fx-wiki verifies all three formats.",
+    "currentSprintId": "next-sprint-planning",
+    "lastActionSummary": "Registered renderer QA matrix completed: runtime-kit matrix documented, product smoke ingests real to-be-removed test documents, runs all registered renderer success and guard cases, copies final artifacts to yoni-llm-wiki/to-be-removed-result, and leaves reconcile clean.",
     "orchestratorContextBudget": "medium",
     "preferencesActive": [
       "Telegram Local Bot API Server for large files",
@@ -301,7 +313,7 @@
       "Dashboard visual changes should preserve the polished operations-console style: command bar, compact metric ribbon, thin bordered surfaces, restrained status accents, and dark live-log terminal"
     ],
     "handoffDocPath": ".vibe/agent/handoff.md",
-    "updatedAt": "2026-04-29T12:37:50.000Z"
+    "updatedAt": "2026-04-30T20:34:56.035Z"
   },
   "policies": {
     "scratchpadPath": ".vibe/agent/handoff.md",
@@ -391,6 +403,19 @@
       "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
       "acknowledgedAt": "2026-04-28T05:29:36.846Z",
       "acknowledgement": "INFO-level mature-downstream LOC signal; Sprint 20 added a bounded ops-dashboard app with focused/full verification and no blocking risk."
+    },
+    {
+      "id": "lightweight-audit-sprint-30-registered-renderer-qa-matrix",
+      "raisedBy": "vibe-audit-lightweight",
+      "targetSprint": "*",
+      "text": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "status": "acknowledged",
+      "createdAt": "2026-04-30T20:34:56.382Z",
+      "level": "INFO",
+      "code": "LOC_THRESHOLD_BREACH",
+      "message": "app LOC 5831 > 2000 across 38 files (src) - Evaluator prototype exception is disabled",
+      "acknowledgedAt": "2026-04-30T20:34:56.382Z",
+      "acknowledgement": "INFO-level mature-downstream LOC signal; Sprint 30 added a bounded smoke harness and documentation for registered renderer QA with typecheck, build, full tests, live smoke, and reconcile verification."
     }
   ],
   "lastSprintScope": [
@@ -400,7 +425,8 @@
     "docs/plans/sprint-roadmap.md",
     "package.json",
     "scripts/smoke-fx-wiki-workflow.mjs",
-    ".vibe/agent/sprint-status.json"
+    ".vibe/agent/sprint-status.json",
+    "scripts/smoke-wiki-renderers.ts"
   ],
   "lastSprintScopeGlob": [
     "apps/ops-cli/package.json",
@@ -409,10 +435,11 @@
     "docs/plans/sprint-roadmap.md",
     "package.json",
     "scripts/smoke-fx-wiki-workflow.mjs",
-    ".vibe/agent/sprint-status.json"
+    ".vibe/agent/sprint-status.json",
+    "scripts/smoke-wiki-renderers.ts"
   ],
-  "sprintsSinceLastAudit": 3,
-  "stateUpdatedAt": "2026-04-30T01:35:00.000Z",
+  "sprintsSinceLastAudit": 4,
+  "stateUpdatedAt": "2026-04-30T20:34:56.035Z",
   "verifiedAt": "2026-04-30T01:35:00.000Z",
   "verificationCommands": [
     {

@@ -10,6 +10,16 @@
 
 ## Status
 
+### Sprint 30 Closed — Registered Renderer QA Matrix — 2026-05-01
+
+Added `npm run smoke:wiki-renderers` as the product acceptance smoke for the registered renderer matrix. The smoke imports real local test files from `/home/tony/workspace/yoni-llm-wiki/to-be-removed`, writes raw bundles and `wiki/sources/**` pages, runs all registered renderer success paths, runs guard cases for known wrong-source/wrong-parameter risks, verifies reconcile stays clean, and copies final artifacts plus package metadata into `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/<timestamp>/` for manual inspection.
+
+The successful run copied outputs to `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/20260430_203146840`. It covered `fx.chart.1y`, `fx.stats.period`, `table.compare` for FX and invoice documents, `report.summary`, `timeline.extract`, `invoice.vendor-summary`, `meeting.actions`, `glossary.extract`, `wiki.index.topic`, and `notebooklm.export-pack`. Guard coverage includes custom `fx.chart.1y` rejection, missing-currency `fx.stats.period` rejection, invoice false-positive skipping, and meeting/action false-positive skipping.
+
+Runtime-kit documentation now has `docs/renderer-qa-matrix.md`, and `docs/derived-action-library.md` links to it. The runtime-kit docs were deployed to `/home/tony/workspace/yoni-llm-wiki`; `npm run vault:diff -- --vault ../yoni-llm-wiki` reports no framework drift. Product `npm run smoke:fx-wiki` was relaxed from FX-only vault to FX-source-available vault because renderer QA intentionally ingests non-FX test documents.
+
+Verification passed: runtime-kit `npm run lint`, runtime-kit `npm run vault:diff -- --vault ../yoni-llm-wiki`, product `npm run smoke:wiki-renderers`, product `npm run smoke:fx-wiki`, product `npm run tlgi -- vault reconcile --json`, product `npm run typecheck`, product `npm run build`, and full `npm test` (`481` passed, `1` skipped).
+
 ### Registered Renderer Source Guards — 2026-05-01
 
 Reviewed the remaining registered renderers for wrong-source or wrong-interpretation risks after the exact-date FX comparison fix. The highest-risk case was `fx.chart.1y`: it wrapped the global one-year FX chart script and ignored artifact `sources`/`parameters`, so a custom date/currency request routed to that renderer could silently produce the default chart. `llmwiki-runtime-kit/renderers/fx-chart-1y/render.mjs` now rejects explicit sources, currencies, dates, `windowDays`, and chart format parameters and instructs callers to use `fx.stats.period` for custom requests. `scripts/chat.mjs` now emits `fx.chart.1y` with empty `sources`/`parameters` only for generic recent one-year FX chart requests.

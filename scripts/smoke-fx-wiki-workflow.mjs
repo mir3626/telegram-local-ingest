@@ -23,7 +23,7 @@ async function main() {
   await fs.mkdir(requestDir, { recursive: true });
 
   await assertDirectory(vaultRoot, "OBSIDIAN_VAULT_PATH");
-  await assertFxOnlyVault(vaultRoot);
+  await assertFxSourcesAvailable(vaultRoot);
   await assertCleanReconcile("before");
 
   const sampleSources = await pickFxSourcePages(vaultRoot, "2025-04-01", "2025-04-10", 3);
@@ -146,16 +146,16 @@ async function runArtifact({ requestDir, sqliteDbPath, prompt, request, expected
   };
 }
 
-async function assertFxOnlyVault(vaultRoot) {
+async function assertFxSourcesAvailable(vaultRoot) {
   const sourceDir = path.join(vaultRoot, "wiki", "sources");
   const files = await listFilesIfExists(sourceDir);
   const sourcePages = files.filter((filePath) => filePath.endsWith(".md"));
   if (sourcePages.length === 0) {
     throw new Error("No wiki source pages found");
   }
-  const nonFx = sourcePages.filter((filePath) => !path.basename(filePath).startsWith("fx_koreaexim_"));
-  if (nonFx.length > 0) {
-    throw new Error(`Expected FX-only wiki sources, found non-FX source page: ${path.relative(vaultRoot, nonFx[0])}`);
+  const fx = sourcePages.filter((filePath) => path.basename(filePath).startsWith("fx_koreaexim_"));
+  if (fx.length === 0) {
+    throw new Error("No FX wiki source pages found");
   }
 }
 
