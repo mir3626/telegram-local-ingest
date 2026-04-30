@@ -114,6 +114,8 @@ async function runArtifact({ requestDir, sqliteDbPath, prompt, request, expected
   for (const relative of expectedFiles) {
     await assertFile(path.join(bundlePath, relative));
   }
+  const presentationRelative = `artifacts/${safeArtifactId(request.artifactId || request.title)}_${safePresentationTitle(request.title)}.docx`;
+  await assertFile(path.join(bundlePath, presentationRelative));
   for (const suffix of expectedArtifactSuffixes) {
     if (!artifactPaths.some((artifactPath) => artifactPath.endsWith(suffix))) {
       throw new Error(`Expected artifact suffix ${suffix} in ${artifactPaths.join(", ")}`);
@@ -273,6 +275,20 @@ function requiredEnv(key) {
     throw new Error(`${key} is required`);
   }
   return value;
+}
+
+function safeArtifactId(value) {
+  return String(value).trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "artifact";
+}
+
+function safePresentationTitle(value) {
+  return String(value)
+    .normalize("NFKC")
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 90) || "presentation";
 }
 
 function loadEnvFile(filePath) {

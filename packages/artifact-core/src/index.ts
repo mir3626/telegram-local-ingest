@@ -572,6 +572,18 @@ async function finalizeDerivedPackage(input: {
   }
 
   const generatedAt = new Date().toISOString();
+  const presentationArtifacts = await createPresentationArtifacts({
+    request: input.request,
+    artifactId,
+    bundlePath,
+    artifactsDir,
+    sourcePrompt: input.sourcePrompt,
+    sourceSnapshot: input.sourceSnapshot,
+    contentArtifacts: [...packaged],
+    generatedAt,
+    ...(input.env ? { env: input.env } : {}),
+  });
+  packaged.push(...presentationArtifacts);
   const provenance = {
     artifact_id: artifactId,
     title: input.request.title,
@@ -691,6 +703,480 @@ async function finalizeDerivedPackage(input: {
     result.wikiPageRelative = wikiPageRelative;
   }
   return result;
+}
+
+async function createPresentationArtifacts(input: {
+  request: ArtifactRequest;
+  artifactId: string;
+  bundlePath: string;
+  artifactsDir: string;
+  sourcePrompt: string;
+  sourceSnapshot: ArtifactSourceSnapshot[];
+  contentArtifacts: PackagedArtifact[];
+  generatedAt: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<PackagedArtifact[]> {
+  const formats = presentationFormats(input.request);
+  if (formats.length === 0) {
+    return [];
+  }
+  const baseName = presentationBaseName(input.artifactId, input.request.title);
+  const docxPath = path.join(input.artifactsDir, `${baseName}.docx`);
+  await writePresentationDocx({
+    outputPath: docxPath,
+    title: input.request.title,
+    artifactKind: input.request.artifactKind,
+    generatedAt: input.generatedAt,
+    sourcePrompt: input.sourcePrompt,
+    sourceSnapshot: input.sourceSnapshot,
+    artifacts: input.contentArtifacts,
+    bundlePath: input.bundlePath,
+  });
+  const artifacts: PackagedArtifact[] = [await packagePresentationArtifact(docxPath, `artifacts/${path.basename(docxPath)}`, "presentation")];
+  if (formats.includes("pdf")) {
+    const pdfPath = path.join(input.artifactsDir, `${baseName}.pdf`);
+    await renderPresentationPdf({
+      docxPath,
+      pdfPath,
+      ...(input.env ? { env: input.env } : {}),
+    });
+    artifacts.push(await packagePresentationArtifact(pdfPath, `artifacts/${path.basename(pdfPath)}`, "presentation"));
+  }
+  return artifacts;
+}
+
+function presentationFormats(request: ArtifactRequest): Array<"docx" | "pdf"> {
+  const parameters = request.parameters;
+  const presentation = isRecord(parameters.presentation) ? parameters.presentation : {};
+  const rawFormats = presentation.formats ?? parameters.presentationFormats ?? parameters.outputFormats;
+  const values = Array.isArray(rawFormats)
+    ? rawFormats
+    : typeof rawFormats === "string"
+      ? rawFormats.split(/[\s,]+/)
+      : ["docx"];
+  const formats = new Set<"docx" | "pdf">(["docx"]);
+  for (const value of values) {
+    const normalized = String(value).trim().toLowerCase().replace(/^\./, "");
+    if (normalized === "pdf") {
+      formats.add("pdf");
+    }
+    if (normalized === "docx") {
+      formats.add("docx");
+    }
+  }
+  return [...formats];
+}
+
+async function packagePresentationArtifact(filePath: string, relativePath: string, role: string): Promise<PackagedArtifact> {
+  const stat = await fs.stat(filePath);
+  return {
+    id: `artifact:${safeName(path.parse(filePath).name)}`,
+    role,
+    path: relativePath,
+    mediaType: inferMediaType(filePath),
+    sha256: await sha256File(filePath),
+    sizeBytes: stat.size,
+  };
+}
+
+function presentationBaseName(artifactId: string, title: string): string {
+  const titleSuffix = safeUnicodeFileName(title) || "presentation";
+  return `${safeName(artifactId)}_${titleSuffix}`;
+}
+
+async function writePresentationDocx(input: {
+  outputPath: string;
+  title: string;
+  artifactKind: string;
+  generatedAt: string;
+  sourcePrompt: string;
+  sourceSnapshot: ArtifactSourceSnapshot[];
+  artifacts: PackagedArtifact[];
+  bundlePath: string;
+}): Promise<void> {
+  const entries: Array<{ name: string; content: Buffer | string }> = [];
+  const relationships: Array<{ id: string; type: string; target: string }> = [];
+  const contentTypeDefaults = new Map<string, string>([
+    ["rels", "application/vnd.openxmlformats-package.relationships+xml"],
+    ["xml", "application/xml"],
+  ]);
+  const body: string[] = [
+    paragraphXml(input.title, "Title"),
+    paragraphXml(`Artifact kind: ${input.artifactKind}`, "Subtitle"),
+    paragraphXml(`Generated: ${input.generatedAt}`, "Muted"),
+    headingXml("Overview", 1),
+    tableXml([
+      ["Field", "Value"],
+      ["Title", input.title],
+      ["Artifact kind", input.artifactKind],
+      ["Content artifacts", String(input.artifacts.length)],
+      ["Source pages", String(input.sourceSnapshot.length)],
+    ], true),
+  ];
+
+  const prompt = input.sourcePrompt.trim();
+  if (prompt) {
+    body.push(headingXml("User Request", 1));
+    body.push(...plainTextParagraphs(prompt, "BodyText"));
+  }
+
+  body.push(headingXml("Generated Content", 1));
+  body.push(tableXml([
+    ["File", "Role", "Type", "Size"],
+    ...input.artifacts.map((artifact) => [
+      artifact.path.replace(/^artifacts\//, ""),
+      artifact.role,
+      artifact.mediaType,
+      formatBytes(artifact.sizeBytes),
+    ]),
+  ], true));
+
+  for (const artifact of input.artifacts) {
+    const artifactPath = path.join(input.bundlePath, artifact.path);
+    body.push(headingXml(artifact.path.replace(/^artifacts\//, ""), 2));
+    if (isEmbeddableDocxImage(artifact)) {
+      const mediaName = safeFileName(path.basename(artifact.path));
+      const relationshipId = `rId${relationships.length + 1}`;
+      relationships.push({
+        id: relationshipId,
+        type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        target: `media/${mediaName}`,
+      });
+      contentTypeDefaults.set(path.extname(mediaName).slice(1).toLowerCase(), artifact.mediaType);
+      entries.push({ name: `word/media/${mediaName}`, content: await fs.readFile(artifactPath) });
+      body.push(imageParagraphXml(relationshipId, artifact.path.replace(/^artifacts\//, "")));
+      continue;
+    }
+
+    if (artifact.mediaType === "text/csv") {
+      const csvTable = await csvPreviewTable(artifactPath);
+      if (csvTable.length > 0) {
+        body.push(tableXml(csvTable, true));
+        continue;
+      }
+    }
+
+    const preview = await textPreview(artifactPath, artifact);
+    if (preview) {
+      body.push(...plainTextParagraphs(preview, "BodyText"));
+    } else {
+      body.push(paragraphXml(`Included as file: ${artifact.path} (${artifact.mediaType}, ${formatBytes(artifact.sizeBytes)})`, "Muted"));
+    }
+  }
+
+  if (input.sourceSnapshot.length > 0) {
+    body.push(headingXml("Source Basis", 1));
+    body.push(tableXml([
+      ["Source", "Type", "Size", "SHA-256"],
+      ...input.sourceSnapshot.slice(0, 30).map((source) => [
+        source.path,
+        source.type ?? "",
+        formatBytes(source.sizeBytes),
+        source.sha256.slice(0, 16),
+      ]),
+    ], true));
+    if (input.sourceSnapshot.length > 30) {
+      body.push(paragraphXml(`Additional sources omitted from this readable view: ${input.sourceSnapshot.length - 30}`, "Muted"));
+    }
+  }
+
+  entries.push(
+    { name: "[Content_Types].xml", content: contentTypesXml(contentTypeDefaults) },
+    { name: "_rels/.rels", content: rootRelationshipsXml() },
+    { name: "word/_rels/document.xml.rels", content: documentRelationshipsXml(relationships) },
+    { name: "word/styles.xml", content: stylesXml() },
+    { name: "word/document.xml", content: documentXml(body.join("")) },
+  );
+  await writeZip(entries, input.outputPath);
+}
+
+async function renderPresentationPdf(input: {
+  docxPath: string;
+  pdfPath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const tempDir = await fs.mkdtemp(path.join(path.dirname(input.pdfPath), ".presentation-pdf-"));
+  try {
+    const tempDocx = path.join(tempDir, "presentation.docx");
+    await fs.copyFile(input.docxPath, tempDocx);
+    const executable = input.env?.LIBREOFFICE_BIN ?? input.env?.SOFFICE_BIN ?? "libreoffice";
+    await runBufferedCommand(executable, ["--headless", "--convert-to", "pdf", "--outdir", tempDir, tempDocx], {
+      cwd: tempDir,
+      env: input.env ?? process.env,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    });
+    await fs.copyFile(path.join(tempDir, "presentation.pdf"), input.pdfPath);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+function isEmbeddableDocxImage(artifact: PackagedArtifact): boolean {
+  return ["image/png", "image/jpeg"].includes(artifact.mediaType);
+}
+
+async function textPreview(filePath: string, artifact: PackagedArtifact): Promise<string | null> {
+  if (!["text/markdown", "text/plain", "application/json"].includes(artifact.mediaType)) {
+    return null;
+  }
+  if (artifact.sizeBytes > 128 * 1024) {
+    return `Text preview skipped because the artifact is large (${formatBytes(artifact.sizeBytes)}).`;
+  }
+  const text = await fs.readFile(filePath, "utf8");
+  return text.length > 4000 ? `${text.slice(0, 4000)}\n\n[Preview truncated]` : text;
+}
+
+async function csvPreviewTable(filePath: string): Promise<string[][]> {
+  const text = await fs.readFile(filePath, "utf8");
+  const rows = parseCsvRows(text).slice(0, 9).map((row) => row.slice(0, 6));
+  return rows.length > 0 ? rows : [];
+}
+
+function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let current = "";
+  let row: string[] = [];
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? "";
+    const next = text[index + 1] ?? "";
+    if (quoted && char === '"' && next === '"') {
+      current += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && char === ",") {
+      row.push(current);
+      current = "";
+      continue;
+    }
+    if (!quoted && (char === "\n" || char === "\r")) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+      row.push(current);
+      if (row.some((cell) => cell.trim())) {
+        rows.push(row);
+      }
+      row = [];
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  row.push(current);
+  if (row.some((cell) => cell.trim())) {
+    rows.push(row);
+  }
+  return rows;
+}
+
+function plainTextParagraphs(text: string, style = "BodyText"): string[] {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 80)
+    .map((line) => paragraphXml(line.replace(/^#{1,6}\s+/, ""), style));
+}
+
+function documentXml(bodyXml: string): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">',
+    `<w:body>${bodyXml}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body>`,
+    "</w:document>",
+  ].join("");
+}
+
+function paragraphXml(text: string, style = "BodyText"): string {
+  return `<w:p><w:pPr><w:pStyle w:val="${xmlEscape(style)}"/></w:pPr><w:r><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+}
+
+function headingXml(text: string, level: 1 | 2): string {
+  return paragraphXml(text, level === 1 ? "Heading1" : "Heading2");
+}
+
+function tableXml(rows: string[][], header = false): string {
+  const width = 9360;
+  const maxColumns = Math.max(1, ...rows.map((row) => row.length));
+  const columnWidth = Math.floor(width / maxColumns);
+  const tableRows = rows.map((row, rowIndex) => {
+    const cells = Array.from({ length: maxColumns }, (_, cellIndex) => tableCellXml(row[cellIndex] ?? "", columnWidth, header && rowIndex === 0)).join("");
+    return `<w:tr>${cells}</w:tr>`;
+  }).join("");
+  return [
+    "<w:tbl>",
+    `<w:tblPr><w:tblW w:w="${width}" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="D0D7DE"/><w:left w:val="single" w:sz="4" w:color="D0D7DE"/><w:bottom w:val="single" w:sz="4" w:color="D0D7DE"/><w:right w:val="single" w:sz="4" w:color="D0D7DE"/><w:insideH w:val="single" w:sz="4" w:color="D0D7DE"/><w:insideV w:val="single" w:sz="4" w:color="D0D7DE"/></w:tblBorders></w:tblPr>`,
+    `<w:tblGrid>${Array.from({ length: maxColumns }, () => `<w:gridCol w:w="${columnWidth}"/>`).join("")}</w:tblGrid>`,
+    tableRows,
+    "</w:tbl>",
+  ].join("");
+}
+
+function tableCellXml(text: string, width: number, header: boolean): string {
+  const shading = header ? '<w:shd w:fill="EAF2F8"/>' : "";
+  const run = header ? `<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>` : `<w:r><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
+  return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${shading}<w:tcMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tcMar></w:tcPr><w:p>${run}</w:p></w:tc>`;
+}
+
+function imageParagraphXml(relationshipId: string, name: string): string {
+  const cx = 7_600_000;
+  const cy = 4_300_000;
+  return [
+    "<w:p><w:r><w:drawing>",
+    `<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="1" name="${xmlEscape(name)}"/>`,
+    '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>',
+    '<pic:nvPicPr><pic:cNvPr id="0" name="artifact image"/><pic:cNvPicPr/></pic:nvPicPr>',
+    `<pic:blipFill><a:blip r:embed="${xmlEscape(relationshipId)}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`,
+    `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`,
+    "</pic:pic></a:graphicData></a:graphic></wp:inline>",
+    "</w:drawing></w:r></w:p>",
+  ].join("");
+}
+
+function contentTypesXml(defaults: Map<string, string>): string {
+  const defaultXml = [...defaults.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([extension, contentType]) => `<Default Extension="${xmlEscape(extension)}" ContentType="${xmlEscape(contentType)}"/>`)
+    .join("");
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+    defaultXml,
+    '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>',
+    '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>',
+    "</Types>",
+  ].join("");
+}
+
+function rootRelationshipsXml(): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    '<Relationship Id="rDocument" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>',
+    "</Relationships>",
+  ].join("");
+}
+
+function documentRelationshipsXml(relationships: Array<{ id: string; type: string; target: string }>): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    '<Relationship Id="rStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
+    ...relationships.map((relationship) => `<Relationship Id="${xmlEscape(relationship.id)}" Type="${xmlEscape(relationship.type)}" Target="${xmlEscape(relationship.target)}"/>`),
+    "</Relationships>",
+  ].join("");
+}
+
+function stylesXml(): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+    '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/></w:rPr></w:style>',
+    '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="180"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style>',
+    '<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="120"/></w:pPr><w:rPr><w:color w:val="5B6770"/><w:sz w:val="22"/></w:rPr></w:style>',
+    '<w:style w:type="paragraph" w:styleId="Muted"><w:name w:val="Muted"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:color w:val="6B7280"/><w:sz w:val="18"/></w:rPr></w:style>',
+    '<w:style w:type="paragraph" w:styleId="BodyText"><w:name w:val="Body Text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="100" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="22"/></w:rPr></w:style>',
+    '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="260" w:after="120"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>',
+    '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>',
+    "</w:styles>",
+  ].join("");
+}
+
+async function writeZip(entries: Array<{ name: string; content: Buffer | string }>, targetPath: string): Promise<void> {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const fileName = entry.name.replace(/^\/+/, "");
+    const nameBuffer = Buffer.from(fileName, "utf8");
+    const data = Buffer.isBuffer(entry.content) ? entry.content : Buffer.from(entry.content, "utf8");
+    const crc = crc32(data);
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0x0800, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt32LE(crc, 14);
+    localHeader.writeUInt32LE(data.length, 18);
+    localHeader.writeUInt32LE(data.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    localParts.push(localHeader, nameBuffer, data);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0x0800, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(data.length, 20);
+    centralHeader.writeUInt32LE(data.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+    offset += localHeader.length + nameBuffer.length + data.length;
+  }
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  await fs.writeFile(targetPath, Buffer.concat([...localParts, centralDirectory, end]));
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    const lookup = CRC_TABLE[(crc ^ byte) & 0xff] ?? 0;
+    crc = lookup ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let c = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+  }
+  return c >>> 0;
+});
+
+function safeUnicodeFileName(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 90);
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function buildSourceSnapshot(

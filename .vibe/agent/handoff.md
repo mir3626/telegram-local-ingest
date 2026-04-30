@@ -10,6 +10,14 @@
 
 ## Status
 
+### Sprint 28 Closed — Derived Presentation Documents — 2026-04-30
+
+Derived artifact execution now has a common presentation stage. Registered and generated renderers still produce reusable raw content artifacts such as charts, CSV/XLSX tables, Markdown summaries, JSON timelines, and ZIP packs. After packaging those outputs, `packages/artifact-core` creates a readable DOCX presentation artifact named `<artifact_id>_<artifact title>.docx`, where the suffix comes from the agent-supplied artifact title. If a request explicitly includes PDF presentation formats, the worker converts the presentation DOCX through LibreOffice and packages the PDF as a second presentation artifact.
+
+Telegram wiki-chat artifact delivery now sends presentation artifacts first when available, so users receive the readable/editable document by default while raw content artifacts remain in `derived/**/artifacts/` for wiki ingest, provenance, and reuse. The runtime-kit chat prompt was updated so agents do not create presentation DOCX/PDF in renderer code; they request PDF delivery with `parameters.presentationFormats` only when the user asks for PDF.
+
+Verification passed with runtime-kit lint/deploy/diff, product typecheck, focused artifact-core/worker tests, `npm run smoke:fx-wiki`, `npm run tlgi -- vault reconcile --json`, product build, full test suite, diff checks, and UTF-8/mojibake checks.
+
 ### Sprint 27 Closed — Chart Format Expansion — 2026-04-30
 
 `fx.stats.period` in `llmwiki-runtime-kit` now supports requested chart formats through `parameters.chartFormats` or `parameters.formats`. Supported values are `png`, `svg`, and `pdf`; the default remains `png` so ordinary Telegram chart requests stay compact. The renderer declares the correct media types for generated chart artifacts.

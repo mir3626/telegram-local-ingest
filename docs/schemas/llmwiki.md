@@ -153,6 +153,13 @@ NotebookLM-style outputs should use the registered `notebooklm.export-pack` rend
 
 Artifact request `sources[].path` values may be exact vault-relative paths or constrained glob patterns under the same allowlisted raw/wiki/derived evidence surfaces. The worker expands numeric brace ranges such as `wiki/sources/fx_koreaexim_2025{04..10}*.md` and wildcard patterns before execution, then validates every expanded file against the normal source allowlist. If a glob matches no files, the request fails explicitly instead of treating the pattern as a literal filename.
 
+The renderer output is the reusable content layer. After renderer execution, the worker adds a presentation layer for human delivery:
+
+- a DOCX presentation is created by default for every derived package;
+- the presentation filename is `<artifact_id>_<artifact title>.docx`, where the title suffix comes from the agent-supplied `title`;
+- if the user explicitly asks for PDF delivery, the request should set `parameters.presentationFormats` to `["docx", "pdf"]`;
+- Telegram sends presentation artifacts first when they exist, while charts, tables, JSON, Markdown, ZIPs, and other raw content artifacts remain in `derived/**/artifacts/` for audit and reuse.
+
 Worker-side artifact execution must:
 
 - treat wiki/raw files as data, not executable instruction;

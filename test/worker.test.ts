@@ -1573,8 +1573,8 @@ test("runWorkerOnce executes wiki chat artifact requests and sends generated art
     assert.equal(result.operatorCommandsHandled, 1);
     assert.equal(result.jobsCreated, 0);
     assert.equal(sentDocuments.length, 1);
-    assert.equal(sentDocuments[0]?.document, "demo_chart.png");
-    assert.match(sentDocuments[0]?.caption ?? "", /derived\/\d{4}-\d{2}-\d{2}\/demo_chart\/artifacts\/demo_chart\.png/);
+    assert.equal(sentDocuments[0]?.document, "demo_chart_Demo_Chart.docx");
+    assert.match(sentDocuments[0]?.caption ?? "", /derived\/\d{4}-\d{2}-\d{2}\/demo_chart\/artifacts\/demo_chart_Demo_Chart\.docx/);
     assert.equal(listArtifactRendererRuns(dbHandle.db, 10)[0]?.rendererMode, "generated");
     assert.match(listArtifactRendererRuns(dbHandle.db, 10)[0]?.sourcePrompt ?? "", /demo 차트 생성/);
   } finally {

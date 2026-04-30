@@ -2,7 +2,7 @@
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
 > **Current**: next-sprint-planning
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library, sprint-26-fx-wiki-workflow-acceptance, sprint-27-chart-format-expansion
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library, sprint-26-fx-wiki-workflow-acceptance, sprint-27-chart-format-expansion, sprint-28-derived-presentation-documents
 > **Pending**: sprint-21-bootstrap-packaging (deferred)
 <!-- END:VIBE:CURRENT-SPRINT -->
 
@@ -475,6 +475,23 @@ Telegram mobile/desktop
   - No generated renderer is needed for common FX chart export format requests.
 - **status**: completed. `fx.stats.period` now accepts `parameters.chartFormats` or `parameters.formats`, defaults to PNG, and can emit PNG/SVG/PDF. The live vault was updated through runtime-kit allowlist deploy, and the product smoke now validates all three chart formats.
 
+## Sprint 28 — Derived Presentation Documents
+
+- **id**: `sprint-28-derived-presentation-documents`
+- **goal**: Wrap every second-order artifact package in a human-readable document by default while preserving renderer-produced raw content artifacts for reuse.
+- **tasks**:
+  - Add a worker-owned presentation stage after registered/generated renderer execution.
+  - Create a default DOCX presentation document that embeds readable summaries, tables, and images from generated content artifacts.
+  - Use title-based delivery names shaped as `<artifact_id>_<agent-generated artifact title>.docx`.
+  - Support optional PDF presentation output when the artifact request explicitly asks for PDF delivery.
+  - Send presentation artifacts to Telegram first, while keeping raw charts/tables/Markdown/JSON/ZIPs in the derived package for audit and wiki ingest.
+  - Update wiki chat guidance so agents do not generate presentation DOCX/PDF themselves.
+- **acceptance criteria**:
+  - Any derived package has at least one role `presentation` DOCX artifact.
+  - Telegram wiki-chat artifact delivery sends the presentation document by default.
+  - `npm run smoke:fx-wiki` verifies the presentation document alongside the FX chart/table/export content artifacts.
+- **status**: completed. `packages/artifact-core` now creates DOCX presentation artifacts for derived packages, optionally converts them to PDF through LibreOffice, and names them with the agent-supplied artifact title suffix. The worker now delivers presentation artifacts first for wiki-chat artifact requests. Runtime-kit chat guidance tells agents to rely on the worker presentation layer and request PDF only through `parameters.presentationFormats`.
+
 ## Iteration iter-2 — LLMwiki Foundation
 
 This iteration turns the completed Telegram ingest utility into a Karpathy-style LLMwiki source pipeline. The core decision is that rendered user deliverables are not wiki raw. Wiki raw is the immutable raw bundle plus deterministic canonical text projections declared by `manifest.yaml` `wiki_inputs`.
@@ -550,6 +567,8 @@ The automation sprints were added to the active iteration after the LLMwiki inge
 - **id**: `sprint-26-fx-wiki-workflow-acceptance`
 - **status**: completed.
 - **id**: `sprint-27-chart-format-expansion`
+- **status**: completed.
+- **id**: `sprint-28-derived-presentation-documents`
 - **status**: completed.
 
 ### Sprint 13 Carryover — Vault Reconcile And Retention

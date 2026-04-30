@@ -19,6 +19,7 @@ import {
   buildArtifactRunId,
   runArtifactRequest,
   type ArtifactRequest,
+  type PackagedArtifact,
 } from "@telegram-local-ingest/artifact-core";
 import { createIngestJobFromTelegramMessage, createQueuedJobFromTelegramMessage } from "@telegram-local-ingest/capture";
 import {
@@ -1544,14 +1545,16 @@ async function handleWikiChatArtifactRequests(
         ...(wikiPagePath ? { wikiPagePath } : {}),
         endedAt: result.endedAt,
       });
-      for (const artifact of result.artifacts) {
-        const artifactPath = path.join(result.derivedBundlePath, artifact.path);
-        const vaultRelativePath = path.relative(vaultRoot, artifactPath).replace(/\\/g, "/");
-        attachments.push(await resolveWikiChatAttachment({
-          path: vaultRelativePath,
-          label: `${request.title} · ${path.basename(artifact.path)}`,
-          mimeType: artifact.mediaType,
-        }, { vaultRoot, rawRoot, wikiRoot }));
+      if (request.delivery.sendToTelegram) {
+        for (const artifact of selectWikiChatDeliveryArtifacts(result.artifacts)) {
+          const artifactPath = path.join(result.derivedBundlePath, artifact.path);
+          const vaultRelativePath = path.relative(vaultRoot, artifactPath).replace(/\\/g, "/");
+          attachments.push(await resolveWikiChatAttachment({
+            path: vaultRelativePath,
+            label: `${request.title} · ${path.basename(artifact.path)}`,
+            mimeType: artifact.mediaType,
+          }, { vaultRoot, rawRoot, wikiRoot }));
+        }
       }
       await context.telegram.sendMessage(
         message.chatId,
@@ -1579,6 +1582,11 @@ async function handleWikiChatArtifactRequests(
     }
   }
   return attachments;
+}
+
+function selectWikiChatDeliveryArtifacts(artifacts: PackagedArtifact[]): PackagedArtifact[] {
+  const presentation = artifacts.filter((artifact) => artifact.role === "presentation");
+  return presentation.length > 0 ? presentation : artifacts;
 }
 
 async function sendWikiChatAttachment(

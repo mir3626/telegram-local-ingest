@@ -90,6 +90,10 @@ test("generated artifact renderer creates a derived package and records promotab
 
     assert.equal(fs.existsSync(path.join(result.derivedBundlePath, ".finalized")), true);
     assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.md")), true);
+    const presentationPath = path.join(result.derivedBundlePath, "artifacts", "demo_report_Demo_Report.docx");
+    assert.equal(fs.existsSync(presentationPath), true);
+    assert.equal(result.artifacts.some((artifact) => artifact.role === "presentation" && artifact.path.endsWith("_Demo_Report.docx")), true);
+    assert.match(fs.readFileSync(presentationPath).toString("utf8"), /Demo Report/);
     assert.match(fs.readFileSync(path.join(result.derivedBundlePath, "provenance.json"), "utf8"), /demo wiki data/);
     assert.equal(listArtifactRendererRuns(dbHandle.db, 10).length, 1);
     assert.equal(getArtifactRendererRun(dbHandle.db, runId)?.sourcePrompt, prompt);
