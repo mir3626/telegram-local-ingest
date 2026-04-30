@@ -31,6 +31,7 @@ import {
   createArtifactRendererRun,
   createAutomationRun,
   createVaultTombstone,
+  deleteVaultTombstone,
   getArtifactRendererRun,
   getAutomationRunByIdempotency,
   getAutomationScheduleState,
@@ -80,6 +81,7 @@ interface VaultReconcileIssue {
   targetId: string;
   path: string;
   message: string;
+  trashPath?: string;
 }
 
 interface VaultReconcileReport {
@@ -95,11 +97,20 @@ interface ManagedDeletePath {
 }
 
 interface ManagedDeletePlan {
-  targetType: "source_bundle" | "derived_artifact";
+  targetType: "source_bundle" | "automation_run" | "derived_artifact" | "path";
   targetId: string;
   jobId?: string;
   paths: ManagedDeletePath[];
   metadata: Record<string, unknown>;
+}
+
+interface ManagedTrashPath extends ManagedDeletePath {
+  action: "move_to_trash" | "delete_runtime";
+  trashPath?: string;
+}
+
+interface ManagedTrashPlan extends Omit<ManagedDeletePlan, "paths"> {
+  paths: ManagedTrashPath[];
 }
 
 async function main(): Promise<void> {
@@ -311,6 +322,95 @@ async function handleVaultCommand(command: string | undefined, args: string[]): 
         return;
       }
       printVaultReconcileReport(report);
+      return;
+    }
+    if (command === "trash") {
+      const identifier = requiredArg(args, 0, "vault trash requires a vault path, job, source bundle, artifact run, or artifact id");
+      const reason = getOptionValue(args, "--reason") ?? "operator moved item to vault trash";
+      const apply = args.includes("--apply");
+      const plan = await buildManagedTrashPlan(vaultPaths, dbHandle.db, identifier);
+      if (args.includes("--json")) {
+        const result = apply
+          ? await applyManagedTrashPlan(vaultPaths, dbHandle.db, plan, reason)
+          : { applied: false, plan };
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      if (!apply) {
+        printManagedTrashPlan(plan);
+        process.stdout.write("Re-run with --apply to move files into _trash and record a SQLite tombstone.\n");
+        return;
+      }
+      const result = await applyManagedTrashPlan(vaultPaths, dbHandle.db, plan, reason);
+      process.stdout.write(`applied vault trash ${plan.targetType} ${plan.targetId}\n`);
+      process.stdout.write(`moved=${result.moved.length} alreadyTrashed=${result.alreadyTrashed.length} deleted=${result.deleted.length} missing=${result.missing.length} tombstone=${result.tombstone.id}\n`);
+      return;
+    }
+    if (command === "trash-apply") {
+      const reason = getOptionValue(args, "--reason") ?? "operator applied vault trash";
+      const apply = args.includes("--apply");
+      const plans = await buildPendingTrashPlans(vaultPaths, dbHandle.db);
+      if (args.includes("--json")) {
+        const result = apply
+          ? await applyManagedTrashPlans(vaultPaths, dbHandle.db, plans, reason)
+          : { applied: false, plans };
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      if (!apply) {
+        process.stdout.write(`dry-run vault trash-apply plans=${plans.length}\n`);
+        for (const plan of plans) {
+          printManagedTrashPlan(plan);
+        }
+        process.stdout.write("Re-run with --apply to record tombstones for pending _trash moves.\n");
+        return;
+      }
+      const results = await applyManagedTrashPlans(vaultPaths, dbHandle.db, plans, reason);
+      process.stdout.write(`applied vault trash-apply plans=${results.results.length}\n`);
+      for (const result of results.results) {
+        process.stdout.write(`${result.plan.targetType}:${result.plan.targetId} moved=${result.moved.length} alreadyTrashed=${result.alreadyTrashed.length} deleted=${result.deleted.length} missing=${result.missing.length} tombstone=${result.tombstone.id}\n`);
+      }
+      return;
+    }
+    if (command === "trash-list") {
+      const pending = await buildPendingTrashPlans(vaultPaths, dbHandle.db);
+      const tombstones = listVaultTombstones(dbHandle.db, parsePositiveInteger(getOptionValue(args, "--limit") ?? "100", "--limit"));
+      if (args.includes("--json")) {
+        process.stdout.write(`${JSON.stringify({ pending, tombstones }, null, 2)}\n`);
+        return;
+      }
+      process.stdout.write(`Vault trash pending=${pending.length} tombstones=${tombstones.length}\n`);
+      for (const plan of pending) {
+        process.stdout.write(`pending ${plan.targetType}:${plan.targetId}\n`);
+      }
+      for (const tombstone of tombstones) {
+        process.stdout.write(`tombstone ${tombstone.id} ${tombstone.targetType}:${tombstone.targetId} ${tombstone.createdAt}\n`);
+      }
+      return;
+    }
+    if (command === "restore") {
+      const tombstoneId = requiredArg(args, 0, "vault restore requires a tombstone id");
+      const apply = args.includes("--apply");
+      const tombstone = listVaultTombstones(dbHandle.db, 10000).find((item) => item.id === tombstoneId);
+      if (!tombstone) {
+        throw new Error(`Vault tombstone not found: ${tombstoneId}`);
+      }
+      const result = apply
+        ? await applyVaultRestore(vaultPaths, dbHandle.db, tombstone)
+        : { applied: false, plan: buildRestorePlan(vaultPaths, tombstone) };
+      if (args.includes("--json")) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      if (!apply) {
+        process.stdout.write(`dry-run vault restore ${tombstone.id}\n`);
+        for (const item of buildRestorePlan(vaultPaths, tombstone)) {
+          process.stdout.write(`${item.trashPath} -> ${item.originalPath}\n`);
+        }
+        process.stdout.write("Re-run with --apply to move trash files back and remove the SQLite tombstone.\n");
+        return;
+      }
+      process.stdout.write(`restored ${tombstone.id}\n`);
       return;
     }
     if (command === "delete") {
@@ -582,11 +682,11 @@ async function buildVaultReconcileReport(
     const wikiSourcePath = expectedWikiSourcePath(paths, bundle.id);
     expectedRawBundlePaths.add(bundlePath);
     expectedWikiSourcePaths.add(wikiSourcePath);
-    await addMissingIssue(issues, tombstoneIndex, "source_bundle", bundle.id, bundlePath, "error", "raw bundle directory is missing");
-    await addMissingIssue(issues, tombstoneIndex, "source_bundle", bundle.id, manifestPath, "error", "raw bundle manifest is missing");
-    await addMissingIssue(issues, tombstoneIndex, "source_bundle", bundle.id, sourceMarkdownPath, "error", "raw bundle source.md is missing");
-    await addMissingIssue(issues, tombstoneIndex, "source_bundle", bundle.id, finalizedPath, "warn", "raw bundle .finalized marker is missing");
-    await addMissingIssue(issues, tombstoneIndex, "source_bundle", bundle.id, wikiSourcePath, "warn", "wiki source page is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "source_bundle", bundle.id, bundlePath, "error", "raw bundle directory is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "source_bundle", bundle.id, manifestPath, "error", "raw bundle manifest is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "source_bundle", bundle.id, sourceMarkdownPath, "error", "raw bundle source.md is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "source_bundle", bundle.id, finalizedPath, "warn", "raw bundle .finalized marker is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "source_bundle", bundle.id, wikiSourcePath, "warn", "wiki source page is missing");
   }
 
   const seenAutomationBundles = new Set<string>();
@@ -603,11 +703,11 @@ async function buildVaultReconcileReport(
     const wikiSourcePath = expectedWikiSourcePath(paths, bundleId);
     expectedRawBundlePaths.add(bundlePath);
     expectedWikiSourcePaths.add(wikiSourcePath);
-    await addMissingIssue(issues, tombstoneIndex, "automation_run", run.id, bundlePath, "error", "automation raw bundle directory is missing");
-    await addMissingIssue(issues, tombstoneIndex, "automation_run", run.id, manifestPath, "error", "automation raw bundle manifest is missing");
-    await addMissingIssue(issues, tombstoneIndex, "automation_run", run.id, sourceMarkdownPath, "error", "automation raw bundle source.md is missing");
-    await addMissingIssue(issues, tombstoneIndex, "automation_run", run.id, finalizedPath, "warn", "automation raw bundle .finalized marker is missing");
-    await addMissingIssue(issues, tombstoneIndex, "automation_run", run.id, wikiSourcePath, "warn", "automation wiki source page is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "automation_run", run.id, bundlePath, "error", "automation raw bundle directory is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "automation_run", run.id, manifestPath, "error", "automation raw bundle manifest is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "automation_run", run.id, sourceMarkdownPath, "error", "automation raw bundle source.md is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "automation_run", run.id, finalizedPath, "warn", "automation raw bundle .finalized marker is missing");
+    await addMissingIssue(paths, issues, tombstoneIndex, "automation_run", run.id, wikiSourcePath, "warn", "automation wiki source page is missing");
   }
 
   for (const output of outputs) {
@@ -615,6 +715,7 @@ async function buildVaultReconcileReport(
       continue;
     }
     await addMissingIssue(
+      paths,
       issues,
       tombstoneIndex,
       "job_output",
@@ -629,12 +730,12 @@ async function buildVaultReconcileReport(
     if (run.derivedBundlePath) {
       const bundlePath = resolveStoredVaultPath(paths, run.derivedBundlePath);
       expectedDerivedBundlePaths.add(bundlePath);
-      await addMissingIssue(issues, tombstoneIndex, "derived_artifact", run.id, bundlePath, "warn", "derived artifact bundle is missing");
+      await addMissingIssue(paths, issues, tombstoneIndex, "derived_artifact", run.id, bundlePath, "warn", "derived artifact bundle is missing");
     }
     if (run.wikiPagePath) {
       const wikiPagePath = resolveStoredVaultPath(paths, run.wikiPagePath);
       expectedWikiDerivedPaths.add(wikiPagePath);
-      await addMissingIssue(issues, tombstoneIndex, "derived_artifact", run.id, wikiPagePath, "warn", "derived wiki page is missing");
+      await addMissingIssue(paths, issues, tombstoneIndex, "derived_artifact", run.id, wikiPagePath, "warn", "derived wiki page is missing");
     }
   }
 
@@ -694,6 +795,23 @@ async function buildVaultReconcileReport(
     }
   }
 
+  for (const trashPath of await listTrashEvidencePaths(paths)) {
+    if (isTombstonedPath(tombstoneIndex, trashPath)) {
+      continue;
+    }
+    const target = await resolveTrashTarget(paths, db, trashPath);
+    issues.push({
+      severity: "warn",
+      code: "trash_pending",
+      status: "deleted",
+      targetType: target.targetType,
+      targetId: target.targetId,
+      path: target.activePath,
+      trashPath,
+      message: "path has been moved into _trash but no SQLite tombstone exists; run `npm run tlgi -- vault trash-apply --apply`",
+    });
+  }
+
   return {
     checkedAt,
     issues,
@@ -706,25 +824,312 @@ async function buildManagedDeletePlan(
   db: DatabaseSync,
   identifier: string,
 ): Promise<ManagedDeletePlan> {
+  const pathPlan = await tryBuildPathDeletePlan(paths, identifier);
+  if (pathPlan) {
+    return pathPlan;
+  }
+  const normalizedIdentifier = normalizeTrashIdentifier(paths, identifier);
+  const targetIdentifier = targetIdFromKnownVaultPath(paths, normalizedIdentifier) ?? normalizedIdentifier;
+
   const sourceBundles = listSourceBundles(db, 10000);
-  const sourceBundle = sourceBundles.find((bundle) => bundle.id === identifier)
-    ?? getSourceBundleForJob(db, identifier);
+  const sourceBundle = sourceBundles.find((bundle) => bundle.id === targetIdentifier)
+    ?? getSourceBundleForJob(db, targetIdentifier);
   if (sourceBundle) {
     return buildSourceBundleDeletePlan(paths, db, sourceBundle);
   }
 
+  const automationPlan = await tryBuildAutomationBundleDeletePlan(paths, db, targetIdentifier);
+  if (automationPlan) {
+    return automationPlan;
+  }
+
   const artifactRuns = listArtifactRendererRuns(db, 10000);
-  const artifactRun = getArtifactRendererRun(db, identifier)
-    ?? artifactRuns.find((run) => run.artifactId === identifier);
+  const artifactRun = getArtifactRendererRun(db, targetIdentifier)
+    ?? artifactRuns.find((run) => run.artifactId === targetIdentifier);
   if (artifactRun) {
     return buildDerivedArtifactDeletePlan(paths, artifactRun);
   }
 
-  const knownJob = getJob(db, identifier);
+  const knownJob = getJob(db, targetIdentifier);
   if (knownJob) {
-    throw new Error(`Job has no source bundle to delete: ${identifier}`);
+    throw new Error(`Job has no source bundle to delete: ${targetIdentifier}`);
   }
   throw new Error(`No managed delete target found for: ${identifier}`);
+}
+
+async function buildManagedTrashPlan(
+  paths: RuntimePaths & { vaultRoot: string },
+  db: DatabaseSync,
+  identifier: string,
+): Promise<ManagedTrashPlan> {
+  const plan = await buildManagedDeletePlan(paths, db, normalizeTrashIdentifier(paths, identifier));
+  return toManagedTrashPlan(paths, plan);
+}
+
+async function buildPendingTrashPlans(
+  paths: RuntimePaths & { vaultRoot: string },
+  db: DatabaseSync,
+): Promise<ManagedTrashPlan[]> {
+  const tombstoneIndex = buildTombstoneIndex(listVaultTombstones(db, 10000));
+  const plans = new Map<string, ManagedTrashPlan>();
+  for (const trashPath of await listTrashEvidencePaths(paths)) {
+    if (isTombstonedPath(tombstoneIndex, trashPath)) {
+      continue;
+    }
+    try {
+      const plan = await buildManagedTrashPlan(paths, db, trashPath);
+      plans.set(`${plan.targetType}:${plan.targetId}`, plan);
+    } catch {
+      const target = await resolveTrashTarget(paths, db, trashPath);
+      const plan = toManagedTrashPlan(paths, buildPathDeletePlan(paths, target.activePath));
+      plans.set(`${plan.targetType}:${plan.targetId}`, plan);
+    }
+  }
+  return [...plans.values()].sort((left, right) => `${left.targetType}:${left.targetId}`.localeCompare(`${right.targetType}:${right.targetId}`));
+}
+
+async function applyManagedTrashPlans(
+  paths: RuntimePaths & { vaultRoot: string },
+  db: DatabaseSync,
+  plans: ManagedTrashPlan[],
+  reason: string,
+): Promise<{ applied: true; results: Awaited<ReturnType<typeof applyManagedTrashPlan>>[] }> {
+  const results = [];
+  for (const plan of plans) {
+    results.push(await applyManagedTrashPlan(paths, db, plan, reason));
+  }
+  return { applied: true, results };
+}
+
+async function tryBuildPathDeletePlan(
+  paths: RuntimePaths & { vaultRoot: string },
+  identifier: string,
+): Promise<ManagedDeletePlan | null> {
+  const rawPath = identifier.trim();
+  if (!looksLikePathIdentifier(rawPath)) {
+    return null;
+  }
+  const activePath = normalizeTrashIdentifier(paths, rawPath);
+  const resolved = path.resolve(path.isAbsolute(activePath) ? activePath : path.join(paths.vaultRoot, activePath));
+  if (!isPathInside(paths.vaultRoot, resolved)) {
+    throw new Error(`Vault path is outside OBSIDIAN_VAULT_PATH: ${identifier}`);
+  }
+  const rel = toVaultRelativePath(paths, resolved);
+  const sourceMatch = rel.match(/^wiki\/sources\/(.+)\.md$/) ?? rel.match(/^raw\/[^/]+\/([^/]+)(?:\/.*)?$/);
+  if (sourceMatch?.[1]) {
+    return null;
+  }
+  const derivedMatch = rel.match(/^wiki\/derived\/(.+)\.md$/) ?? rel.match(/^derived\/[^/]+\/([^/]+)(?:\/.*)?$/);
+  if (derivedMatch?.[1]) {
+    return null;
+  }
+  return buildPathDeletePlan(paths, resolved);
+}
+
+function buildPathDeletePlan(paths: RuntimePaths & { vaultRoot: string }, activePath: string): ManagedDeletePlan {
+  const resolved = path.resolve(activePath);
+  const targetId = toVaultRelativePath(paths, resolved) || path.basename(resolved);
+  const kind = path.extname(resolved) ? "file" : "directory";
+  return {
+    targetType: "path",
+    targetId,
+    paths: [{ path: resolved, kind }],
+    metadata: {
+      vaultRelativePath: targetId,
+    },
+  };
+}
+
+async function tryBuildAutomationBundleDeletePlan(
+  paths: RuntimePaths & { vaultRoot: string },
+  db: DatabaseSync,
+  identifier: string,
+): Promise<ManagedDeletePlan | null> {
+  for (const run of listAutomationRuns(db, { limit: 10000 })) {
+    const bundlePath = await readAutomationBundlePath(paths, run);
+    if (!bundlePath) {
+      continue;
+    }
+    const bundleId = path.basename(bundlePath);
+    if (identifier === run.id || identifier === bundleId || normalizeTrashIdentifier(paths, identifier) === toVaultRelativePath(paths, bundlePath) || normalizeTrashIdentifier(paths, identifier) === toVaultRelativePath(paths, expectedWikiSourcePath(paths, bundleId))) {
+      return buildAutomationBundleDeletePlan(paths, run, bundlePath);
+    }
+  }
+  return null;
+}
+
+function buildAutomationBundleDeletePlan(
+  paths: RuntimePaths & { vaultRoot: string },
+  run: StoredAutomationRun,
+  bundlePath: string,
+): ManagedDeletePlan {
+  const bundleId = path.basename(bundlePath);
+  const planPaths: ManagedDeletePath[] = [];
+  addManagedPath(planPaths, bundlePath, "directory", true);
+  addManagedPath(planPaths, expectedWikiSourcePath(paths, bundleId), "file");
+  return {
+    targetType: "automation_run",
+    targetId: run.id,
+    paths: planPaths,
+    metadata: {
+      automationRunId: run.id,
+      automationModuleId: run.moduleId,
+      sourceBundleId: bundleId,
+    },
+  };
+}
+
+function toManagedTrashPlan(paths: RuntimePaths & { vaultRoot: string }, plan: ManagedDeletePlan): ManagedTrashPlan {
+  return {
+    ...plan,
+    paths: plan.paths.map((item) => {
+      if (isPathInside(paths.vaultRoot, item.path)) {
+        return {
+          ...item,
+          action: "move_to_trash",
+          trashPath: trashPathForActivePath(paths, item.path),
+        };
+      }
+      return {
+        ...item,
+        action: "delete_runtime",
+      };
+    }),
+  };
+}
+
+async function applyManagedTrashPlan(
+  paths: RuntimePaths & { vaultRoot: string },
+  db: DatabaseSync,
+  plan: ManagedTrashPlan,
+  reason: string,
+): Promise<{
+  applied: true;
+  plan: ManagedTrashPlan;
+  moved: string[];
+  alreadyTrashed: string[];
+  deleted: string[];
+  missing: string[];
+  tombstone: StoredVaultTombstone;
+}> {
+  await ensureTrashScaffold(paths);
+  for (const item of plan.paths) {
+    assertManagedDeletePath(paths, item.path);
+    if (item.trashPath) {
+      assertTrashPath(paths, item.trashPath);
+    }
+  }
+
+  const moved: string[] = [];
+  const alreadyTrashed: string[] = [];
+  const deleted: string[] = [];
+  const missing: string[] = [];
+  const trashMap: Array<{ originalPath: string; trashPath: string; kind: string }> = [];
+
+  for (const item of plan.paths) {
+    if (item.action === "move_to_trash") {
+      const trashPath = item.trashPath;
+      if (!trashPath) {
+        throw new Error(`Missing trash path for ${item.path}`);
+      }
+      trashMap.push({ originalPath: item.path, trashPath, kind: item.kind });
+      if (await pathExists(item.path)) {
+        if (await pathExists(trashPath)) {
+          throw new Error(`Refusing to overwrite existing trash path: ${trashPath}`);
+        }
+        await fs.mkdir(path.dirname(trashPath), { recursive: true });
+        await fs.rename(item.path, trashPath);
+        moved.push(`${item.path} -> ${trashPath}`);
+      } else if (await pathExists(trashPath)) {
+        alreadyTrashed.push(trashPath);
+      } else {
+        missing.push(item.path);
+      }
+      continue;
+    }
+
+    if (await pathExists(item.path)) {
+      await fs.rm(item.path, { recursive: item.kind === "directory", force: true });
+      deleted.push(item.path);
+    } else {
+      missing.push(item.path);
+    }
+  }
+
+  const tombstoneId = buildVaultTombstoneId(plan.targetType, plan.targetId);
+  const tombstonePath = path.join(trashRoot(paths), "tombstones", `${tombstoneId}.md`);
+  await writeTrashTombstonePage(tombstonePath, {
+    tombstoneId,
+    plan,
+    reason,
+    moved,
+    alreadyTrashed,
+    deleted,
+    missing,
+    trashMap,
+  });
+
+  if (plan.targetType === "source_bundle") {
+    for (const outputId of stringArrayFromUnknown(plan.metadata.jobOutputIds)) {
+      markJobOutputDeleted(db, outputId);
+    }
+  }
+
+  const tombstone = createVaultTombstone(db, {
+    id: tombstoneId,
+    targetType: plan.targetType,
+    targetId: plan.targetId,
+    ...(plan.jobId ? { jobId: plan.jobId } : {}),
+    reason,
+    paths: [
+      ...plan.paths.map((item) => item.path),
+      ...trashMap.map((item) => item.trashPath),
+      tombstonePath,
+    ],
+    metadata: {
+      ...plan.metadata,
+      moved,
+      alreadyTrashed,
+      deleted,
+      missing,
+      trashMap,
+      tombstonePath,
+    },
+    createdBy: "ops-cli",
+  });
+
+  if (plan.jobId) {
+    appendJobEvent(db, plan.jobId, "vault.trash", reason, {
+      tombstoneId: tombstone.id,
+      targetType: plan.targetType,
+      targetId: plan.targetId,
+      moved,
+      alreadyTrashed,
+      deleted,
+      missing,
+    });
+  }
+
+  return {
+    applied: true,
+    plan,
+    moved,
+    alreadyTrashed,
+    deleted,
+    missing,
+    tombstone,
+  };
+}
+
+function printManagedTrashPlan(plan: ManagedTrashPlan): void {
+  process.stdout.write(`dry-run vault trash ${plan.targetType} ${plan.targetId}\n`);
+  for (const item of plan.paths) {
+    if (item.action === "move_to_trash") {
+      process.stdout.write(`${item.kind} ${item.path} -> ${item.trashPath}\n`);
+    } else {
+      process.stdout.write(`${item.kind} ${item.path} -> deleted runtime output\n`);
+    }
+  }
 }
 
 async function buildSourceBundleDeletePlan(
@@ -859,7 +1264,126 @@ async function applyManagedDeletePlan(
   };
 }
 
+function buildRestorePlan(
+  paths: RuntimePaths & { vaultRoot: string },
+  tombstone: StoredVaultTombstone,
+): Array<{ originalPath: string; trashPath: string; kind: string }> {
+  const metadata = isRecord(tombstone.metadata) ? tombstone.metadata : {};
+  const trashMap = Array.isArray(metadata.trashMap) ? metadata.trashMap : [];
+  return trashMap
+    .filter((item): item is { originalPath: string; trashPath: string; kind: string } => (
+      isRecord(item)
+      && typeof item.originalPath === "string"
+      && typeof item.trashPath === "string"
+      && typeof item.kind === "string"
+    ))
+    .map((item) => ({
+      originalPath: path.resolve(item.originalPath),
+      trashPath: path.resolve(item.trashPath),
+      kind: item.kind,
+    }))
+    .filter((item) => isPathInside(paths.vaultRoot, item.originalPath) && isPathInside(trashRoot(paths), item.trashPath));
+}
+
+async function applyVaultRestore(
+  paths: RuntimePaths & { vaultRoot: string },
+  db: DatabaseSync,
+  tombstone: StoredVaultTombstone,
+): Promise<{ applied: true; restored: string[]; missing: string[]; skipped: string[] }> {
+  const plan = buildRestorePlan(paths, tombstone);
+  const restored: string[] = [];
+  const missing: string[] = [];
+  const skipped: string[] = [];
+  for (const item of plan) {
+    if (await pathExists(item.originalPath)) {
+      skipped.push(item.originalPath);
+      continue;
+    }
+    if (!await pathExists(item.trashPath)) {
+      missing.push(item.trashPath);
+      continue;
+    }
+    await fs.mkdir(path.dirname(item.originalPath), { recursive: true });
+    await fs.rename(item.trashPath, item.originalPath);
+    restored.push(`${item.trashPath} -> ${item.originalPath}`);
+  }
+  const metadata = isRecord(tombstone.metadata) ? tombstone.metadata : {};
+  if (typeof metadata.tombstonePath === "string" && isPathInside(trashRoot(paths), metadata.tombstonePath)) {
+    await fs.rm(metadata.tombstonePath, { force: true });
+  }
+  deleteVaultTombstone(db, tombstone.id);
+  return { applied: true, restored, missing, skipped };
+}
+
+async function ensureTrashScaffold(paths: RuntimePaths & { vaultRoot: string }): Promise<void> {
+  const root = trashRoot(paths);
+  await fs.mkdir(path.join(root, "tombstones"), { recursive: true });
+  await fs.mkdir(path.join(root, "wiki", "sources"), { recursive: true });
+  await fs.mkdir(path.join(root, "wiki", "derived"), { recursive: true });
+  await fs.mkdir(path.join(root, "raw"), { recursive: true });
+  await fs.mkdir(path.join(root, "derived"), { recursive: true });
+  const indexPath = path.join(root, "index.md");
+  if (!await pathExists(indexPath)) {
+    await fs.writeFile(indexPath, [
+      "# Vault Trash",
+      "",
+      "This folder stores tombstoned LLMwiki data.",
+      "",
+      "- Normal wiki chat and renderer source selection exclude `_trash/**`.",
+      "- Restore with `npm run tlgi -- vault restore <tombstone_id> --apply`.",
+      "- Apply manual Obsidian moves with `npm run tlgi -- vault trash-apply --apply`.",
+      "",
+    ].join("\n"), "utf8");
+  }
+}
+
+async function writeTrashTombstonePage(
+  tombstonePath: string,
+  input: {
+    tombstoneId: string;
+    plan: ManagedTrashPlan;
+    reason: string;
+    moved: string[];
+    alreadyTrashed: string[];
+    deleted: string[];
+    missing: string[];
+    trashMap: Array<{ originalPath: string; trashPath: string; kind: string }>;
+  },
+): Promise<void> {
+  await fs.mkdir(path.dirname(tombstonePath), { recursive: true });
+  const originalPaths = input.trashMap.map((item) => `  - ${item.originalPath}`).join("\n") || "  - none";
+  const trashPaths = input.trashMap.map((item) => `  - ${item.trashPath}`).join("\n") || "  - none";
+  await fs.writeFile(tombstonePath, [
+    "---",
+    "schema: tlgi.tombstone.v1",
+    `tombstone_id: ${input.tombstoneId}`,
+    "status: trashed",
+    `target_type: ${input.plan.targetType}`,
+    `target_id: ${JSON.stringify(input.plan.targetId)}`,
+    `trashed_at: ${new Date().toISOString()}`,
+    `reason: ${JSON.stringify(input.reason)}`,
+    "original_paths:",
+    originalPaths,
+    "trash_paths:",
+    trashPaths,
+    "---",
+    "",
+    `# ~~${input.plan.targetId}~~`,
+    "",
+    "This item is tombstoned and excluded from normal wiki queries.",
+    "",
+    "## Summary",
+    "",
+    `- moved: ${input.moved.length}`,
+    `- already_trashed: ${input.alreadyTrashed.length}`,
+    `- deleted_runtime_outputs: ${input.deleted.length}`,
+    `- missing: ${input.missing.length}`,
+    "",
+  ].join("\n"), "utf8");
+}
+
 async function addMissingIssue(
+  paths: RuntimePaths & { vaultRoot: string },
   issues: VaultReconcileIssue[],
   tombstoneIndex: ReturnType<typeof buildTombstoneIndex>,
   targetType: string,
@@ -872,14 +1396,21 @@ async function addMissingIssue(
     return;
   }
   const deleted = isTombstoned(tombstoneIndex, targetType, targetId, targetPath);
+  const trashPath = isPathInside(paths.vaultRoot, targetPath) ? trashPathForActivePath(paths, targetPath) : "";
+  const pendingTrashPath = !deleted && trashPath && await pathExists(trashPath) ? trashPath : undefined;
   issues.push({
-    severity: deleted ? "info" : missingSeverity,
-    code: deleted ? "tombstoned_missing_path" : "missing_path",
-    status: deleted ? "deleted" : "missing",
+    severity: deleted ? "info" : pendingTrashPath ? "warn" : missingSeverity,
+    code: deleted ? "tombstoned_missing_path" : pendingTrashPath ? "trash_pending" : "missing_path",
+    status: deleted || pendingTrashPath ? "deleted" : "missing",
     targetType,
     targetId,
     path: targetPath,
-    message: deleted ? "missing path is covered by a SQLite tombstone" : message,
+    ...(pendingTrashPath ? { trashPath: pendingTrashPath } : {}),
+    message: deleted
+      ? "missing path is covered by a SQLite tombstone"
+      : pendingTrashPath
+        ? "path has been moved into _trash but no SQLite tombstone exists; run `npm run tlgi -- vault trash-apply --apply`"
+        : message,
   });
 }
 
@@ -940,6 +1471,9 @@ function printVaultReconcileReport(report: VaultReconcileReport): void {
   for (const issue of report.issues) {
     process.stdout.write(`${issue.severity} ${issue.code} ${issue.targetType}:${issue.targetId}\n`);
     process.stdout.write(`  ${issue.path}\n`);
+    if (issue.trashPath) {
+      process.stdout.write(`  trash: ${issue.trashPath}\n`);
+    }
     process.stdout.write(`  ${issue.message}\n`);
   }
 }
@@ -1061,9 +1595,103 @@ function assertManagedDeletePath(paths: RuntimePaths & { vaultRoot: string }, ta
   }
 }
 
+function assertTrashPath(paths: RuntimePaths & { vaultRoot: string }, targetPath: string): void {
+  const resolved = path.resolve(targetPath);
+  const root = trashRoot(paths);
+  if (!isPathInside(root, resolved) || resolved === root) {
+    throw new Error(`Refusing to write outside vault trash: ${targetPath}`);
+  }
+}
+
 function isPathInside(root: string, targetPath: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(targetPath));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function trashRoot(paths: RuntimePaths & { vaultRoot: string }): string {
+  return path.join(paths.vaultRoot, "_trash");
+}
+
+function trashPathForActivePath(paths: RuntimePaths & { vaultRoot: string }, activePath: string): string {
+  const resolved = path.resolve(activePath);
+  const relative = path.relative(paths.vaultRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative) || relative === "" || relative.split(path.sep)[0] === "_trash") {
+    return "";
+  }
+  return path.resolve(trashRoot(paths), relative);
+}
+
+function activePathForTrashPath(paths: RuntimePaths & { vaultRoot: string }, trashPath: string): string {
+  const resolved = path.resolve(trashPath);
+  const relative = path.relative(trashRoot(paths), resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative) || relative === "") {
+    throw new Error(`Path is outside vault trash: ${trashPath}`);
+  }
+  return path.resolve(paths.vaultRoot, relative);
+}
+
+function normalizeTrashIdentifier(paths: RuntimePaths & { vaultRoot: string }, identifier: string): string {
+  const raw = identifier.trim();
+  const resolved = path.resolve(path.isAbsolute(raw) ? raw : path.join(paths.vaultRoot, raw));
+  if (isPathInside(trashRoot(paths), resolved)) {
+    return activePathForTrashPath(paths, resolved);
+  }
+  return raw;
+}
+
+function looksLikePathIdentifier(value: string): boolean {
+  return value.includes("/") || value.includes("\\") || value.startsWith(".") || path.isAbsolute(value);
+}
+
+function targetIdFromKnownVaultPath(paths: RuntimePaths & { vaultRoot: string }, identifier: string): string | null {
+  const resolved = path.resolve(path.isAbsolute(identifier) ? identifier : path.join(paths.vaultRoot, identifier));
+  if (!isPathInside(paths.vaultRoot, resolved)) {
+    return null;
+  }
+  const relative = toVaultRelativePath(paths, resolved);
+  const sourceMatch = relative.match(/^wiki\/sources\/(.+)\.md$/) ?? relative.match(/^raw\/[^/]+\/([^/]+)(?:\/.*)?$/);
+  if (sourceMatch?.[1]) {
+    return sourceMatch[1];
+  }
+  const derivedMatch = relative.match(/^wiki\/derived\/(.+)\.md$/) ?? relative.match(/^derived\/[^/]+\/([^/]+)(?:\/.*)?$/);
+  if (derivedMatch?.[1]) {
+    return derivedMatch[1];
+  }
+  return null;
+}
+
+async function listTrashEvidencePaths(paths: RuntimePaths & { vaultRoot: string }): Promise<string[]> {
+  const root = trashRoot(paths);
+  const results = [
+    ...await listMarkdownFiles(path.join(root, "wiki", "sources")),
+    ...await listMarkdownFiles(path.join(root, "wiki", "derived")),
+    ...await listVaultBundleDirs(path.join(root, "raw")),
+    ...await listVaultBundleDirs(path.join(root, "derived")),
+  ];
+  return [...new Set(results.map((item) => path.resolve(item)))].sort();
+}
+
+async function resolveTrashTarget(
+  paths: RuntimePaths & { vaultRoot: string },
+  db: DatabaseSync,
+  trashPath: string,
+): Promise<{ targetType: string; targetId: string; activePath: string }> {
+  const activePath = activePathForTrashPath(paths, trashPath);
+  const activeRelative = toVaultRelativePath(paths, activePath);
+  const sourceMatch = activeRelative.match(/^wiki\/sources\/(.+)\.md$/) ?? activeRelative.match(/^raw\/[^/]+\/([^/]+)$/);
+  if (sourceMatch?.[1]) {
+    const automationPlan = await tryBuildAutomationBundleDeletePlan(paths, db, sourceMatch[1]);
+    if (automationPlan) {
+      return { targetType: automationPlan.targetType, targetId: automationPlan.targetId, activePath };
+    }
+    return { targetType: "source_bundle", targetId: sourceMatch[1], activePath };
+  }
+  const derivedMatch = activeRelative.match(/^wiki\/derived\/(.+)\.md$/) ?? activeRelative.match(/^derived\/[^/]+\/([^/]+)$/);
+  if (derivedMatch?.[1]) {
+    const artifactRun = listArtifactRendererRuns(db, 10000).find((run) => run.artifactId === derivedMatch[1] || run.id === derivedMatch[1]);
+    return { targetType: "derived_artifact", targetId: artifactRun?.id ?? derivedMatch[1], activePath };
+  }
+  return { targetType: "path", targetId: activeRelative, activePath };
 }
 
 function expectedWikiSourcePath(paths: RuntimePaths & { vaultRoot: string }, bundleId: string): string {
@@ -1312,6 +1940,10 @@ function printHelp(): void {
     "  artifact logs",
     "  artifact promote <run_id> [--id <renderer.id>]",
     "  vault reconcile [--json] [--limit N]",
+    "  vault trash <id_or_path> [--apply] [--reason <text>] [--json]",
+    "  vault trash-apply [--apply] [--reason <text>] [--json]",
+    "  vault trash-list [--json]",
+    "  vault restore <tombstone_id> [--apply] [--json]",
     "  vault delete <id> [--apply] [--reason <text>] [--json]",
     "",
   ].join("\n"));
@@ -1335,6 +1967,10 @@ function printVaultHelp(): void {
   process.stdout.write([
     "Usage:",
     "  npm run tlgi -- vault reconcile [--json] [--limit N]",
+    "  npm run tlgi -- vault trash <path_or_id> [--apply] [--reason <text>] [--json]",
+    "  npm run tlgi -- vault trash-apply [--apply] [--reason <text>] [--json]",
+    "  npm run tlgi -- vault trash-list [--json] [--limit N]",
+    "  npm run tlgi -- vault restore <tombstone_id> [--apply] [--json]",
     "  npm run tlgi -- vault delete <job_or_bundle_or_artifact_id> [--apply] [--reason <text>] [--json]",
     "",
   ].join("\n"));

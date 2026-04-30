@@ -270,7 +270,7 @@ export interface StoredArtifactRendererRun {
   errorDiagnostic?: unknown;
 }
 
-export type VaultTombstoneTargetType = "source_bundle" | "derived_artifact" | "job_output" | "path";
+export type VaultTombstoneTargetType = "source_bundle" | "automation_run" | "derived_artifact" | "job_output" | "path";
 
 export interface CreateVaultTombstoneInput {
   id: string;
@@ -1231,6 +1231,11 @@ export function listVaultTombstones(db: DatabaseSync, limit = 1000): StoredVault
     .prepare("SELECT * FROM vault_tombstones ORDER BY created_at DESC LIMIT ?")
     .all(limit)
     .map((row) => mapVaultTombstone(row as unknown as VaultTombstoneRow));
+}
+
+export function deleteVaultTombstone(db: DatabaseSync, id: string): boolean {
+  const result = db.prepare("DELETE FROM vault_tombstones WHERE id = ?").run(id);
+  return result.changes > 0;
 }
 
 function applyV1(db: DatabaseSync): void {

@@ -1741,6 +1741,7 @@ function assertAllowedWikiChatAttachmentPath(
   roots: { vaultRoot: string; rawRoot: string; wikiRoot: string },
 ): void {
   const derivedRoot = path.join(roots.vaultRoot, "derived");
+  const trashRoot = path.join(roots.vaultRoot, "_trash");
   if (isPathInside(roots.rawRoot, absolutePath)) {
     const parts = path.relative(roots.rawRoot, absolutePath).split(path.sep);
     const subPath = parts.slice(2).join("/");
@@ -1769,6 +1770,42 @@ function assertAllowedWikiChatAttachmentPath(
     const relative = path.relative(roots.wikiRoot, absolutePath).replace(/\\/g, "/");
     if ((relative.startsWith("derived/") || relative.startsWith("sources/")) && relative.endsWith(".md")) {
       return;
+    }
+  }
+  if (isPathInside(trashRoot, absolutePath)) {
+    const relative = path.relative(trashRoot, absolutePath).replace(/\\/g, "/");
+    if (
+      (
+        relative.startsWith("wiki/sources/")
+        || relative.startsWith("wiki/derived/")
+        || relative.startsWith("tombstones/")
+      ) && relative.endsWith(".md")
+    ) {
+      return;
+    }
+    if (relative.startsWith("raw/")) {
+      const parts = relative.split("/");
+      const subPath = parts.slice(3).join("/");
+      if (parts.length >= 4 && (
+        subPath === "source.md" ||
+        subPath === "manifest.yaml" ||
+        subPath.startsWith("original/") ||
+        subPath.startsWith("extracted/")
+      )) {
+        return;
+      }
+    }
+    if (relative.startsWith("derived/")) {
+      const parts = relative.split("/");
+      const subPath = parts.slice(3).join("/");
+      if (parts.length >= 4 && (
+        subPath === "source.md" ||
+        subPath === "manifest.yaml" ||
+        subPath === "provenance.json" ||
+        subPath.startsWith("artifacts/")
+      )) {
+        return;
+      }
     }
   }
   throw new Error(`Wiki chat attachment path is not allowed: ${absolutePath}`);

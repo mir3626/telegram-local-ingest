@@ -10,6 +10,7 @@ This project follows the LLMwiki pattern described by Andrej Karpathy: raw sourc
 - `source.md` is the LLM-readable entrypoint and read-order guide.
 - `wiki/**` is the LLM-maintained knowledge layer. It may cite raw bundle inputs but must not replace them.
 - `runtime/outputs/**` is a TTL delivery cache for Telegram downloads and is never wiki source authority.
+- `_trash/**` is the tombstoned/inactive layer. Normal wiki chat, source selection, and derived artifact generation exclude it; it is read only when the user explicitly asks for deleted/trash/inactive data.
 
 ## Derived Artifact Policy
 
@@ -64,6 +65,8 @@ The provider-neutral ingest contract is versioned as `telegram-local-ingest.llmw
 `WIKI_CHAT_COMMAND` is a separate natural-language wrapper for fileless Telegram messages. Registered bot/operator slash commands are handled before this wrapper; everything else, including ordinary text, unknown slash text, and compound requests, should go to the read-only wiki chat agent instead of regex-based intent matching. The wrapper must preserve the same raw immutability rule: `raw/**` is read-only and source changes must go through finalized raw bundles or explicit managed maintenance commands. The worker enforces this with raw tree snapshots and uses the shared wiki lock path to avoid overlapping wiki writes.
 
 Wiki chat may also return downloadable file candidates through `--attachment-dir/attachments.json`. The worker, not the agent, validates and sends them. Allowed attachment paths are limited to source/derived evidence surfaces: `raw/**/original/**`, `raw/**/extracted/**`, raw `source.md`/`manifest.yaml`, finalized `derived/**/artifacts/**`, derived `source.md`/`manifest.yaml`/`provenance.json`, and wiki source/derived Markdown pages. One to four files are sent immediately with Telegram `sendDocument`; five or more files require an inline confirmation button and are packaged as a ZIP under `runtime/outputs/wiki-chat/<request_id>/` with a 12-hour cleanup TTL.
+
+Vault trash is the Obsidian-friendly deletion UX. A user may move an active wiki source/derived page into `_trash/wiki/**`; `npm run tlgi -- vault trash-apply --apply` then resolves the connected raw bundle, derived package, runtime outputs, and SQLite rows, moves vault evidence into `_trash/raw/**` or `_trash/derived/**`, creates `_trash/tombstones/<id>.md`, and records `vault_tombstones`. `vault trash <path_or_id> --apply` performs the same move directly, `vault trash-list` shows pending trash and recorded tombstones, and `vault restore <tombstone_id> --apply` moves trash files back. Reconcile reports `_trash/**` entries without SQLite tombstones as `trash_pending`.
 
 Wiki chat may request new derived artifacts through `--attachment-dir/artifact-requests.json`, usually emitted from a fenced `tlgi-artifact-request` block. The LLM supplies intent, sources, parameters, and either a registered renderer id or generated renderer code; it does not execute Bash or write vault files directly. The worker owns execution through `packages/artifact-core`, snapshots `raw/**`, writes durable run logs under `runtime/wiki-artifacts/runs/<run_id>/`, finalizes outputs into `derived/<YYYY-MM-DD>/<artifact_id>/`, optionally calls the derived ingest command, and then reuses the same attachment sender for Telegram delivery.
 

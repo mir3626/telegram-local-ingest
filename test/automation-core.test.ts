@@ -378,6 +378,113 @@ test("ops CLI vault delete removes related files and records tombstones only wit
   }
 });
 
+test("ops CLI vault trash applies manual Obsidian moves and can restore tombstones", () => {
+  const fixture = createFixture();
+  const vaultPath = path.join(fixture.root, "vault");
+  const bundlePath = path.join(vaultPath, "raw", "2026-04-22", "bundle-trash");
+  const wikiSourcePath = path.join(vaultPath, "wiki", "sources", "bundle-trash.md");
+  const trashWikiSourcePath = path.join(vaultPath, "_trash", "wiki", "sources", "bundle-trash.md");
+  const trashBundlePath = path.join(vaultPath, "_trash", "raw", "2026-04-22", "bundle-trash");
+  const outputPath = path.join(fixture.runtimeDir, "outputs", "bundle-trash", "translated.md");
+  fs.mkdirSync(bundlePath, { recursive: true });
+  fs.mkdirSync(path.dirname(wikiSourcePath), { recursive: true });
+  fs.mkdirSync(path.dirname(trashWikiSourcePath), { recursive: true });
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(path.join(bundlePath, "manifest.yaml"), "id: bundle-trash\n", "utf8");
+  fs.writeFileSync(path.join(bundlePath, "source.md"), "# Source\n", "utf8");
+  fs.writeFileSync(path.join(bundlePath, ".finalized"), "done\n", "utf8");
+  fs.writeFileSync(wikiSourcePath, "# Wiki source\n", "utf8");
+  fs.writeFileSync(outputPath, "# Translation\n", "utf8");
+
+  const dbHandle = openIngestDatabase(fixture.dbPath);
+  try {
+    migrate(dbHandle.db);
+    createJob(dbHandle.db, { id: "job-trash", source: "telegram-local-bot-api", now: "2026-04-22T00:00:00.000Z" });
+    createSourceBundle(dbHandle.db, {
+      id: "bundle-trash",
+      jobId: "job-trash",
+      bundlePath,
+      manifestPath: path.join(bundlePath, "manifest.yaml"),
+      sourceMarkdownPath: path.join(bundlePath, "source.md"),
+      now: "2026-04-22T00:00:00.000Z",
+    });
+    createJobOutput(dbHandle.db, {
+      id: "output-trash",
+      jobId: "job-trash",
+      kind: "agent_translation",
+      filePath: outputPath,
+      fileName: "translated.md",
+      createdAt: "2026-04-22T00:00:00.000Z",
+      expiresAt: "2026-04-23T00:00:00.000Z",
+    });
+  } finally {
+    dbHandle.close();
+  }
+
+  try {
+    fs.renameSync(wikiSourcePath, trashWikiSourcePath);
+    const env = {
+      ...process.env,
+      INGEST_RUNTIME_DIR: fixture.runtimeDir,
+      SQLITE_DB_PATH: fixture.dbPath,
+      OBSIDIAN_VAULT_PATH: vaultPath,
+    };
+
+    const pending = runCli(["vault", "reconcile", "--json"], env);
+    assert.equal(pending.status, 0, pending.stderr);
+    const pendingReport = JSON.parse(pending.stdout) as {
+      issues: Array<{ code: string; targetId: string; trashPath?: string }>;
+    };
+    assert.ok(pendingReport.issues.some((issue) => issue.code === "trash_pending" && issue.targetId === "bundle-trash" && issue.trashPath === trashWikiSourcePath));
+
+    const apply = runCli(["vault", "trash-apply", "--apply", "--reason", "manual obsidian trash"], env);
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.match(apply.stdout, /applied vault trash-apply plans=1/);
+    assert.equal(fs.existsSync(bundlePath), false);
+    assert.equal(fs.existsSync(trashBundlePath), true);
+    assert.equal(fs.existsSync(wikiSourcePath), false);
+    assert.equal(fs.existsSync(trashWikiSourcePath), true);
+    assert.equal(fs.existsSync(outputPath), false);
+
+    const verify = openIngestDatabase(fixture.dbPath);
+    let tombstoneId = "";
+    try {
+      migrate(verify.db);
+      assert.equal(listJobOutputs(verify.db, "job-trash")[0]?.deletedAt !== undefined, true);
+      const tombstones = listVaultTombstones(verify.db);
+      assert.equal(tombstones.length, 1);
+      assert.equal(tombstones[0]?.targetId, "bundle-trash");
+      tombstoneId = tombstones[0]?.id ?? "";
+      assert.ok(tombstones[0]?.paths.includes(trashWikiSourcePath));
+    } finally {
+      verify.close();
+    }
+
+    const reconciled = runCli(["vault", "reconcile", "--json"], env);
+    assert.equal(reconciled.status, 0, reconciled.stderr);
+    const reconciledReport = JSON.parse(reconciled.stdout) as {
+      issues: Array<{ code: string; targetId: string }>;
+    };
+    assert.equal(reconciledReport.issues.some((issue) => issue.code === "trash_pending"), false);
+
+    const restore = runCli(["vault", "restore", tombstoneId, "--apply"], env);
+    assert.equal(restore.status, 0, restore.stderr);
+    assert.equal(fs.existsSync(bundlePath), true);
+    assert.equal(fs.existsSync(wikiSourcePath), true);
+    assert.equal(fs.existsSync(trashBundlePath), false);
+    assert.equal(fs.existsSync(trashWikiSourcePath), false);
+    const restoredDb = openIngestDatabase(fixture.dbPath);
+    try {
+      migrate(restoredDb.db);
+      assert.equal(listVaultTombstones(restoredDb.db).length, 0);
+    } finally {
+      restoredDb.close();
+    }
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("fx Korea Eximbank automation writes canonical raw bundle artifacts from a fixture", () => {
   const fixture = createFixture();
   const vaultPath = path.join(fixture.root, "vault");

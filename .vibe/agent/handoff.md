@@ -10,6 +10,12 @@
 
 ## Status
 
+### Sprint 29 Closed — Vault Trash Tombstone UX — 2026-04-30
+
+The product now has an Obsidian-friendly vault trash layer. Users can move unwanted active wiki pages into `_trash/wiki/**`; `npm run tlgi -- vault trash-apply --apply` resolves linked source bundles, automation raw bundles, derived packages, and runtime outputs, moves vault evidence into `_trash/raw/**` or `_trash/derived/**`, deletes runtime-only outputs, writes `_trash/tombstones/<id>.md`, and records SQLite `vault_tombstones`. `vault trash <path_or_id> --apply` performs the same move directly, `vault trash-list` shows pending trash plus recorded tombstones, and `vault restore <tombstone_id> --apply` moves trash files back and removes the SQLite tombstone.
+
+Reconcile now reports `_trash/**` entries without matching SQLite tombstones as `trash_pending`. Runtime-kit bootstrap/rules/chat guidance now define `_trash/**` as inactive/tombstoned data: normal wiki chat, source selection, and derived artifact generation exclude it unless the user explicitly asks for deleted/trash/inactive data.
+
 ### Sprint 28 Closed — Derived Presentation Documents — 2026-04-30
 
 Derived artifact execution now has a common presentation stage. Registered and generated renderers still produce reusable raw content artifacts such as charts, CSV/XLSX tables, Markdown summaries, JSON timelines, and ZIP packs. After packaging those outputs, `packages/artifact-core` creates a readable DOCX presentation artifact named `<artifact_id>_<artifact title>.docx`, where the suffix comes from the agent-supplied artifact title. If a request explicitly includes PDF presentation formats, the worker converts the presentation DOCX through LibreOffice and packages the PDF as a second presentation artifact.
