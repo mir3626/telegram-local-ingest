@@ -10,13 +10,19 @@
 
 ## Status
 
+### Derived Artifact DOCX Normalization — 2026-04-30
+
+Finalized derived content artifacts no longer expose report/table/timeline Markdown files under `derived/**/artifacts/`. `packages/artifact-core` now converts renderer-declared Markdown artifacts into DOCX during package finalization while preserving the original run-output Markdown long enough for the presentation renderer to render headings, lists, quotes, code, and Markdown pipe tables as real Word structure inside the delivered presentation DOCX. The live `yoni-llm-wiki` vault was migrated in place: all existing `derived/**/artifacts/*.md` content files were converted to `.docx`, related `manifest.yaml`/`provenance.json`/`source.md`/`wiki/derived/*.md` references were updated, and `npm run tlgi -- vault reconcile --json` reports zero issues.
+
+`llmwiki-runtime-kit` registered renderers now declare DOCX for report/table/timeline-style outputs (`summary.docx`, `comparison_table.docx`, `timeline.docx`, `report.docx`, `action_items.docx`, `glossary.docx`, `topic_index.docx`) while retaining CSV/XLSX/JSON/chart/ZIP artifacts where applicable. The runtime kit was allowlist-deployed to `/home/tony/workspace/yoni-llm-wiki` with no framework drift.
+
 ### Artifact Python Dependency Update — 2026-04-30
 
 Installed `pandas` into the local artifact renderer virtualenv at `.venv-wiki-artifacts` and updated setup/readiness scripts so future Linux/bootstrap installs include both `matplotlib` and `pandas`. `npm run smoke:ready` now verifies both imports under `WIKI_ARTIFACT_PYTHON_BIN`.
 
 ### Registered Renderer Hotfix — 2026-04-30
 
-Fixed the live registered-renderer issues reported from Telegram testing. `llmwiki-runtime-kit/scripts/fx_chart.py` no longer imports pandas; `fx.chart.1y` now uses only matplotlib plus standard-library CSV/date handling and picks the latest available FX source date for the one-year window. The runtime kit was allowlist-deployed to `yoni-llm-wiki`, and the live renderer was verified directly with `WIKI_ARTIFACT_PYTHON_BIN=/home/tony/workspace/telegram-local-ingest/.venv-wiki-artifacts/bin/python`.
+Fixed the live registered-renderer issues reported from Telegram testing. `llmwiki-runtime-kit/scripts/fx_chart.py` was restored to the pandas DataFrame/pivot implementation after the artifact Python virtualenv was updated to include pandas; it also keeps the latest-available-source-date one-year window. The runtime kit was allowlist-deployed to `yoni-llm-wiki`, and the live renderer was verified directly with `WIKI_ARTIFACT_PYTHON_BIN=/home/tony/workspace/telegram-local-ingest/.venv-wiki-artifacts/bin/python`.
 
 Wiki chat attachment handling now avoids treating glob/brace source patterns such as `wiki/sources/fx_koreaexim_2025{0401,0701,1001}.md` as concrete downloadable files, and the worker ignores invalid attachment entries instead of failing the whole chat response. Derived presentation DOCX files were simplified for user readability: internal fields such as artifact kind, generated timestamp, user prompt, source SHA table, and source-basis metadata stay in `source.md`/`provenance.json` but are no longer rendered into the user-facing DOCX.
 

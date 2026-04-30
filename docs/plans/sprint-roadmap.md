@@ -484,13 +484,13 @@ Telegram mobile/desktop
   - Create a default DOCX presentation document that embeds readable summaries, tables, and images from generated content artifacts.
   - Use title-based delivery names shaped as `<artifact_id>_<agent-generated artifact title>.docx`.
   - Support optional PDF presentation output when the artifact request explicitly asks for PDF delivery.
-  - Send presentation artifacts to Telegram first, while keeping raw charts/tables/Markdown/JSON/ZIPs in the derived package for audit and wiki ingest.
+  - Send presentation artifacts to Telegram first, while keeping raw charts/tables/DOCX/JSON/ZIPs in the derived package for audit and wiki ingest.
   - Update wiki chat guidance so agents do not generate presentation DOCX/PDF themselves.
 - **acceptance criteria**:
   - Any derived package has at least one role `presentation` DOCX artifact.
   - Telegram wiki-chat artifact delivery sends the presentation document by default.
   - `npm run smoke:fx-wiki` verifies the presentation document alongside the FX chart/table/export content artifacts.
-- **status**: completed. `packages/artifact-core` now creates DOCX presentation artifacts for derived packages, optionally converts them to PDF through LibreOffice, and names them with the agent-supplied artifact title suffix. The worker now delivers presentation artifacts first for wiki-chat artifact requests. Runtime-kit chat guidance tells agents to rely on the worker presentation layer and request PDF only through `parameters.presentationFormats`.
+- **status**: completed. `packages/artifact-core` now creates DOCX presentation artifacts for derived packages, optionally converts them to PDF through LibreOffice, and names them with the agent-supplied artifact title suffix. The worker now delivers presentation artifacts first for wiki-chat artifact requests. Runtime-kit chat guidance tells agents to rely on the worker presentation layer and request PDF only through `parameters.presentationFormats`. Markdown report/table/timeline renderer outputs are normalized into DOCX artifacts during package finalization, and the presentation layer renders Markdown headings, lists, and pipe tables as Word structure instead of pasting Markdown source text.
 
 ## Sprint 29 — Vault Trash Tombstone UX
 

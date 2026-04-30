@@ -8,6 +8,7 @@ import { z } from "zod";
 const ARTIFACT_BLOCK_PATTERN = /```tlgi-artifact-request\s*([\s\S]*?)```/g;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_SOURCE_TEXT_BYTES = 1024 * 1024;
+const DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 const sourceRefSchema = z.object({
   path: z.string().min(1),
@@ -122,6 +123,11 @@ export interface PackagedArtifact {
   mediaType: string;
   sha256: string;
   sizeBytes: number;
+}
+
+interface PresentationContentArtifact extends PackagedArtifact {
+  presentationSourcePath?: string;
+  presentationSourceMediaType?: string;
 }
 
 interface RendererExecutionResult {
@@ -553,21 +559,40 @@ async function finalizeDerivedPackage(input: {
   await fs.mkdir(artifactsDir, { recursive: true });
 
   const packaged: PackagedArtifact[] = [];
+  const presentationContent: PresentationContentArtifact[] = [];
+  const usedArtifactFileNames = new Set<string>();
   for (const artifact of input.execution.artifacts) {
     const sourcePath = path.resolve(input.outputDir, artifact.path);
     assertInside(input.outputDir, sourcePath, "Renderer artifact must stay inside output directory");
     await assertExists(sourcePath, "renderer artifact");
-    const fileName = safeFileName(path.basename(sourcePath));
+    const sourceMediaType = artifact.mediaType ?? inferMediaType(sourcePath);
+    const markdownArtifact = isMarkdownArtifact(sourcePath, sourceMediaType);
+    const preferredFileName = markdownArtifact
+      ? `${safeFileName(path.parse(sourcePath).name)}.docx`
+      : safeFileName(path.basename(sourcePath));
+    const fileName = await availableArtifactFileName(artifactsDir, preferredFileName, usedArtifactFileNames);
     const targetPath = path.join(artifactsDir, fileName);
-    await fs.copyFile(sourcePath, targetPath);
+    if (markdownArtifact) {
+      await writeMarkdownDocxFromFile(sourcePath, targetPath);
+    } else {
+      await fs.copyFile(sourcePath, targetPath);
+    }
     const stat = await fs.stat(targetPath);
-    packaged.push({
+    const packagedArtifact: PackagedArtifact = {
       id: `artifact:${safeName(path.parse(fileName).name)}`,
       role: artifact.role ?? inferArtifactRole(targetPath),
       path: `artifacts/${fileName}`,
-      mediaType: artifact.mediaType ?? inferMediaType(targetPath),
+      mediaType: markdownArtifact ? DOCX_MEDIA_TYPE : sourceMediaType,
       sha256: await sha256File(targetPath),
       sizeBytes: stat.size,
+    };
+    packaged.push(packagedArtifact);
+    presentationContent.push({
+      ...packagedArtifact,
+      ...(markdownArtifact ? {
+        presentationSourcePath: sourcePath,
+        presentationSourceMediaType: sourceMediaType,
+      } : {}),
     });
   }
 
@@ -579,7 +604,7 @@ async function finalizeDerivedPackage(input: {
     artifactsDir,
     sourcePrompt: input.sourcePrompt,
     sourceSnapshot: input.sourceSnapshot,
-    contentArtifacts: [...packaged],
+    contentArtifacts: presentationContent,
     generatedAt,
     ...(input.env ? { env: input.env } : {}),
   });
@@ -712,7 +737,7 @@ async function createPresentationArtifacts(input: {
   artifactsDir: string;
   sourcePrompt: string;
   sourceSnapshot: ArtifactSourceSnapshot[];
-  contentArtifacts: PackagedArtifact[];
+  contentArtifacts: PresentationContentArtifact[];
   generatedAt: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<PackagedArtifact[]> {
@@ -791,7 +816,7 @@ async function writePresentationDocx(input: {
   generatedAt: string;
   sourcePrompt: string;
   sourceSnapshot: ArtifactSourceSnapshot[];
-  artifacts: PackagedArtifact[];
+  artifacts: PresentationContentArtifact[];
   bundlePath: string;
 }): Promise<void> {
   const entries: Array<{ name: string; content: Buffer | string }> = [];
@@ -839,7 +864,7 @@ async function writePresentationDocx(input: {
       if (heading) {
         body.push(headingXml(heading, 1));
       }
-      body.push(...plainTextParagraphs(preview, "BodyText"));
+      body.push(...textPreviewBlocks(preview, artifact));
     } else {
       supplementalFiles.push(artifact);
     }
@@ -862,6 +887,7 @@ async function writePresentationDocx(input: {
     { name: "_rels/.rels", content: rootRelationshipsXml() },
     { name: "word/_rels/document.xml.rels", content: documentRelationshipsXml(relationships) },
     { name: "word/styles.xml", content: stylesXml() },
+    { name: "word/numbering.xml", content: numberingXml() },
     { name: "word/document.xml", content: documentXml(body.join("")) },
   );
   await writeZip(entries, input.outputPath);
@@ -920,15 +946,26 @@ function readableArtifactName(artifactPath: string): string {
     || "Content";
 }
 
-async function textPreview(filePath: string, artifact: PackagedArtifact): Promise<string | null> {
-  if (!["text/markdown", "text/plain", "application/json"].includes(artifact.mediaType)) {
+async function textPreview(filePath: string, artifact: PresentationContentArtifact): Promise<string | null> {
+  const previewPath = artifact.presentationSourcePath ?? filePath;
+  const previewMediaType = artifact.presentationSourceMediaType ?? artifact.mediaType;
+  if (!["text/markdown", "text/plain", "application/json"].includes(previewMediaType)) {
     return null;
   }
-  if (artifact.sizeBytes > 128 * 1024) {
-    return `Text preview skipped because the artifact is large (${formatBytes(artifact.sizeBytes)}).`;
+  const stat = await fs.stat(previewPath);
+  if (stat.size > 128 * 1024) {
+    return `Text preview skipped because the artifact is large (${formatBytes(stat.size)}).`;
   }
-  const text = await fs.readFile(filePath, "utf8");
+  const text = await fs.readFile(previewPath, "utf8");
   return text.length > 4000 ? `${text.slice(0, 4000)}\n\n[Preview truncated]` : text;
+}
+
+function textPreviewBlocks(text: string, artifact: PresentationContentArtifact): string[] {
+  const mediaType = artifact.presentationSourceMediaType ?? artifact.mediaType;
+  if (mediaType === "text/markdown") {
+    return markdownWordBlocks(text);
+  }
+  return plainTextParagraphs(text, "BodyText");
 }
 
 async function csvPreviewTable(filePath: string): Promise<string[][]> {
@@ -988,6 +1025,132 @@ function plainTextParagraphs(text: string, style = "BodyText"): string[] {
     .filter(Boolean)
     .slice(0, 80)
     .map((line) => paragraphXml(line.replace(/^#{1,6}\s+/, ""), style));
+}
+
+function markdownWordBlocks(markdown: string): string[] {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const blocks: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+    if (/^```/.test(trimmed)) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^```/.test((lines[index] ?? "").trim())) {
+        codeLines.push(lines[index] ?? "");
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      for (const codeLine of codeLines.slice(0, 40)) {
+        blocks.push(paragraphXml(codeLine, "CodeBlock"));
+      }
+      continue;
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      const rows: string[][] = [parseMarkdownTableRow(lines[index] ?? "")];
+      index += 2;
+      while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
+        rows.push(parseMarkdownTableRow(lines[index] ?? ""));
+        index += 1;
+      }
+      blocks.push(tableXml(rows, true));
+      continue;
+    }
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading?.[1] && heading[2]) {
+      blocks.push(headingXml(stripInlineMarkdown(heading[2]), heading[1].length <= 1 ? 1 : 2));
+      index += 1;
+      continue;
+    }
+    const unordered = trimmed.match(/^[-*+]\s+(.+)$/);
+    if (unordered?.[1]) {
+      blocks.push(listItemXml(stripInlineMarkdown(unordered[1]), "bullet"));
+      index += 1;
+      continue;
+    }
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (ordered?.[1]) {
+      blocks.push(listItemXml(stripInlineMarkdown(ordered[1]), "number"));
+      index += 1;
+      continue;
+    }
+    const quote = trimmed.match(/^>\s*(.+)$/);
+    if (quote?.[1]) {
+      blocks.push(paragraphXml(stripInlineMarkdown(quote[1]), "Quote"));
+      index += 1;
+      continue;
+    }
+    blocks.push(paragraphXml(stripInlineMarkdown(trimmed), "BodyText"));
+    index += 1;
+  }
+  return blocks.slice(0, 120);
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  return isMarkdownTableRow(lines[index] ?? "") && isMarkdownTableSeparator(lines[index + 1] ?? "");
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.includes("|");
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const trimmed = line.trim();
+  return /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(trimmed);
+}
+
+function parseMarkdownTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => stripInlineMarkdown(cell.replace(/\\\|/g, "|").replace(/<br\s*\/?>/gi, "\n").trim()));
+}
+
+function stripInlineMarkdown(value: string): string {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\\([\\`*_[\]{}()#+\-.!|])/g, "$1")
+    .trim();
+}
+
+function listItemXml(text: string, kind: "bullet" | "number"): string {
+  const numId = kind === "bullet" ? 1 : 2;
+  return `<w:p><w:pPr><w:pStyle w:val="BodyText"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr></w:pPr><w:r><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+}
+
+async function writeMarkdownDocxFromFile(markdownPath: string, targetPath: string): Promise<void> {
+  const markdown = await fs.readFile(markdownPath, "utf8");
+  await writeMarkdownDocx(markdown, targetPath);
+}
+
+async function writeMarkdownDocx(markdown: string, targetPath: string): Promise<void> {
+  const entries = [
+    { name: "[Content_Types].xml", content: contentTypesXml(new Map([
+      ["rels", "application/vnd.openxmlformats-package.relationships+xml"],
+      ["xml", "application/xml"],
+    ])) },
+    { name: "_rels/.rels", content: rootRelationshipsXml() },
+    { name: "word/_rels/document.xml.rels", content: documentRelationshipsXml([]) },
+    { name: "word/styles.xml", content: stylesXml() },
+    { name: "word/numbering.xml", content: numberingXml() },
+    { name: "word/document.xml", content: documentXml(markdownWordBlocks(markdown).join("")) },
+  ];
+  await writeZip(entries, targetPath);
 }
 
 function documentXml(bodyXml: string): string {
@@ -1056,6 +1219,7 @@ function contentTypesXml(defaults: Map<string, string>): string {
     defaultXml,
     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>',
     '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>',
+    '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>',
     "</Types>",
   ].join("");
 }
@@ -1074,6 +1238,7 @@ function documentRelationshipsXml(relationships: Array<{ id: string; type: strin
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
     '<Relationship Id="rStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
+    '<Relationship Id="rNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>',
     ...relationships.map((relationship) => `<Relationship Id="${xmlEscape(relationship.id)}" Type="${xmlEscape(relationship.type)}" Target="${xmlEscape(relationship.target)}"/>`),
     "</Relationships>",
   ].join("");
@@ -1088,9 +1253,23 @@ function stylesXml(): string {
     '<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="120"/></w:pPr><w:rPr><w:color w:val="5B6770"/><w:sz w:val="22"/></w:rPr></w:style>',
     '<w:style w:type="paragraph" w:styleId="Muted"><w:name w:val="Muted"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:color w:val="6B7280"/><w:sz w:val="18"/></w:rPr></w:style>',
     '<w:style w:type="paragraph" w:styleId="BodyText"><w:name w:val="Body Text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="100" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="22"/></w:rPr></w:style>',
+    '<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="BodyText"/><w:pPr><w:ind w:left="360"/><w:spacing w:after="100"/></w:pPr><w:rPr><w:color w:val="4B5563"/><w:i/><w:sz w:val="21"/></w:rPr></w:style>',
+    '<w:style w:type="paragraph" w:styleId="CodeBlock"><w:name w:val="Code Block"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="40"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="19"/></w:rPr></w:style>',
     '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="260" w:after="120"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>',
     '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>',
     "</w:styles>",
+  ].join("");
+}
+
+function numberingXml(): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+    '<w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>',
+    '<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>',
+    '<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>',
+    '<w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>',
+    "</w:numbering>",
   ].join("");
 }
 
@@ -1435,6 +1614,20 @@ async function availableArtifactId(derivedRoot: string, datePart: string, prefer
   return safeName(`${first}_${runId.slice(-8)}`);
 }
 
+async function availableArtifactFileName(artifactsDir: string, preferred: string, usedNames: Set<string>): Promise<string> {
+  const parsed = path.parse(preferred);
+  const base = safeFileName(parsed.name);
+  const ext = parsed.ext || "";
+  let candidate = `${base}${ext}`;
+  let suffix = 2;
+  while (usedNames.has(candidate.toLowerCase()) || await pathExists(path.join(artifactsDir, candidate))) {
+    candidate = `${base}_${suffix}${ext}`;
+    suffix += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
 async function listFiles(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   const files: string[] = [];
@@ -1608,7 +1801,7 @@ function inferMediaType(filePath: string): string {
     case ".md":
       return "text/markdown";
     case ".docx":
-      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      return DOCX_MEDIA_TYPE;
     default:
       return "application/octet-stream";
   }
@@ -1616,6 +1809,10 @@ function inferMediaType(filePath: string): string {
 
 function isTextLike(filePath: string): boolean {
   return [".md", ".txt", ".csv", ".json", ".yaml", ".yml"].includes(path.extname(filePath).toLowerCase());
+}
+
+function isMarkdownArtifact(filePath: string, mediaType: string): boolean {
+  return mediaType === "text/markdown" || path.extname(filePath).toLowerCase() === ".md";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

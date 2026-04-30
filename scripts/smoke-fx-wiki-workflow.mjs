@@ -43,7 +43,7 @@ async function main() {
       parameters: { currency: "USD", startDate: "2025-04-01", endDate: "2025-10-31", chartFormats: ["png", "svg", "pdf"] },
       delivery: { sendToTelegram: false, ingestDerived: true },
     },
-    expectedFiles: ["artifacts/chart.png", "artifacts/chart.svg", "artifacts/chart.pdf", "artifacts/stats.csv", "artifacts/summary.md"],
+    expectedFiles: ["artifacts/chart.png", "artifacts/chart.svg", "artifacts/chart.pdf", "artifacts/stats.csv", "artifacts/summary.docx"],
   }));
   runs.push(await runArtifact({
     requestDir,
@@ -60,7 +60,7 @@ async function main() {
       parameters: {},
       delivery: { sendToTelegram: false, ingestDerived: true },
     },
-    expectedFiles: ["artifacts/comparison_table.md", "artifacts/comparison_table.csv", "artifacts/comparison_table.xlsx"],
+    expectedFiles: ["artifacts/comparison_table.docx", "artifacts/comparison_table.csv", "artifacts/comparison_table.xlsx"],
   }));
   runs.push(await runArtifact({
     requestDir,

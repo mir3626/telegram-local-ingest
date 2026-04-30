@@ -42,7 +42,7 @@ test("generated artifact renderer creates a derived package and records promotab
         "const [inputPath, outputDir, resultPath] = process.argv.slice(2);",
         "const input = JSON.parse(await fs.readFile(inputPath, 'utf8'));",
         "const reportPath = path.join(outputDir, 'summary.md');",
-        "await fs.writeFile(reportPath, `# Generated\\n\\nSource: ${input.sources[0].path}\\n`, 'utf8');",
+        "await fs.writeFile(reportPath, `# Generated\\n\\n| Field | Value |\\n| --- | --- |\\n| Source | ${input.sources[0].path} |\\n`, 'utf8');",
         "await fs.writeFile(resultPath, JSON.stringify({artifacts:[{path:'summary.md',role:'report',mediaType:'text/markdown'}]}), 'utf8');",
         "",
       ].join("\n"),
@@ -89,12 +89,14 @@ test("generated artifact renderer creates a derived package and records promotab
     });
 
     assert.equal(fs.existsSync(path.join(result.derivedBundlePath, ".finalized")), true);
-    assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.md")), true);
+    assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.docx")), true);
+    assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.md")), false);
     const presentationPath = path.join(result.derivedBundlePath, "artifacts", "demo_report_Demo_Report.docx");
     assert.equal(fs.existsSync(presentationPath), true);
     assert.equal(result.artifacts.some((artifact) => artifact.role === "presentation" && artifact.path.endsWith("_Demo_Report.docx")), true);
     const presentationText = fs.readFileSync(presentationPath).toString("utf8");
     assert.match(presentationText, /Demo Report/);
+    assert.match(presentationText, /<w:tbl>/);
     assert.doesNotMatch(presentationText, /Artifact kind|User Request|Source Basis|SHA-256/);
     assert.match(fs.readFileSync(path.join(result.derivedBundlePath, "provenance.json"), "utf8"), /demo wiki data/);
     assert.equal(listArtifactRendererRuns(dbHandle.db, 10).length, 1);
@@ -171,7 +173,7 @@ test("artifact renderer expands allowed wiki source glob patterns", async () => 
       "wiki/sources/fx_koreaexim_20250401.md",
       "wiki/sources/fx_koreaexim_20250501.md",
     ]);
-    const summary = fs.readFileSync(path.join(result.derivedBundlePath, "artifacts", "summary.md"), "utf8");
+    const summary = fs.readFileSync(path.join(result.derivedBundlePath, "artifacts", "summary.docx"), "utf8");
     assert.match(summary, /sources=2/);
     assert.match(summary, /FX 2025-04-01/);
     assert.doesNotMatch(summary, /20251101/);
@@ -223,12 +225,10 @@ test("artifact renderer expands comma brace lists before exact source stat", asy
       env: process.env,
     });
 
-    const selected = fs.readFileSync(path.join(result.derivedBundlePath, "artifacts", "selected.md"), "utf8");
-    assert.deepEqual(selected.trim().split("\n"), [
-      "wiki/sources/fx_koreaexim_20250401.md",
-      "wiki/sources/fx_koreaexim_20250701.md",
-      "wiki/sources/fx_koreaexim_20251001.md",
-    ]);
+    const selected = fs.readFileSync(path.join(result.derivedBundlePath, "artifacts", "selected.docx"), "utf8");
+    assert.match(selected, /wiki\/sources\/fx_koreaexim_20250401\.md/);
+    assert.match(selected, /wiki\/sources\/fx_koreaexim_20250701\.md/);
+    assert.match(selected, /wiki\/sources\/fx_koreaexim_20251001\.md/);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -282,7 +282,7 @@ test("python artifact renderers prefer WIKI_ARTIFACT_PYTHON_BIN", async () => {
     });
 
     assert.equal(fs.existsSync(markerPath), true);
-    assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.md")), true);
+    assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.docx")), true);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
