@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import zlib from "node:zlib";
 
 import {
   artifactRequestSchema,
@@ -94,7 +95,7 @@ test("generated artifact renderer creates a derived package and records promotab
     const presentationPath = path.join(result.derivedBundlePath, "artifacts", "demo_report_Demo_Report.docx");
     assert.equal(fs.existsSync(presentationPath), true);
     assert.equal(result.artifacts.some((artifact) => artifact.role === "presentation" && artifact.path.endsWith("_Demo_Report.docx")), true);
-    const presentationText = fs.readFileSync(presentationPath).toString("utf8");
+    const presentationText = docxDocumentXml(presentationPath);
     assert.match(presentationText, /Demo Report/);
     assert.match(presentationText, /<w:tbl>/);
     assert.doesNotMatch(presentationText, /Artifact kind|User Request|Source Basis|SHA-256/);
@@ -173,7 +174,7 @@ test("artifact renderer expands allowed wiki source glob patterns", async () => 
       "wiki/sources/fx_koreaexim_20250401.md",
       "wiki/sources/fx_koreaexim_20250501.md",
     ]);
-    const summary = fs.readFileSync(path.join(result.derivedBundlePath, "artifacts", "summary.docx"), "utf8");
+    const summary = docxDocumentXml(path.join(result.derivedBundlePath, "artifacts", "summary.docx"));
     assert.match(summary, /sources=2/);
     assert.match(summary, /FX 2025-04-01/);
     assert.doesNotMatch(summary, /20251101/);
@@ -225,7 +226,7 @@ test("artifact renderer expands comma brace lists before exact source stat", asy
       env: process.env,
     });
 
-    const selected = fs.readFileSync(path.join(result.derivedBundlePath, "artifacts", "selected.docx"), "utf8");
+    const selected = docxDocumentXml(path.join(result.derivedBundlePath, "artifacts", "selected.docx"));
     assert.match(selected, /wiki\/sources\/fx_koreaexim_20250401\.md/);
     assert.match(selected, /wiki\/sources\/fx_koreaexim_20250701\.md/);
     assert.match(selected, /wiki\/sources\/fx_koreaexim_20251001\.md/);
@@ -308,4 +309,58 @@ function writeExecutable(root: string, fileName: string, content: string): strin
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function docxDocumentXml(filePath: string): string {
+  return extractZipEntry(fs.readFileSync(filePath), "word/document.xml")?.toString("utf8") ?? "";
+}
+
+function extractZipEntry(zip: Buffer, entryName: string): Buffer | null {
+  const eocdOffset = findEndOfCentralDirectory(zip);
+  let centralOffset = zip.readUInt32LE(eocdOffset + 16);
+  const centralEnd = centralOffset + zip.readUInt32LE(eocdOffset + 12);
+  while (centralOffset < centralEnd) {
+    if (zip.readUInt32LE(centralOffset) !== 0x02014b50) {
+      throw new Error("Invalid ZIP: central directory header not found");
+    }
+    const compressionMethod = zip.readUInt16LE(centralOffset + 10);
+    const compressedSize = zip.readUInt32LE(centralOffset + 20);
+    const fileNameLength = zip.readUInt16LE(centralOffset + 28);
+    const extraFieldLength = zip.readUInt16LE(centralOffset + 30);
+    const fileCommentLength = zip.readUInt16LE(centralOffset + 32);
+    const localHeaderOffset = zip.readUInt32LE(centralOffset + 42);
+    const name = zip.subarray(centralOffset + 46, centralOffset + 46 + fileNameLength).toString("utf8").replaceAll("\\", "/");
+    if (name === entryName) {
+      return inflateZipEntry(zip, localHeaderOffset, compressedSize, compressionMethod);
+    }
+    centralOffset += 46 + fileNameLength + extraFieldLength + fileCommentLength;
+  }
+  return null;
+}
+
+function findEndOfCentralDirectory(zip: Buffer): number {
+  const minOffset = Math.max(0, zip.length - 65_557);
+  for (let offset = zip.length - 22; offset >= minOffset; offset -= 1) {
+    if (zip.readUInt32LE(offset) === 0x06054b50) {
+      return offset;
+    }
+  }
+  throw new Error("Invalid ZIP: end of central directory not found");
+}
+
+function inflateZipEntry(zip: Buffer, localHeaderOffset: number, compressedSize: number, compressionMethod: number): Buffer {
+  if (zip.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+    throw new Error("Invalid ZIP: local file header not found");
+  }
+  const fileNameLength = zip.readUInt16LE(localHeaderOffset + 26);
+  const extraFieldLength = zip.readUInt16LE(localHeaderOffset + 28);
+  const dataOffset = localHeaderOffset + 30 + fileNameLength + extraFieldLength;
+  const compressed = zip.subarray(dataOffset, dataOffset + compressedSize);
+  if (compressionMethod === 0) {
+    return compressed;
+  }
+  if (compressionMethod === 8) {
+    return zlib.inflateRawSync(compressed);
+  }
+  throw new Error(`Unsupported ZIP compression method: ${compressionMethod}`);
 }

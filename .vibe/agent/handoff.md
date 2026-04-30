@@ -10,6 +10,14 @@
 
 ## Status
 
+### Derived DOCX Pandoc Rendering — 2026-05-01
+
+Derived Markdown-to-DOCX rendering now prefers local Pandoc before falling back to the built-in lightweight DOCX writer. In `packages/artifact-core`, renderer-declared Markdown artifacts are converted through Pandoc during finalization, and the worker-owned presentation DOCX is also composed as Markdown and rendered through Pandoc so headings, lists, images, and pipe tables are handled by the mature document converter. `PANDOC_REFERENCE_DOCX` or `TLGI_PANDOC_REFERENCE_DOCX` can point at an optional Word reference template for styling. If Pandoc is missing or fails, the previous lightweight XML renderer remains as fallback.
+
+`llmwiki-runtime-kit/renderers/_lib/common.mjs` now uses the same Pandoc-first DOCX path for registered renderers such as summary reports, comparison tables, timelines, invoice reports, action items, glossary output, and topic indexes. The runtime kit was allowlist-deployed to `/home/tony/workspace/yoni-llm-wiki`; `npm run vault:diff -- --vault ../yoni-llm-wiki` reports no framework drift.
+
+Verification passed: runtime-kit `npm run lint`, product `npm run typecheck`, focused `node --import tsx --test test/artifact-core.test.ts`, `npm run build`, full `npm test` (`481` passed, `1` skipped), `npm run smoke:ready`, `npm run smoke:fx-wiki`, `npm run tlgi -- vault reconcile --json` (zero issues), and diff checks.
+
 ### Derived Artifact DOCX Normalization — 2026-04-30
 
 Finalized derived content artifacts no longer expose report/table/timeline Markdown files under `derived/**/artifacts/`. `packages/artifact-core` now converts renderer-declared Markdown artifacts into DOCX during package finalization while preserving the original run-output Markdown long enough for the presentation renderer to render headings, lists, quotes, code, and Markdown pipe tables as real Word structure inside the delivered presentation DOCX. The live `yoni-llm-wiki` vault was migrated in place: all existing `derived/**/artifacts/*.md` content files were converted to `.docx`, related `manifest.yaml`/`provenance.json`/`source.md`/`wiki/derived/*.md` references were updated, and `npm run tlgi -- vault reconcile --json` reports zero issues.

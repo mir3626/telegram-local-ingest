@@ -159,7 +159,7 @@ The renderer output is the reusable content layer. After renderer execution, the
 - the presentation filename is `<artifact_id>_<artifact title>.docx`, where the title suffix comes from the agent-supplied `title`;
 - if the user explicitly asks for PDF delivery, the request should set `parameters.presentationFormats` to `["docx", "pdf"]`;
 - Telegram sends presentation artifacts first when they exist, while charts, tables, JSON, DOCX, ZIPs, and other raw content artifacts remain in `derived/**/artifacts/` for audit and reuse.
-- Renderer-created Markdown content artifacts are normalized to DOCX during finalization so finalized `derived/**/artifacts/` packages do not expose user-facing `.md` report/table/timeline files. The presentation renderer may still read the renderer's original Markdown from the run directory to render headings, lists, and tables cleanly inside the delivered DOCX.
+- Renderer-created Markdown content artifacts are normalized to DOCX during finalization so finalized `derived/**/artifacts/` packages do not expose user-facing `.md` report/table/timeline files. Markdown-to-DOCX rendering prefers local `pandoc` with optional `PANDOC_REFERENCE_DOCX`/`TLGI_PANDOC_REFERENCE_DOCX` style templates, then falls back to the built-in lightweight renderer if Pandoc is unavailable. The presentation renderer also prefers Pandoc and may read the renderer's original Markdown from the run directory to render headings, lists, images, and tables cleanly inside the delivered DOCX.
 
 Worker-side artifact execution must:
 

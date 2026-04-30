@@ -573,7 +573,7 @@ async function finalizeDerivedPackage(input: {
     const fileName = await availableArtifactFileName(artifactsDir, preferredFileName, usedArtifactFileNames);
     const targetPath = path.join(artifactsDir, fileName);
     if (markdownArtifact) {
-      await writeMarkdownDocxFromFile(sourcePath, targetPath);
+      await writeMarkdownDocxFromFile(sourcePath, targetPath, input.env);
     } else {
       await fs.copyFile(sourcePath, targetPath);
     }
@@ -756,6 +756,7 @@ async function createPresentationArtifacts(input: {
     sourceSnapshot: input.sourceSnapshot,
     artifacts: input.contentArtifacts,
     bundlePath: input.bundlePath,
+    ...(input.env ? { env: input.env } : {}),
   });
   const artifacts: PackagedArtifact[] = [await packagePresentationArtifact(docxPath, `artifacts/${path.basename(docxPath)}`, "presentation")];
   if (formats.includes("pdf")) {
@@ -818,6 +819,27 @@ async function writePresentationDocx(input: {
   sourceSnapshot: ArtifactSourceSnapshot[];
   artifacts: PresentationContentArtifact[];
   bundlePath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  try {
+    await writePresentationDocxWithPandoc(input);
+    return;
+  } catch {
+    await fs.rm(input.outputPath, { force: true });
+  }
+  await writePresentationDocxFallback(input);
+}
+
+async function writePresentationDocxFallback(input: {
+  outputPath: string;
+  title: string;
+  artifactKind: string;
+  generatedAt: string;
+  sourcePrompt: string;
+  sourceSnapshot: ArtifactSourceSnapshot[];
+  artifacts: PresentationContentArtifact[];
+  bundlePath: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const entries: Array<{ name: string; content: Buffer | string }> = [];
   const relationships: Array<{ id: string; type: string; target: string }> = [];
@@ -891,6 +913,92 @@ async function writePresentationDocx(input: {
     { name: "word/document.xml", content: documentXml(body.join("")) },
   );
   await writeZip(entries, input.outputPath);
+}
+
+async function writePresentationDocxWithPandoc(input: {
+  outputPath: string;
+  title: string;
+  artifactKind: string;
+  generatedAt: string;
+  sourcePrompt: string;
+  sourceSnapshot: ArtifactSourceSnapshot[];
+  artifacts: PresentationContentArtifact[];
+  bundlePath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const markdownPath = path.join(input.bundlePath, `.presentation-${safeName(path.parse(input.outputPath).name)}.md`);
+  try {
+    await fs.writeFile(markdownPath, await presentationMarkdown(input), "utf8");
+    await renderMarkdownDocxWithPandoc({
+      markdownPath,
+      docxPath: input.outputPath,
+      cwd: input.bundlePath,
+      env: input.env ?? process.env,
+    });
+  } finally {
+    await fs.rm(markdownPath, { force: true });
+  }
+}
+
+async function presentationMarkdown(input: {
+  title: string;
+  artifacts: PresentationContentArtifact[];
+  bundlePath: string;
+}): Promise<string> {
+  const lines: string[] = [`# ${input.title}`, ""];
+  const supplementalFiles: PackagedArtifact[] = [];
+
+  for (const artifact of input.artifacts) {
+    const artifactPath = path.join(input.bundlePath, artifact.path);
+    const heading = presentationArtifactHeading(artifact, input.artifacts.length);
+    if (isEmbeddableDocxImage(artifact)) {
+      if (heading) {
+        lines.push(`## ${heading}`, "");
+      }
+      lines.push(`![${readableArtifactName(artifact.path)}](${artifact.path})`, "");
+      continue;
+    }
+
+    if (artifact.mediaType === "text/csv") {
+      const csvTable = await csvPreviewTable(artifactPath);
+      if (csvTable.length > 0) {
+        if (heading) {
+          lines.push(`## ${heading}`, "");
+        }
+        lines.push(markdownTable(csvTable), "");
+        continue;
+      }
+    }
+
+    const preview = await textPreview(artifactPath, artifact);
+    if (preview) {
+      if (heading) {
+        lines.push(`## ${heading}`, "");
+      }
+      const mediaType = artifact.presentationSourceMediaType ?? artifact.mediaType;
+      if (mediaType === "application/json") {
+        lines.push("```json", preview, "```", "");
+      } else {
+        lines.push(preview, "");
+      }
+    } else {
+      supplementalFiles.push(artifact);
+    }
+  }
+
+  if (supplementalFiles.length > 0) {
+    lines.push("## Additional Files", "");
+    lines.push(markdownTable([
+      ["File", "Type", "Size"],
+      ...supplementalFiles.map((artifact) => [
+        artifact.path.replace(/^artifacts\//, ""),
+        artifact.mediaType,
+        formatBytes(artifact.sizeBytes),
+      ]),
+    ]), "");
+  }
+
+  return `${lines.join("\n").trim()}\n`;
 }
 
 async function renderPresentationPdf(input: {
@@ -972,6 +1080,24 @@ async function csvPreviewTable(filePath: string): Promise<string[][]> {
   const text = await fs.readFile(filePath, "utf8");
   const rows = parseCsvRows(text).slice(0, 9).map((row) => row.slice(0, 6));
   return rows.length > 0 ? rows : [];
+}
+
+function markdownTable(rows: string[][]): string {
+  const maxColumns = Math.max(1, ...rows.map((row) => row.length));
+  const normalized = rows.map((row) => Array.from({ length: maxColumns }, (_, index) => row[index] ?? ""));
+  const header = normalized[0] ?? Array.from({ length: maxColumns }, (_, index) => `Column ${index + 1}`);
+  const bodyRows = normalized.slice(1);
+  return [
+    `| ${header.map(markdownTableCell).join(" | ")} |`,
+    `| ${header.map(() => "---").join(" | ")} |`,
+    ...bodyRows.map((row) => `| ${row.map(markdownTableCell).join(" | ")} |`),
+  ].join("\n");
+}
+
+function markdownTableCell(value: string): string {
+  return String(value)
+    .replace(/\|/g, "\\|")
+    .replace(/\r?\n/g, "<br>");
 }
 
 function parseCsvRows(text: string): string[][] {
@@ -1133,9 +1259,52 @@ function listItemXml(text: string, kind: "bullet" | "number"): string {
   return `<w:p><w:pPr><w:pStyle w:val="BodyText"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr></w:pPr><w:r><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
 }
 
-async function writeMarkdownDocxFromFile(markdownPath: string, targetPath: string): Promise<void> {
+async function writeMarkdownDocxFromFile(markdownPath: string, targetPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
+  try {
+    await renderMarkdownDocxWithPandoc({
+      markdownPath,
+      docxPath: targetPath,
+      cwd: path.dirname(markdownPath),
+      env: env ?? process.env,
+    });
+    return;
+  } catch {
+    await fs.rm(targetPath, { force: true });
+  }
   const markdown = await fs.readFile(markdownPath, "utf8");
   await writeMarkdownDocx(markdown, targetPath);
+}
+
+async function renderMarkdownDocxWithPandoc(input: {
+  markdownPath: string;
+  docxPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  await fs.mkdir(path.dirname(input.docxPath), { recursive: true });
+  const command = input.env.PANDOC_BIN?.trim() || "pandoc";
+  const args = [
+    "--from", "gfm+pipe_tables+task_lists+strikeout",
+    "--to", "docx",
+    "--standalone",
+    "--wrap=none",
+    "--metadata", "lang=ko-KR",
+    input.markdownPath,
+    "-o", input.docxPath,
+  ];
+  const referenceDoc = input.env.PANDOC_REFERENCE_DOCX?.trim() || input.env.TLGI_PANDOC_REFERENCE_DOCX?.trim() || "";
+  if (referenceDoc) {
+    args.splice(6, 0, `--reference-doc=${referenceDoc}`);
+  }
+  await runBufferedCommand(command, args, {
+    cwd: input.cwd,
+    env: input.env,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+  });
+  const stat = await fs.stat(input.docxPath);
+  if (!stat.isFile() || stat.size === 0) {
+    throw new Error("pandoc did not create a non-empty DOCX file");
+  }
 }
 
 async function writeMarkdownDocx(markdown: string, targetPath: string): Promise<void> {
