@@ -2,12 +2,14 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import zlib from "node:zlib";
 
 import { z } from "zod";
 
 const ARTIFACT_BLOCK_PATTERN = /```tlgi-artifact-request\s*([\s\S]*?)```/g;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_SOURCE_TEXT_BYTES = 1024 * 1024;
+const MAX_PRESENTATION_TEXT_CHARS = 20_000;
 const DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 const sourceRefSchema = z.object({
@@ -881,6 +883,17 @@ async function writePresentationDocxFallback(input: {
       }
     }
 
+    if (shouldRenderDocxArtifact(artifact, input.artifacts)) {
+      const preview = await docxTextPreview(artifactPath);
+      if (preview) {
+        if (heading) {
+          body.push(headingXml(heading, 1));
+        }
+        body.push(...plainTextParagraphs(preview, "BodyText"));
+        continue;
+      }
+    }
+
     const preview = await textPreview(artifactPath, artifact);
     if (preview) {
       if (heading) {
@@ -944,6 +957,7 @@ async function presentationMarkdown(input: {
   title: string;
   artifacts: PresentationContentArtifact[];
   bundlePath: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<string> {
   const lines: string[] = [`# ${input.title}`, ""];
   const supplementalFiles: PackagedArtifact[] = [];
@@ -970,17 +984,23 @@ async function presentationMarkdown(input: {
       }
     }
 
+    if (shouldRenderDocxArtifact(artifact, input.artifacts)) {
+      const preview = await docxMarkdownPreview(artifactPath, input.bundlePath, input.env);
+      if (preview) {
+        if (heading) {
+          lines.push(`## ${heading}`, "");
+        }
+        lines.push(preview, "");
+        continue;
+      }
+    }
+
     const preview = await textPreview(artifactPath, artifact);
     if (preview) {
       if (heading) {
         lines.push(`## ${heading}`, "");
       }
-      const mediaType = artifact.presentationSourceMediaType ?? artifact.mediaType;
-      if (mediaType === "application/json") {
-        lines.push("```json", preview, "```", "");
-      } else {
-        lines.push(preview, "");
-      }
+      lines.push(preview, "");
     } else {
       supplementalFiles.push(artifact);
     }
@@ -1054,10 +1074,27 @@ function readableArtifactName(artifactPath: string): string {
     || "Content";
 }
 
+function shouldRenderDocxArtifact(artifact: PresentationContentArtifact, artifacts: PresentationContentArtifact[]): boolean {
+  if (artifact.mediaType !== DOCX_MEDIA_TYPE) {
+    return false;
+  }
+  const stem = artifactFileStem(artifact.path);
+  const hasSiblingCsv = artifacts.some((candidate) =>
+    candidate !== artifact &&
+    candidate.mediaType === "text/csv" &&
+    artifactFileStem(candidate.path) === stem
+  );
+  return !hasSiblingCsv;
+}
+
+function artifactFileStem(artifactPath: string): string {
+  return path.basename(artifactPath).replace(/\.[^.]+$/, "");
+}
+
 async function textPreview(filePath: string, artifact: PresentationContentArtifact): Promise<string | null> {
   const previewPath = artifact.presentationSourcePath ?? filePath;
   const previewMediaType = artifact.presentationSourceMediaType ?? artifact.mediaType;
-  if (!["text/markdown", "text/plain", "application/json"].includes(previewMediaType)) {
+  if (!["text/markdown", "text/plain"].includes(previewMediaType)) {
     return null;
   }
   const stat = await fs.stat(previewPath);
@@ -1065,7 +1102,7 @@ async function textPreview(filePath: string, artifact: PresentationContentArtifa
     return `Text preview skipped because the artifact is large (${formatBytes(stat.size)}).`;
   }
   const text = await fs.readFile(previewPath, "utf8");
-  return text.length > 4000 ? `${text.slice(0, 4000)}\n\n[Preview truncated]` : text;
+  return truncatePresentationText(text);
 }
 
 function textPreviewBlocks(text: string, artifact: PresentationContentArtifact): string[] {
@@ -1080,6 +1117,39 @@ async function csvPreviewTable(filePath: string): Promise<string[][]> {
   const text = await fs.readFile(filePath, "utf8");
   const rows = parseCsvRows(text).slice(0, 31).map((row) => row.slice(0, 10));
   return rows.length > 0 ? rows : [];
+}
+
+async function docxMarkdownPreview(filePath: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<string | null> {
+  try {
+    const executable = env?.PANDOC_BIN ?? "pandoc";
+    const result = await runBufferedCommand(executable, [filePath, "-t", "gfm", "--wrap=none"], {
+      cwd,
+      env: env ?? process.env,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    });
+    const markdown = truncatePresentationText(result.stdout.trim());
+    if (markdown.length > 0) {
+      return markdown;
+    }
+  } catch {
+    // Fall back to direct DOCX XML extraction below.
+  }
+  return docxTextPreview(filePath);
+}
+
+async function docxTextPreview(filePath: string): Promise<string | null> {
+  const documentXml = extractZipEntry(await fs.readFile(filePath), "word/document.xml");
+  if (!documentXml) {
+    return null;
+  }
+  const text = extractTextFromWordDocumentXml(documentXml.toString("utf8")).trim();
+  return text.length > 0 ? truncatePresentationText(text) : null;
+}
+
+function truncatePresentationText(text: string): string {
+  return text.length > MAX_PRESENTATION_TEXT_CHARS
+    ? `${text.slice(0, MAX_PRESENTATION_TEXT_CHARS)}\n\n[Preview truncated]`
+    : text;
 }
 
 function markdownTable(rows: string[][]): string {
@@ -1504,6 +1574,70 @@ const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
   return c >>> 0;
 });
 
+function extractZipEntry(zip: Buffer, entryName: string): Buffer | null {
+  const eocdOffset = findEndOfCentralDirectory(zip);
+  let centralOffset = zip.readUInt32LE(eocdOffset + 16);
+  const centralEnd = centralOffset + zip.readUInt32LE(eocdOffset + 12);
+  while (centralOffset < centralEnd) {
+    if (zip.readUInt32LE(centralOffset) !== 0x02014b50) {
+      throw new Error("Invalid ZIP: central directory header not found");
+    }
+    const compressionMethod = zip.readUInt16LE(centralOffset + 10);
+    const compressedSize = zip.readUInt32LE(centralOffset + 20);
+    const fileNameLength = zip.readUInt16LE(centralOffset + 28);
+    const extraFieldLength = zip.readUInt16LE(centralOffset + 30);
+    const fileCommentLength = zip.readUInt16LE(centralOffset + 32);
+    const localHeaderOffset = zip.readUInt32LE(centralOffset + 42);
+    const name = zip.subarray(centralOffset + 46, centralOffset + 46 + fileNameLength).toString("utf8").replaceAll("\\", "/");
+    if (name === entryName) {
+      return inflateZipEntry(zip, localHeaderOffset, compressedSize, compressionMethod);
+    }
+    centralOffset += 46 + fileNameLength + extraFieldLength + fileCommentLength;
+  }
+  return null;
+}
+
+function findEndOfCentralDirectory(zip: Buffer): number {
+  const minOffset = Math.max(0, zip.length - 65_557);
+  for (let offset = zip.length - 22; offset >= minOffset; offset -= 1) {
+    if (zip.readUInt32LE(offset) === 0x06054b50) {
+      return offset;
+    }
+  }
+  throw new Error("Invalid ZIP: end of central directory not found");
+}
+
+function inflateZipEntry(zip: Buffer, localHeaderOffset: number, compressedSize: number, compressionMethod: number): Buffer {
+  if (zip.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+    throw new Error("Invalid ZIP: local file header not found");
+  }
+  const fileNameLength = zip.readUInt16LE(localHeaderOffset + 26);
+  const extraFieldLength = zip.readUInt16LE(localHeaderOffset + 28);
+  const dataOffset = localHeaderOffset + 30 + fileNameLength + extraFieldLength;
+  const compressed = zip.subarray(dataOffset, dataOffset + compressedSize);
+  if (compressionMethod === 0) {
+    return compressed;
+  }
+  if (compressionMethod === 8) {
+    return zlib.inflateRawSync(compressed);
+  }
+  throw new Error(`Unsupported ZIP compression method: ${compressionMethod}`);
+}
+
+function extractTextFromWordDocumentXml(xml: string): string {
+  const paragraphs = xml.match(/<w:p\b[\s\S]*?<\/w:p>/g) ?? [xml];
+  return paragraphs
+    .map((paragraph) => paragraph
+      .replace(/<w:tab\b[^>]*\/>/g, "\t")
+      .replace(/<w:br\b[^>]*\/>/g, "\n")
+      .match(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)
+      ?.map((token) => decodeXml(token.replace(/^<w:t\b[^>]*>/, "").replace(/<\/w:t>$/, "")))
+      .join("") ?? "")
+    .map((text) => text.trim())
+    .filter((text) => text.length > 0)
+    .join("\n");
+}
+
 function safeUnicodeFileName(value: string): string {
   return value
     .normalize("NFKC")
@@ -1530,6 +1664,15 @@ function xmlEscape(value: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 async function buildSourceSnapshot(

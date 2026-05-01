@@ -10,6 +10,14 @@
 
 ## Status
 
+### Derived Presentation DOCX Cleanup — 2026-05-01
+
+Reviewed the regenerated registered-renderer QA outputs after topic index DOCX showed raw JSON inside the user-facing document. The same presentation-layer issue affected multiple renderer families: JSON artifacts could be embedded as body previews, and direct DOCX artifacts such as topic indexes/timelines/reports were being treated as supplemental files instead of readable content.
+
+`packages/artifact-core` now excludes JSON from presentation body previews, keeps JSON as supplemental package evidence only, and absorbs direct DOCX renderer outputs into the presentation body via Pandoc DOCX-to-Markdown conversion with a ZIP/XML text fallback. DOCX artifacts with same-stem CSV siblings remain supplemental to avoid duplicating table content already rendered from CSV. The registered-renderer smoke now fails if generated presentation DOCX files contain raw JSON/list syntax or `[Preview truncated]`. Reconcile also accepts automation runs that are marked skipped but still point at an existing vault bundle, which removed a false-positive warning from today's FX empty-rate bundle state.
+
+The latest regenerated QA result set is `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/20260501_044739105`. Manual Pandoc text extraction over all 11 presentation DOCX files found no raw JSON dumps and no truncated raw previews. Verification passed: `npm run typecheck`, focused artifact/automation tests, `npm run build`, `npm run smoke:wiki-renderers`, `npm run smoke:fx-wiki`, `npm run tlgi -- vault reconcile --json`, full `npm test` (`481` passed, `1` skipped), `git diff --check`, and touched-file UTF-8/mojibake checks.
+
 ### Sprint 30 Closed — Registered Renderer QA Matrix — 2026-05-01
 
 Added `npm run smoke:wiki-renderers` as the product acceptance smoke for the registered renderer matrix. The smoke imports real local test files from `/home/tony/workspace/yoni-llm-wiki/to-be-removed`, writes raw bundles and `wiki/sources/**` pages, runs all registered renderer success paths, runs guard cases for known wrong-source/wrong-parameter risks, verifies reconcile stays clean, and copies final artifacts plus package metadata into `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/<timestamp>/` for manual inspection.

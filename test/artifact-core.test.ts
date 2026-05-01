@@ -43,8 +43,10 @@ test("generated artifact renderer creates a derived package and records promotab
         "const [inputPath, outputDir, resultPath] = process.argv.slice(2);",
         "const input = JSON.parse(await fs.readFile(inputPath, 'utf8'));",
         "const reportPath = path.join(outputDir, 'summary.md');",
+        "const jsonPath = path.join(outputDir, 'summary.json');",
         "await fs.writeFile(reportPath, `# Generated\\n\\n| Field | Value |\\n| --- | --- |\\n| Source | ${input.sources[0].path} |\\n`, 'utf8');",
-        "await fs.writeFile(resultPath, JSON.stringify({artifacts:[{path:'summary.md',role:'report',mediaType:'text/markdown'}]}), 'utf8');",
+        "await fs.writeFile(jsonPath, JSON.stringify({records:[{debug:'machine readable only'}]}, null, 2), 'utf8');",
+        "await fs.writeFile(resultPath, JSON.stringify({artifacts:[{path:'summary.md',role:'report',mediaType:'text/markdown'},{path:'summary.json',role:'report',mediaType:'application/json'}]}), 'utf8');",
         "",
       ].join("\n"),
     },
@@ -92,6 +94,7 @@ test("generated artifact renderer creates a derived package and records promotab
     assert.equal(fs.existsSync(path.join(result.derivedBundlePath, ".finalized")), true);
     assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.docx")), true);
     assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.md")), false);
+    assert.equal(fs.existsSync(path.join(result.derivedBundlePath, "artifacts", "summary.json")), true);
     const presentationPath = path.join(result.derivedBundlePath, "artifacts", "demo_report_Demo_Report.docx");
     assert.equal(fs.existsSync(presentationPath), true);
     assert.equal(result.artifacts.some((artifact) => artifact.role === "presentation" && artifact.path.endsWith("_Demo_Report.docx")), true);
@@ -99,6 +102,7 @@ test("generated artifact renderer creates a derived package and records promotab
     assert.match(presentationText, /Demo Report/);
     assert.match(presentationText, /<w:tbl>/);
     assert.doesNotMatch(presentationText, /Artifact kind|User Request|Source Basis|SHA-256/);
+    assert.doesNotMatch(presentationText, /machine readable only|records/);
     assert.match(fs.readFileSync(path.join(result.derivedBundlePath, "provenance.json"), "utf8"), /demo wiki data/);
     assert.equal(listArtifactRendererRuns(dbHandle.db, 10).length, 1);
     assert.equal(getArtifactRendererRun(dbHandle.db, runId)?.sourcePrompt, prompt);

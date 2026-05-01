@@ -550,7 +550,9 @@ async function runArtifact(input: {
     await assertFile(path.join(bundlePath, relative));
   }
   const presentationRelative = `artifacts/${safeArtifactId(artifactId)}_${safePresentationTitle(String(input.request.title ?? artifactId))}.docx`;
-  await assertFile(path.join(bundlePath, presentationRelative));
+  const presentationPath = path.join(bundlePath, presentationRelative);
+  await assertFile(presentationPath);
+  await assertPresentationDocxClean(presentationPath);
   for (const suffix of input.expectedArtifactSuffixes ?? []) {
     if (!parsed.artifactPaths.some((artifactPath) => artifactPath.endsWith(suffix))) {
       throw new Error(`Expected artifact suffix ${suffix} in ${parsed.artifactPaths.join(", ")}`);
@@ -835,6 +837,19 @@ async function assertFile(filePath: string) {
   const stat = await fs.stat(filePath);
   if (!stat.isFile()) {
     throw new Error(`Expected file: ${filePath}`);
+  }
+}
+
+async function assertPresentationDocxClean(filePath: string) {
+  const pandocBin = process.env.PANDOC_BIN?.trim() || "pandoc";
+  const result = await runProcess(pandocBin, [filePath, "-t", "plain"], { cwd: projectRoot, env: process.env });
+  const text = result.stdout;
+  const badJsonLine = text.split(/\r?\n/).find((line) => /^\s*[{[]\s*$/.test(line));
+  if (badJsonLine) {
+    throw new Error(`Presentation DOCX appears to contain raw JSON/list syntax: ${filePath}`);
+  }
+  if (text.includes("[Preview truncated]")) {
+    throw new Error(`Presentation DOCX contains a truncated raw preview: ${filePath}`);
   }
 }
 

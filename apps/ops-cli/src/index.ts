@@ -1519,15 +1519,18 @@ async function readAutomationBundlePath(
     }
     const resultStatus = parsed.moduleResult.status;
     const skipReason = parsed.moduleResult.reason;
-    if (resultStatus === "skipped" && skipReason !== "raw_bundle_exists") {
-      return null;
-    }
     const bundlePath = parsed.moduleResult.bundlePath;
     if (typeof bundlePath !== "string" || bundlePath.trim() === "") {
       return null;
     }
     const resolved = resolveStoredVaultPath(paths, bundlePath);
-    return isPathInside(paths.vaultRoot, resolved) ? resolved : null;
+    if (!isPathInside(paths.vaultRoot, resolved)) {
+      return null;
+    }
+    if (resultStatus === "skipped" && skipReason !== "raw_bundle_exists" && !await pathExists(resolved)) {
+      return null;
+    }
+    return resolved;
   } catch {
     return null;
   }
