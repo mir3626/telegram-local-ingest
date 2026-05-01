@@ -104,6 +104,8 @@ test("generated artifact renderer creates a derived package and records promotab
     assert.doesNotMatch(presentationText, /Artifact kind|User Request|Source Basis|SHA-256/);
     assert.doesNotMatch(presentationText, /machine readable only|records/);
     assert.match(fs.readFileSync(path.join(result.derivedBundlePath, "provenance.json"), "utf8"), /demo wiki data/);
+    assert.equal(fs.existsSync(result.stdoutPath), false);
+    assert.equal(fs.existsSync(result.stderrPath), false);
     assert.equal(listArtifactRendererRuns(dbHandle.db, 10).length, 1);
     assert.equal(getArtifactRendererRun(dbHandle.db, runId)?.sourcePrompt, prompt);
 

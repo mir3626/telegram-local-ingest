@@ -15,6 +15,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.app.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.app.json --noEmit",
+    "audit:unused": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters && tsc -p tsconfig.app.json --noEmit --noUnusedLocals --noUnusedParameters",
     "test": "node --import tsx --test test/*.test.ts",
     "smoke:ready": "npx tsx apps/worker/src/readiness.ts",
     "smoke:agent:ready": "bash scripts/smoke-agent-postprocess.sh --ready",

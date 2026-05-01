@@ -55,7 +55,6 @@ import {
   type StoredAutomationRun,
   type StoredAutomationScheduleState,
   type StoredArtifactRendererRun,
-  type StoredJobOutput,
   type StoredSourceBundle,
   type StoredVaultTombstone,
 } from "@telegram-local-ingest/db";

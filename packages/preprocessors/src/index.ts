@@ -747,10 +747,6 @@ function inflateZipEntry(zip: Buffer, localHeaderOffset: number, compressedSize:
   throw new Error(`Unsupported ZIP compression method: ${compressionMethod}`);
 }
 
-function extractTextFromWordDocumentXml(xml: string): string {
-  return extractTextBlocksFromWordDocumentXml(xml).map((block) => block.text).join("\n");
-}
-
 function extractTextBlocksFromWordDocumentXml(xml: string): DocxTextBlock[] {
   const paragraphs = xml.match(/<w:p\b[\s\S]*?<\/w:p>/g) ?? [xml];
   const blocks: DocxTextBlock[] = [];

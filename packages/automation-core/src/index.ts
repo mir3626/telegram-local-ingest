@@ -327,10 +327,18 @@ async function writeRunFiles(input: {
 }): Promise<void> {
   await fs.mkdir(path.dirname(input.stdoutPath), { recursive: true });
   await Promise.all([
-    fs.writeFile(input.stdoutPath, input.stdout, "utf8"),
-    fs.writeFile(input.stderrPath, input.stderr, "utf8"),
+    writeOptionalTextFile(input.stdoutPath, input.stdout),
+    writeOptionalTextFile(input.stderrPath, input.stderr),
     fs.writeFile(input.resultPath, `${JSON.stringify(input.result, null, 2)}\n`, "utf8"),
   ]);
+}
+
+async function writeOptionalTextFile(filePath: string, text: string): Promise<void> {
+  if (text.length === 0) {
+    await fs.rm(filePath, { force: true });
+    return;
+  }
+  await fs.writeFile(filePath, text, "utf8");
 }
 
 async function readExistingModuleResult(resultPath: string): Promise<unknown | undefined> {

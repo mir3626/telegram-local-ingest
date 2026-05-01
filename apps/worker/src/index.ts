@@ -43,7 +43,6 @@ import {
   listJobEvents,
   listJobFiles,
   listJobOutputs,
-  listJobs,
   migrate,
   mustGetJob,
   mustGetSourceBundleForJob,
@@ -126,13 +125,6 @@ const WIKI_CHAT_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 const WIKI_CHAT_ATTACHMENT_ZIP_THRESHOLD = 5;
 const WIKI_CHAT_ATTACHMENT_TTL_MS = 12 * 60 * 60 * 1000;
 const WIKI_CHAT_ATTACHMENT_MIME_TYPE = "application/zip";
-
-interface WikiChatAttachment {
-  path: string;
-  label?: string;
-  fileName?: string;
-  mimeType?: string;
-}
 
 interface ResolvedWikiChatAttachment {
   absolutePath: string;
@@ -5110,17 +5102,6 @@ function fitSingleLinePdfTextFontSize(
     }
   }
   return 5;
-}
-
-function fitPdfTextFontSize(doc: PDFKit.PDFDocument, text: string, width: number, height: number): number {
-  const maxFontSize = Math.max(6, Math.min(16, height * 0.55));
-  for (let fontSize = maxFontSize; fontSize >= 6; fontSize -= 0.5) {
-    doc.fontSize(fontSize);
-    if (doc.heightOfString(text, { width, lineGap: Math.max(0, Math.min(2, fontSize * 0.14)) }) <= height) {
-      return fontSize;
-    }
-  }
-  return 6;
 }
 
 function readImageDimensions(buffer: Buffer): ImageDimensions | null {

@@ -84,7 +84,7 @@ test("runAutomationModule writes durable stdout stderr and result files", async 
 
     assert.equal(result.exitCode, 0);
     assert.match(fs.readFileSync(result.stdoutPath, "utf8"), /module=demo.echo/);
-    assert.equal(fs.readFileSync(result.stderrPath, "utf8"), "");
+    assert.equal(fs.existsSync(result.stderrPath), false);
     const resultJson = JSON.parse(fs.readFileSync(result.resultPath, "utf8")) as {
       status?: string;
       moduleResult?: { artifact?: string };

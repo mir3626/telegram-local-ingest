@@ -298,8 +298,8 @@ async function readRunDetail(context: DashboardContext, runId: string): Promise<
       throw new Error(`Automation run not found: ${runId}`);
     }
     const [stdout, stderr, resultText] = await Promise.all([
-      readSafeRunText(context.paths.automationRunsDir, run.stdoutPath),
-      readSafeRunText(context.paths.automationRunsDir, run.stderrPath),
+      readSafeRunText(context.paths.automationRunsDir, run.stdoutPath, { missingAsEmpty: true }),
+      readSafeRunText(context.paths.automationRunsDir, run.stderrPath, { missingAsEmpty: true }),
       readSafeRunText(context.paths.automationRunsDir, run.resultPath),
     ]);
     const parsedResult = parseJson(resultText);
@@ -325,8 +325,8 @@ async function readArtifactRunDetail(context: DashboardContext, runId: string): 
       throw new Error(`Artifact renderer run not found: ${runId}`);
     }
     const [stdout, stderr, resultText, generatedCode] = await Promise.all([
-      readSafeRunText(context.paths.artifactRunsDir, run.stdoutPath),
-      readSafeRunText(context.paths.artifactRunsDir, run.stderrPath),
+      readSafeRunText(context.paths.artifactRunsDir, run.stdoutPath, { missingAsEmpty: true }),
+      readSafeRunText(context.paths.artifactRunsDir, run.stderrPath, { missingAsEmpty: true }),
       readSafeRunText(context.paths.artifactRunsDir, run.resultPath),
       readGeneratedRendererCode(context.paths.artifactRunsDir, run.runDir),
     ]);
@@ -878,7 +878,11 @@ function extractWikiPageRelative(moduleResult: unknown): string | undefined {
   return match?.[1];
 }
 
-async function readSafeRunText(runsRoot: string, targetPath: string): Promise<string> {
+async function readSafeRunText(
+  runsRoot: string,
+  targetPath: string,
+  options: { missingAsEmpty?: boolean } = {},
+): Promise<string> {
   const resolvedRoot = path.resolve(runsRoot);
   const resolvedTarget = path.resolve(targetPath);
   if (!isPathInside(resolvedRoot, resolvedTarget)) {
@@ -888,6 +892,9 @@ async function readSafeRunText(runsRoot: string, targetPath: string): Promise<st
     const text = await fs.readFile(resolvedTarget, "utf8");
     return text.length > MAX_LOG_CHARS ? `${text.slice(0, MAX_LOG_CHARS)}\n[truncated]` : text;
   } catch (error) {
+    if (options.missingAsEmpty && isNotFoundError(error)) {
+      return "";
+    }
     return `[unavailable: ${errorMessage(error)}]`;
   }
 }

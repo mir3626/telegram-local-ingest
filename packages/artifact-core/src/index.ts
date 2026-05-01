@@ -6,6 +6,8 @@ import zlib from "node:zlib";
 
 import { z } from "zod";
 
+import { writeRunTextFile } from "./run-files.js";
+
 const ARTIFACT_BLOCK_PATTERN = /```tlgi-artifact-request\s*([\s\S]*?)```/g;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_SOURCE_TEXT_BYTES = 1024 * 1024;
@@ -287,8 +289,8 @@ export async function runArtifactRequest(input: ArtifactRunInput): Promise<Artif
     });
 
   await Promise.all([
-    fs.writeFile(stdoutPath, execution.stdout, "utf8"),
-    fs.writeFile(stderrPath, execution.stderr, "utf8"),
+    writeRunTextFile(stdoutPath, execution.stdout),
+    writeRunTextFile(stderrPath, execution.stderr),
   ]);
 
   const packaged = await finalizeDerivedPackage({
