@@ -10,6 +10,14 @@
 
 ## Status
 
+### Registered Renderer Business Output Cleanup — 2026-05-01
+
+After manual review found that the invoice comparison, timeline, summary report, invoice summary, meeting actions, glossary, topic index, and NotebookLM export presentation DOCX files still contained mostly non-user-facing material, the root cause was fixed in `llmwiki-runtime-kit`: registered renderers were reading the full `wiki/sources/*.md` wrapper page instead of only the canonical text inside `## Extracts`. This caused Bundle/Canonical Inputs/Citations/source paths and other ingest metadata to be summarized as business content.
+
+`llmwiki-runtime-kit` commit `2e0ff4d` now normalizes source snapshots to canonical extracted text, preserves a human source title, and updates the business renderers to emit user-facing fields: invoice/vendor/date/total/payment/trade/product tables, timeline event tables, action item rows, glossary terms with context, topic index business notes, and a NotebookLM operator guide. The live `yoni-llm-wiki` vault was updated with zero framework drift. Product smoke validation now rejects presentation DOCX files containing wrapper metadata markers such as `Bundle:`, `Canonical Inputs`, `wiki/sources/`, `source.md`, or `manifest.yaml`.
+
+Latest regenerated QA result set: `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/20260501_052703621`. Verification passed: runtime-kit `npm run lint`, runtime-kit deploy/diff, product `npm run smoke:wiki-renderers`, product `npm run smoke:fx-wiki`, product `npm run typecheck`, product `npm run build`, product `npm run tlgi -- vault reconcile --json`, full `npm test` (`481` passed, `1` skipped), diff checks, and UTF-8/mojibake checks.
+
 ### Derived Presentation DOCX Cleanup — 2026-05-01
 
 Reviewed the regenerated registered-renderer QA outputs after topic index DOCX showed raw JSON inside the user-facing document. The same presentation-layer issue affected multiple renderer families: JSON artifacts could be embedded as body previews, and direct DOCX artifacts such as topic indexes/timelines/reports were being treated as supplemental files instead of readable content.

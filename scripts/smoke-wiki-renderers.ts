@@ -851,6 +851,20 @@ async function assertPresentationDocxClean(filePath: string) {
   if (text.includes("[Preview truncated]")) {
     throw new Error(`Presentation DOCX contains a truncated raw preview: ${filePath}`);
   }
+  const forbiddenMetadata = [
+    "Bundle:",
+    "Canonical Inputs",
+    "Other Manifest Inputs",
+    "renderer-qa",
+    "wiki/sources/",
+    "Source Path",
+    "source.md",
+    "manifest.yaml",
+  ];
+  const marker = forbiddenMetadata.find((item) => text.includes(item));
+  if (marker) {
+    throw new Error(`Presentation DOCX contains source-wrapper metadata (${marker}): ${filePath}`);
+  }
 }
 
 function isSupportedInput(filePath: string): boolean {
