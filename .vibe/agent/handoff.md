@@ -10,6 +10,14 @@
 
 ## Status
 
+### Derived Presentation Template Polish — 2026-05-01
+
+User-facing derived artifact presentation DOCX output was polished across the product packaging layer and `llmwiki-runtime-kit` registered renderers. `Additional Files` is now replaced with a `Reference` section listing only referenced source files. Presentation packaging renders CSV bodies only for `role=table`, so support/data CSV files such as invoice summaries no longer duplicate the DOCX report body. Same-stem DOCX outputs are still rendered when their sibling CSV is not a rendered table, which restores `meeting.actions` and `glossary.extract` presentation content. `action_items`, `glossary`, and NotebookLM guide artifacts rely on their own headings instead of duplicated presentation headings.
+
+Runtime-kit commit `77e7439` updates registered renderer output language and layout: summary reports use Korean section labels and an `Attention Items` table with `Items | Document`; meeting actions use `Action Items` with `Owner` after `Status`; glossary output uses `Glossary`, replaces context/evidence with a Korean meaning column, and limits candidates to the top 30; invoice summaries keep one rendered table/report body while retaining CSV as packaged data; FX statistics/comparison values round to two decimals and dates display as `YYYY/MM/DD`; NotebookLM export guide removes the empty Summary section and uses Korean operator-facing text. Product commit `a1a58c5` contains the presentation packaging and smoke assertion updates.
+
+Latest regenerated QA result set: `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/20260501_081318181`. Verification passed: runtime-kit `npm run lint`, runtime-kit deploy/diff to `/home/tony/workspace/yoni-llm-wiki`, product `npm run typecheck`, `npm run smoke:wiki-renderers`, `npm run build`, `npm run smoke:fx-wiki`, `npm run tlgi -- vault reconcile --json`, full `npm test` (`481` passed, `1` skipped), touched-file UTF-8/mojibake checks, and stack restart via `npm run ops:restart`. The stack is running with Bot API pid `1357412`, worker pid `1357697`, ops dashboard pid `1357708`, and dashboard URL `http://127.0.0.1:58991/`.
+
 ### Registered Renderer Business Output Cleanup — 2026-05-01
 
 After manual review found that the invoice comparison, timeline, summary report, invoice summary, meeting actions, glossary, topic index, and NotebookLM export presentation DOCX files still contained mostly non-user-facing material, the root cause was fixed in `llmwiki-runtime-kit`: registered renderers were reading the full `wiki/sources/*.md` wrapper page instead of only the canonical text inside `## Extracts`. This caused Bundle/Canonical Inputs/Citations/source paths and other ingest metadata to be summarized as business content.
