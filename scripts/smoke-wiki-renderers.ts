@@ -153,7 +153,7 @@ async function main() {
         delivery: { sendToTelegram: false, ingestDerived: true },
       },
       expectedFiles: ["artifacts/comparison_table.docx", "artifacts/comparison_table.csv", "artifacts/comparison_table.xlsx"],
-      contentChecks: [{ relativePath: "artifacts/comparison_table.csv", includes: ["USD", "2025", "Deal Basis"] }],
+      contentChecks: [{ relativePath: "artifacts/comparison_table.csv", includes: ["USD", "2025", "매매기준율"] }],
     }));
     runs.push(await runArtifact({
       requestDir,

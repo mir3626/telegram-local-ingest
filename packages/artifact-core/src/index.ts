@@ -850,7 +850,6 @@ async function writePresentationDocxFallback(input: {
     ["xml", "application/xml"],
   ]);
   const body: string[] = [paragraphXml(input.title, "Title")];
-  const supplementalFiles: PackagedArtifact[] = [];
 
   for (const artifact of input.artifacts) {
     const artifactPath = path.join(input.bundlePath, artifact.path);
@@ -872,7 +871,7 @@ async function writePresentationDocxFallback(input: {
       continue;
     }
 
-    if (artifact.mediaType === "text/csv") {
+    if (artifact.mediaType === "text/csv" && shouldRenderCsvArtifact(artifact)) {
       const csvTable = await csvPreviewTable(artifactPath);
       if (csvTable.length > 0) {
         if (heading) {
@@ -900,20 +899,15 @@ async function writePresentationDocxFallback(input: {
         body.push(headingXml(heading, 1));
       }
       body.push(...textPreviewBlocks(preview, artifact));
-    } else {
-      supplementalFiles.push(artifact);
     }
   }
 
-  if (supplementalFiles.length > 0) {
-    body.push(headingXml("Additional Files", 1));
+  const references = referenceRows(input.sourceSnapshot);
+  if (references.length > 0) {
+    body.push(headingXml("Reference", 1));
     body.push(tableXml([
-      ["File", "Type", "Size"],
-      ...supplementalFiles.map((artifact) => [
-        artifact.path.replace(/^artifacts\//, ""),
-        artifact.mediaType,
-        formatBytes(artifact.sizeBytes),
-      ]),
+      ["원본 파일", "유형", "크기"],
+      ...references,
     ], true));
   }
 
@@ -955,12 +949,12 @@ async function writePresentationDocxWithPandoc(input: {
 
 async function presentationMarkdown(input: {
   title: string;
+  sourceSnapshot: ArtifactSourceSnapshot[];
   artifacts: PresentationContentArtifact[];
   bundlePath: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<string> {
   const lines: string[] = [`# ${input.title}`, ""];
-  const supplementalFiles: PackagedArtifact[] = [];
 
   for (const artifact of input.artifacts) {
     const artifactPath = path.join(input.bundlePath, artifact.path);
@@ -973,7 +967,7 @@ async function presentationMarkdown(input: {
       continue;
     }
 
-    if (artifact.mediaType === "text/csv") {
+    if (artifact.mediaType === "text/csv" && shouldRenderCsvArtifact(artifact)) {
       const csvTable = await csvPreviewTable(artifactPath);
       if (csvTable.length > 0) {
         if (heading) {
@@ -1001,20 +995,15 @@ async function presentationMarkdown(input: {
         lines.push(`## ${heading}`, "");
       }
       lines.push(preview, "");
-    } else {
-      supplementalFiles.push(artifact);
     }
   }
 
-  if (supplementalFiles.length > 0) {
-    lines.push("## Additional Files", "");
+  const references = referenceRows(input.sourceSnapshot);
+  if (references.length > 0) {
+    lines.push("## Reference", "");
     lines.push(markdownTable([
-      ["File", "Type", "Size"],
-      ...supplementalFiles.map((artifact) => [
-        artifact.path.replace(/^artifacts\//, ""),
-        artifact.mediaType,
-        formatBytes(artifact.sizeBytes),
-      ]),
+      ["원본 파일", "유형", "크기"],
+      ...references,
     ]), "");
   }
 
@@ -1059,11 +1048,50 @@ function presentationArtifactHeading(artifact: PackagedArtifact, artifactCount: 
       return "Summary";
     case "index":
       return "Index";
+    case "action_items":
+    case "glossary":
+    case "guide":
+      return null;
     case "presentation":
       return null;
     default:
       return readableArtifactName(artifact.path);
   }
+}
+
+function shouldRenderCsvArtifact(artifact: PresentationContentArtifact): boolean {
+  return artifact.role === "table";
+}
+
+function referenceRows(sources: ArtifactSourceSnapshot[]): string[][] {
+  const seen = new Set<string>();
+  const rows: string[][] = [];
+  for (const source of sources) {
+    const key = source.path;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    rows.push([
+      source.label || path.basename(source.path),
+      source.type || inferReferenceType(source.path),
+      formatBytes(source.sizeBytes),
+    ]);
+  }
+  return rows;
+}
+
+function inferReferenceType(sourcePath: string): string {
+  if (sourcePath.startsWith("wiki/sources/")) {
+    return "wiki source";
+  }
+  if (sourcePath.startsWith("raw/")) {
+    return "raw source";
+  }
+  if (sourcePath.startsWith("derived/")) {
+    return "derived source";
+  }
+  return "source";
 }
 
 function readableArtifactName(artifactPath: string): string {
@@ -1079,12 +1107,13 @@ function shouldRenderDocxArtifact(artifact: PresentationContentArtifact, artifac
     return false;
   }
   const stem = artifactFileStem(artifact.path);
-  const hasSiblingCsv = artifacts.some((candidate) =>
+  const hasSiblingRenderedCsv = artifacts.some((candidate) =>
     candidate !== artifact &&
     candidate.mediaType === "text/csv" &&
+    shouldRenderCsvArtifact(candidate) &&
     artifactFileStem(candidate.path) === stem
   );
-  return !hasSiblingCsv;
+  return !hasSiblingRenderedCsv;
 }
 
 function artifactFileStem(artifactPath: string): string {
