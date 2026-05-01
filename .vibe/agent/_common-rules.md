@@ -1,5 +1,17 @@
 # Sprint 공용 규칙 (프롬프트 조각)
 
+## 0. Initialization boundary (CRITICAL)
+
+Before any Sprint Generator or Codex Orchestrator maintenance work in a downstream clone, the project must be initialized by `/vibe-init`.
+
+Required project-owned state:
+- `docs/context/product.md` exists, is non-empty, and describes the current project rather than the `vibe-doctor` template.
+- `.vibe/agent/sprint-status.json` exists and `project.name` is not `vibe-doctor`.
+
+If either artifact is missing, malformed, empty, or template-owned, stop all non-init work and run the `vibe-init` workflow first. Codex skill execution must use `npm run vibe:init -- --from-agent-skill --mode=human` only after Step 1-0 selects `human`; when Step 1-0 selects `agent`, use `npm run vibe:init -- --from-agent-skill --mode=agent --runtime=codex --one-liner "<...>"` and stop after the delegation prompt. Direct agent shell use of plain `npm run vibe:init` is not the init path.
+
+Narrow exception: `/vibe-review` may run read-only in a partial or uninitialized downstream checkout when the explicit target is an init/bootstrap/harness process failure. This exception does not permit product implementation work.
+
 > **사용법**: Planner는 Sprint 프롬프트를 생성할 때 이 파일의 내용을 "Rules" 섹션 앞에
 > 그대로 붙이거나, 프롬프트 상단에 `(공용 규칙은 `.vibe/agent/_common-rules.md` 준수)`
 > 한 줄 포함 후 Sprint 고유 규칙만 추가한다. 중복을 피해 토큰 예산을 절약한다.
@@ -102,7 +114,7 @@ Short markdown으로 아래 섹션을 순서대로 포함:
 | command | exit |
 |---|---|
 | npx tsc --noEmit | 0 |
-| node scripts/xxx-smoke.mjs | 0 |
+| node .vibe/harness/scripts/xxx-smoke.mjs | 0 |
 
 ## Sandbox-only failures
 - (sandbox 제약으로 실행 못 한 검증만 여기. 실제 실패는 Verification 표에 그대로 남김)
@@ -122,7 +134,7 @@ Orchestrator가 허용되는 **메타 편집** 범위 (본문 재작성 X):
 - 포맷 보정 (마크다운 렌더링 깨짐 수정 등)
 
 Orchestrator가 본문을 **직접 작성**하는 것은 다음 예외 상황에서만 허용되며, session-log에 `[decision]` 태그로 사유 기록:
-- 🟢 Sprint 가 trivial (패턴 직접 계승 + 새 아키텍처 결정 없음 + 체크리스트 ≤3 항목) 이고 사용자가 "간소화" 명시. **반드시** `node scripts/vibe-planner-skip-log.mjs <sprintId> <reason>` 으로 session-log 에 `[decision][planner-skip]` 태그 기록 (수동 편집 금지). LOC 기준은 제거됨 (gameable).
+- 🟢 Sprint 가 trivial (패턴 직접 계승 + 새 아키텍처 결정 없음 + 체크리스트 ≤3 항목) 이고 사용자가 "간소화" 명시. **반드시** `node .vibe/harness/scripts/vibe-planner-skip-log.mjs <sprintId> <reason>` 으로 session-log 에 `[decision][planner-skip]` 태그 기록 (수동 편집 금지). LOC 기준은 제거됨 (gameable).
 - 🟡 Planner 소환이 2회 연속 실패(타임아웃 / 에러 반환) 후 사용자가 fallback 승인
 
 어느 예외든 발동 시 **자동으로 Evaluator Should 트리거**로 간주한다 (작성자=평가자 우려 완화를 위해 Evaluator를 강제 소환). CLAUDE.md 트리거 매트릭스의 예외 조건과 충돌 시 이 규칙이 우선.
@@ -138,7 +150,7 @@ Sprint 마무리 시퀀스:
 1. Generator report 수신
 2. Orchestrator 샌드박스 밖 재검증 (tsc / test / build)
 3. Orchestrator self-QA 통과 (체크리스트 대조)
-4. `node scripts/vibe-sprint-complete.mjs <sprintId> passed` 실행 → state 파일 3종(`sprint-status.json` / `handoff.md` / `session-log.md`) 자동 갱신 (자동 커밋 X)
+4. `node .vibe/harness/scripts/vibe-sprint-complete.mjs <sprintId> passed` 실행 → state 파일 3종(`sprint-status.json` / `handoff.md` / `session-log.md`) 자동 갱신 (자동 커밋 X)
 5. **단일 `git commit`**: Generator feature 파일 + state 3종을 한 번에 `git add` 후 commit
 6. `git push origin <branch>`
 
@@ -217,7 +229,7 @@ If the marker blocks are absent, Planner may skip shard loading only for a brand
 
 | # | 체크포인트 | 적용 조건 |
 |---|---|---|
-| W1 | `CLAUDE.md` §훅 강제 메커니즘 테이블 행 추가 | 신규 `scripts/vibe-*.mjs` 또는 `run-*.{sh,cmd}` 추가 시 |
+| W1 | `CLAUDE.md` §훅 강제 메커니즘 테이블 행 추가 | 신규 `.vibe/harness/scripts/vibe-*.mjs` 또는 `run-*.{sh,cmd}` 추가 시 |
 | W2 | `CLAUDE.md` §관련 스킬 list + 한 줄 설명 추가 | 신규 슬래시 커맨드 / `.claude/skills/*` 추가 시 |
 | W3 | `CLAUDE.md` §Sprint flow 번호 업데이트 | Sprint 사이클 절차 변경 시 |
 | W4 | `.claude/settings.json` hook 등록 (SessionStart / Stop / PreToolUse / PostToolUse / Notification / PreCompact) | 이벤트 기반 스크립트 추가 시 |
@@ -268,7 +280,7 @@ Windows portability rule: commands stored in `.claude/settings.json` must be val
 | ... | ... | ... |
 
 verified-callers:
-- scripts/vibe-foo.mjs → CLAUDE.md:86 훅 테이블 / .claude/settings.json:70 PostToolUse
+- .vibe/harness/scripts/vibe-foo.mjs → CLAUDE.md:86 훅 테이블 / .claude/settings.json:70 PostToolUse
 ```
 
 ### §14.5 근거
@@ -307,9 +319,9 @@ report 의 `## AC (lower bound)` 와 `## Creative bets` 는 섞지 않는다.
 
 This harness can be driven by Claude, Codex, Gemini, or another CLI provider. Provider-specific hooks are not equally available, so every agent must treat `.vibe/agent/handoff.md`, `.vibe/agent/session-log.md`, and `.vibe/agent/sprint-status.json` as the durable state boundary.
 
-- At session start, use `node scripts/vibe-agent-session-start.mjs` when available. It performs session-start logging, harness version checks, and model registry checks without relying on Claude-only hooks.
+- At session start, use `node .vibe/harness/scripts/vibe-agent-session-start.mjs` when available. It performs session-start logging, harness version checks, and model registry checks without relying on Claude-only hooks.
 - Sprint Generator agents normally do not need token-threshold checkpoint automation because they are invoked per Sprint and return state through a completion report.
 - Codex used as the main Orchestrator runs in Orchestrator maintenance mode and has no native PreCompact or context-threshold hook. For that mode, run the `maintain-context` workflow after meaningful decisions, releases, pushes, long reviews, or before final handoff.
-- Before context compaction, handoff, or final response after meaningful Orchestrator work, update `handoff.md` and append a concise `session-log.md` entry. Then run `npm run vibe:checkpoint` when available, or `node scripts/vibe-checkpoint.mjs`.
+- Before context compaction, handoff, or final response after meaningful Orchestrator work, update `handoff.md` and append a concise `session-log.md` entry. Then run `npm run vibe:checkpoint` when available, or `node .vibe/harness/scripts/vibe-checkpoint.mjs`.
 - If the provider has no PreCompact hook, this rule is mandatory process discipline. Do not assume chat history survives; preserve restart instructions in the files above.
 - If a compact/checkpoint cannot be completed, state the reason in the final report and leave the repo in a state that can be resumed by reading `handoff.md` and `session-log.md`.

@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/vibe-agent-session-start.mjs"
+            "command": "node .vibe/harness/scripts/vibe-agent-session-start.mjs"
           }
         ]
       }
@@ -63,7 +63,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/vibe-attention-notify.mjs"
+            "command": "node .vibe/harness/scripts/vibe-attention-notify.mjs"
           }
         ]
       },
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/vibe-attention-notify.mjs"
+            "command": "node .vibe/harness/scripts/vibe-attention-notify.mjs"
           }
         ]
       },
@@ -81,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/vibe-attention-notify.mjs"
+            "command": "node .vibe/harness/scripts/vibe-attention-notify.mjs"
           }
         ]
       }
@@ -102,7 +102,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/vibe-stop-qa-gate.mjs"
+            "command": "node .vibe/harness/scripts/vibe-stop-qa-gate.mjs"
           }
         ]
       }
@@ -112,7 +112,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/vibe-checkpoint.mjs"
+            "command": "node .vibe/harness/scripts/vibe-checkpoint.mjs"
           }
         ]
       }

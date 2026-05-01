@@ -8,7 +8,7 @@ tools: Read, Glob, Grep, WebFetch, Write, Edit
 <!--
   model: "opus" is the Claude Code family alias.
   Tier-based resolution (flagship/performant/efficient → family alias → apiId) is performed
-  by the Orchestrator before Agent calls via `node scripts/vibe-resolve-model.mjs <role>`.
+  by the Orchestrator before Agent calls via `node .vibe/harness/scripts/vibe-resolve-model.mjs <role>`.
   Registry source of truth: .vibe/model-registry.json (upstream-maintained).
   This frontmatter is documentation-only; Claude Code itself does not read the registry.
 -->

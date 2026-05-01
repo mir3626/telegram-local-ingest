@@ -1,6 +1,6 @@
 ---
 purpose: Generate domain-expert interview questions for one rubric dimension at a time.
-consumed_by: scripts/vibe-interview.mjs
+consumed_by: .vibe/harness/scripts/vibe-interview.mjs
 target_reader: Claude Opus (Orchestrator) at interview time
 ---
 

@@ -33,9 +33,9 @@ of truth), `.vibe/agent/*`는 다음 세 가지 문제를 해결한다:
 | `handoff.md` | Orchestrator의 무손실 상태 박제 (현재 스냅샷). 컨텍스트 압축 복구 시 최우선 읽기 대상. |
 | `session-log.md` | Append-only 증분 저널. handoff가 놓치는 mid-session 결정/실패/발견을 보존. |
 | `re-incarnation.md` | fresh Orchestrator 부팅 프로토콜 (읽기 순서, 체크포인트 규정, tripwire). |
-| `../../scripts/vibe-preflight.mjs` | 새 Sprint 시작 전 기계적 체크(git/deps/provider/status/handoff staleness). |
-| `../../scripts/vibe-agent-session-start.mjs` | Provider-neutral session start entrypoint. Claude/Codex/other CLI providers use it for session-start logging, harness version check, and model registry check. |
-| `../../scripts/vibe-checkpoint.mjs` | PreCompact hook이 호출. handoff/session-log가 stale하면 압축을 block. |
+| `../harness/scripts/vibe-preflight.mjs` | 새 Sprint 시작 전 기계적 체크(git/deps/provider/status/handoff staleness). |
+| `../harness/scripts/vibe-agent-session-start.mjs` | Provider-neutral session start entrypoint. Claude/Codex/other CLI providers use it for session-start logging, harness version check, and model registry check. |
+| `../harness/scripts/vibe-checkpoint.mjs` | PreCompact hook이 호출. handoff/session-log가 stale하면 압축을 block. |
 
 ## 버전
 

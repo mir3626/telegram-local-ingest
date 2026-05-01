@@ -38,17 +38,17 @@
 vibe-doctor 베이스의 `.editorconfig`가 이미 이 값을 가지며, 파생
 프로젝트도 동일 값을 유지해야 한다.
 
-### 3.2 방어층 2 — 환경 변수 강제 (`scripts/run-codex.sh`)
+### 3.2 방어층 2 — 환경 변수 강제 (`.vibe/harness/scripts/run-codex.sh`)
 
 Codex 호출은 **모두** 이 wrapper를 경유한다. Orchestrator의 Sprint 호출,
 `vibe:run-agent` CLI, 수동 디버깅 모두 동일하게 프롬프트 파일을 stdin으로 파이프 주입하거나 positional arg로 전달한다:
 
 ```bash
 # 표준 호출 패턴 — stdin 파이프 주입 (권장, 긴 프롬프트)
-cat docs/prompts/task.md | ./scripts/run-codex.sh -
+cat docs/prompts/task.md | ./.vibe/harness/scripts/run-codex.sh -
 
 # 인라인 패턴 — 짧은 프롬프트, vibe:run-agent 기본 경로
-./scripts/run-codex.sh "{prompt}"
+./.vibe/harness/scripts/run-codex.sh "{prompt}"
 ```
 
 `.vibe/config.json` 의 codex provider 항목은 이 wrapper를 default로
@@ -140,7 +140,7 @@ LC_ALL=C grep -lE '"[?][^"]*[\xc0-\xff]' path/to/**/*.cs
 git checkout HEAD -- <file>
 
 # 3) wrapper 통해 의도한 변경만 좁게 재투입
-./scripts/run-codex.sh - < <narrow-prompt>.md
+./.vibe/harness/scripts/run-codex.sh - < <narrow-prompt>.md
 
 # 4) 검증
 file <file>                           # "UTF-8 Unicode text"
@@ -152,7 +152,7 @@ LC_ALL=C grep -nE '"[?][^"]*"' <file>  # 빈 결과
 vibe-doctor를 베이스로 새 프로젝트를 만들 때:
 
 - [ ] `.editorconfig`의 `[*.cs]` (및 필요시 `[*.{ts,tsx}]`) 섹션 유지
-- [ ] `scripts/run-codex.sh` 복사 및 실행 권한 확인
+- [ ] `.vibe/harness/scripts/run-codex.sh` 복사 및 실행 권한 확인
 - [ ] Generator prompt 템플릿에 §4 BLOCKED 규칙 포함
 - [ ] Evaluator acceptance gate에 §5 encoding integrity 포함
 - [ ] Sprint는 sequential 진행 (Planner → Generator → Evaluator). 병렬 Sprint 실행은 현재 지원 범위 밖.
@@ -163,7 +163,7 @@ vibe-doctor를 베이스로 새 프로젝트를 만들 때:
 - 2026-04-08: 최초 작성. `dungeon-of-abyss` Sprint A/C 사후 분석 결과를
   vibe-doctor 베이스로 역전파.
 - 2026-04-09: Sprint F1 — `.vibe/config.json` 의 codex provider 항목이
-  `./scripts/run-codex.sh` 를 default로 가리키도록 canonicalization.
+  `./.vibe/harness/scripts/run-codex.sh` 를 default로 가리키도록 canonicalization.
   aspirational 병렬 러너 레퍼런스 제거 (Sprint E2에서 기반 코드/문서
   purge 완료).
 
@@ -173,17 +173,17 @@ vibe-doctor를 베이스로 새 프로젝트를 만들 때:
 - 감지 메커니즘: `run-codex.sh` 가 3회 retry 소진 후 `.vibe/agent/codex-unavailable.flag` 를 touch 하고 stderr 에 `CODEX_UNAVAILABLE` 블록을 출력한다.
 - flag 내용: ISO8601 timestamp, `last_exit=<code>`, `reason_hint=<hint>` 를 기록한다. hint 는 `403-forbidden`, `401-unauthorized`, `429-rate-limit`, `5xx-server-error`, `unknown` 중 하나다.
 - Orchestrator 대응: (1) 시간차 재시도 — dogfood10 에서는 edge block 인 경우 수십 분 후 복구가 관찰됐다. (2) 사용자 승인 하에 Orchestrator 직접 편집 — session-log 에 `[decision][orchestrator-hotfix]` 기록 필수. (3) `.vibe/config.json.providers` 에 fallback provider 추가 후 재시도.
-- 자동 복구: 다음 성공 호출 시 `scripts/run-codex.sh` 가 flag 파일을 `rm -f` 로 제거한다. 이 flag 는 "현재 Codex 가 계속 unreachable 한가" 의 snapshot 이다.
+- 자동 복구: 다음 성공 호출 시 `.vibe/harness/scripts/run-codex.sh` 가 flag 파일을 `rm -f` 로 제거한다. 이 flag 는 "현재 Codex 가 계속 unreachable 한가" 의 snapshot 이다.
 - 알려진 root causes: rate-limit, CF edge block, 계정 fingerprint 중 하나일 수 있으나 명확한 판별 방법은 없다. dogfood10 에서는 사용자 토큰이 98% 여유였음에도 403 이 반환됐다.
 ## Provider-neutral lifecycle
 
 Codex does not expose the same `SessionStart` and `PreCompact` hooks as Claude Code. The harness therefore routes Codex through generic lifecycle scripts where possible:
 
-- `scripts/run-codex.sh` calls `node scripts/vibe-agent-session-start.mjs` before non-health Codex runs.
-- `scripts/run-codex.sh` and `scripts/run-codex.cmd` append dashboard attention events when a Codex wrapper run completes or fails. This is a wrapper-level completion signal, not a native Codex permission hook.
+- `.vibe/harness/scripts/run-codex.sh` calls `node .vibe/harness/scripts/vibe-agent-session-start.mjs` before non-health Codex runs.
+- `.vibe/harness/scripts/run-codex.sh` and `.vibe/harness/scripts/run-codex.cmd` append dashboard attention events when a Codex wrapper run completes or fails. This is a wrapper-level completion signal, not a native Codex permission hook.
 - `npm run vibe:run-agent -- --provider codex ...` also calls the same session-start entrypoint before executing the provider command.
 - Sprint Generator invocations are short-lived and normally do not need context-threshold checkpoint automation; they hand state back through the completion report and Orchestrator-owned sprint scripts.
 - Codex used as the main Orchestrator runs in Orchestrator maintenance mode, not Sprint Generator mode. It is the risky path because it can accumulate decisions outside the `run-codex.sh` wrapper. Use the `maintain-context` skill at work boundaries: after meaningful decisions, reviews, releases, tags, pushes, syncs, or before final handoff.
-- The portable checkpoint sequence is: update `.vibe/agent/handoff.md`, append a concise `.vibe/agent/session-log.md` entry, then run `npm run vibe:checkpoint` or `node scripts/vibe-checkpoint.mjs`.
+- The portable checkpoint sequence is: update `.vibe/agent/handoff.md`, append a concise `.vibe/agent/session-log.md` entry, then run `npm run vibe:checkpoint` or `node .vibe/harness/scripts/vibe-checkpoint.mjs`.
 
 This is not a true Codex `PreCompact` hook and it cannot fire at a real 80% context threshold. It is the portable fallback that works for Codex and other CLI providers without Claude-specific hook support.

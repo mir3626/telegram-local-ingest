@@ -23,7 +23,7 @@ Generator agents normally do not need this workflow. Sprint state is handed back
 2. Update `.vibe/agent/handoff.md` with the current branch/version, completed work, open risks, and exact restart steps.
 3. Append one concise entry to `.vibe/agent/session-log.md` with an ISO timestamp and a useful tag such as `[decision]`, `[harness-review]`, or `[checkpoint]`.
 4. If sprint status changed, update `.vibe/agent/sprint-status.json` through the appropriate harness script rather than manual JSON edits.
-5. Run `npm run vibe:checkpoint` when available. If the package script is absent, run `node scripts/vibe-checkpoint.mjs`.
+5. Run `npm run vibe:checkpoint` when available. If the package script is absent, run `node .vibe/harness/scripts/vibe-checkpoint.mjs`.
 6. If checkpoint fails, fix the stale/missing state files and rerun it. Do not report context as preserved until the check passes.
 7. Mention the context files and checkpoint result in the final report.
 

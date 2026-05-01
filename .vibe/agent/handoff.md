@@ -6,9 +6,17 @@
 - **path**: `/home/tony/workspace/telegram-local-ingest`
 - **current iteration**: `iter-2`
 - **current sprint**: `next-sprint-planning`
-- **harnessVersion**: `1.6.11`
+- **harnessVersion**: `1.7.2`
 
 ## Status
+
+### Runtime Audit Cleanup + Harness v1.7.2 Sync — 2026-05-02
+
+Code review cleanup was completed and pushed as product commit `894e6c4`. The product cleanup removes unused symbols, adds `npm run audit:unused`, stops writing empty stdout/stderr log files for automation and artifact runs, and keeps the ops dashboard compatible by treating missing stdout/stderr files as empty.
+
+The downstream harness was then synced from vibe-doctor `1.6.11` to `1.7.2`. Harness runtime files now live under `.vibe/harness/**`; root harness scripts, TypeScript sources, migrations, Playwright config, and harness tests were removed from the product tree. Product `npm test` now runs product tests only, while `npm run vibe:self-test` covers harness tests. `.vibe/config.json`, `package.json`, `.vibe/config.local.example.json`, and the ignored local `.vibe/config.local.json` now point Codex execution at `./.vibe/harness/scripts/run-codex.sh`.
+
+Verification passed after sync: `node .vibe/harness/scripts/vibe-preflight.mjs --bootstrap`, `npm run vibe:typecheck`, `npm run vibe:self-test` (`348` passed, `1` skipped), `npm run typecheck`, `npm run audit:unused`, `npm test` (`152` passed), `npm run build`, `npm run tlgi -- vault reconcile --json` (`0` issues), `npm run vibe:sync -- --dry-run` (no conflicts), and `git diff --check`. Runtime-kit framework drift checks from the product cleanup remained clean.
 
 ### Derived Presentation Template Polish — 2026-05-01
 

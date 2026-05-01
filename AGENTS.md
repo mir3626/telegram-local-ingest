@@ -5,11 +5,23 @@
 
 Codex는 두 가지 모드로 사용된다. 현재 세션이 어떤 모드인지 먼저 판단한다.
 
-- **Sprint Generator mode**: `scripts/run-codex.sh`, `npm run vibe:run-agent -- --provider codex`, 또는 Planner가 작성한 Sprint prompt로 호출된 경우. 이때 너의 역할은 Sprint의 **Generator (코드 구현)** 다.
+- **Sprint Generator mode**: `.vibe/harness/scripts/run-codex.sh`, `npm run vibe:run-agent -- --provider codex`, 또는 Planner가 작성한 Sprint prompt로 호출된 경우. 이때 너의 역할은 Sprint의 **Generator (코드 구현)** 다.
 - **Codex Orchestrator maintenance mode**: 사용자가 이 저장소에서 Codex와 직접 대화하며 하네스 리뷰, 문서/스크립트 수정, release/sync/checkpoint 운영을 요청한 경우. 이때는 Generator 전용 "Files Generator may touch" 제약을 적용하지 않고, 사용자 지시와 repo 규칙에 따라 Orchestrator 역할을 수행할 수 있다.
 - 모호하면 Sprint prompt/spec와 `Files Generator may touch` 섹션이 있는지를 기준으로 한다. 있으면 Generator mode, 없고 사용자가 저장소 운영을 직접 요청하면 Orchestrator maintenance mode다.
 
 아래 Generator 원칙은 **Sprint Generator mode**에 적용된다.
+
+## Initialization boundary (required)
+
+Before doing Sprint Generator work or Codex Orchestrator maintenance work in a downstream clone, verify that the project has been initialized by `/vibe-init`.
+
+Required project-owned state:
+- `docs/context/product.md` exists, is non-empty, and describes the current project rather than the `vibe-doctor` template.
+- `.vibe/agent/sprint-status.json` exists and `project.name` is not `vibe-doctor`.
+
+If either file is missing, empty, malformed, or template-owned, stop all non-init work. Run the `vibe-init` workflow first. In Codex skill execution, use `npm run vibe:init -- --from-agent-skill --mode=human` only after Step 1-0 selects `human`; use the `--mode=agent --runtime=codex --one-liner "<...>"` delegation path when Step 1-0 selects `agent`. Do not use plain `npm run vibe:init` from an agent session.
+
+Narrow exception: if the user explicitly asks for `/vibe-review` or a harness/template/process review whose target is an init/bootstrap/harness process failure, Codex may perform that review read-only in a partial or uninitialized downstream checkout. This exception does not permit product implementation work.
 
 원칙:
 - Planner의 스펙과 체크리스트 범위를 벗어나지 않는다.
@@ -28,7 +40,7 @@ Codex는 두 가지 모드로 사용된다. 현재 세션이 어떤 모드인지
 ## Codex Orchestrator maintenance mode
 - 이 모드는 업스트림 vibe-doctor 하네스 자체를 유지보수하거나, 사용자가 Codex를 메인 Orchestrator로 직접 사용하는 경우에만 적용한다.
 - Claude 전용 Agent/PreCompact 기능을 그대로 가정하지 않는다. 필요하면 provider-neutral fallback 문서(`docs/context/codex-execution.md`, `docs/context/orchestration.md`)를 따른다.
-- 의미 있는 결정, release, tag, push, sync, 긴 리뷰 후에는 `maintain-context` workflow로 `.vibe/agent/handoff.md`와 `.vibe/agent/session-log.md`를 갱신하고 `npm run vibe:checkpoint` 또는 `node scripts/vibe-checkpoint.mjs`를 실행한다.
+- 의미 있는 결정, release, tag, push, sync, 긴 리뷰 후에는 `maintain-context` workflow로 `.vibe/agent/handoff.md`와 `.vibe/agent/session-log.md`를 갱신하고 `npm run vibe:checkpoint` 또는 `node .vibe/harness/scripts/vibe-checkpoint.mjs`를 실행한다.
 - Sprint Generator prompt가 주어진 순간에는 이 maintenance mode가 아니라 Generator mode로 돌아간다.
 
 ## 인코딩 무결성 (필수 — Korean Windows)

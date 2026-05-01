@@ -41,18 +41,18 @@ Agent 위임 모드로 진행합니다. sprint-mode 옵션을 선택해주세요
 
 선택 즉시 Orchestrator 는 해당 옵션에 맞는 명령을 실행:
 
-- **a)** `node scripts/vibe-sprint-mode.mjs on --tier extended`
-- **b)** `node scripts/vibe-sprint-mode.mjs on --tier core`
-- **c)** `node scripts/vibe-sprint-mode.mjs off` (이미 off 이면 skip)
+- **a)** `node .vibe/harness/scripts/vibe-sprint-mode.mjs on --tier extended`
+- **b)** `node .vibe/harness/scripts/vibe-sprint-mode.mjs on --tier core`
+- **c)** `node .vibe/harness/scripts/vibe-sprint-mode.mjs off` (이미 off 이면 skip)
 
 선택 결과를 session-log 에 `[decision][sprint-mode-tier]` 태그로 한 줄 기록하고, Phase 종료 시 `off` 로 되돌릴지 여부도 함께 사용자에게 확인.
 
 ## Underlying command
 
 ```bash
-node scripts/vibe-sprint-mode.mjs on [--tier core|extended]
-node scripts/vibe-sprint-mode.mjs off
-node scripts/vibe-sprint-mode.mjs status
+node .vibe/harness/scripts/vibe-sprint-mode.mjs on [--tier core|extended]
+node .vibe/harness/scripts/vibe-sprint-mode.mjs off
+node .vibe/harness/scripts/vibe-sprint-mode.mjs status
 ```
 
 - `on` (tier 생략) → `core` default. 기존 호환.

@@ -1,6 +1,6 @@
 ---
 name: vibe-interview
-description: Native socratic interview runbook for `/vibe-init` Phase 3. The Orchestrator hosts the LLM internally and pipes structured prompts through `scripts/vibe-interview.mjs`.
+description: Native socratic interview runbook for `/vibe-init` Phase 3. The Orchestrator hosts the LLM internally and pipes structured prompts through `.vibe/harness/scripts/vibe-interview.mjs`.
 ---
 
 ## When To Invoke
@@ -10,17 +10,17 @@ Use this skill in `/vibe-init` Phase 3. It replaces the previous Ouroboros inter
 ## Invocation Protocol
 
 1. Ask the user for a one-liner prompt.
-2. `node scripts/vibe-interview.mjs --init --prompt "<one-liner>" [--lang ko|en] [--max-rounds 30] [--output .vibe/interview-log/<session-id>.json]`
+2. `node .vibe/harness/scripts/vibe-interview.mjs --init --prompt "<one-liner>" [--lang ko|en] [--max-rounds 30] [--output .vibe/interview-log/<session-id>.json]`
    Script stdout: `{ phase: "domain-inference", inferencePrompt: "<string>" }`.
 3. Orchestrator internally evaluates `inferencePrompt` against its own LLM context. Produce `inferred_domain` as a 1-2 sentence string.
-4. `node scripts/vibe-interview.mjs --set-domain --domain "<inferred_domain>"`
+4. `node .vibe/harness/scripts/vibe-interview.mjs --set-domain --domain "<inferred_domain>"`
    Script stdout: `{ phase: "round", roundNumber: 1, dimension: { ... }, synthesizerPrompt: "<string>", priorCoverage: { ... } }`.
 5. Orchestrator evaluates `synthesizerPrompt` internally and obtains 1-3 probing questions in the interview language.
 6. Orchestrator asks the user, or answers on the user's behalf in PO-proxy mode. Collect the answer text verbatim.
-7. `node scripts/vibe-interview.mjs --continue --answer "<text>"`
+7. `node .vibe/harness/scripts/vibe-interview.mjs --continue --answer "<text>"`
    Script stdout: `{ phase: "parse", answerParserPrompt: "<string>", pendingDimensionId: "<id>" }`.
 8. Orchestrator evaluates `answerParserPrompt` internally and returns structured JSON attribution.
-9. `node scripts/vibe-interview.mjs --record --attribution '<json>'`
+9. `node .vibe/harness/scripts/vibe-interview.mjs --record --attribution '<json>'`
    Script stdout returns either another `{ phase: "round", ... }` or `{ phase: "done", summary: { ambiguity_final, dimensions, answers, rationale }, seedForProductMd: "<markdown>" }`.
 10. Repeat until `phase === "done"`.
 

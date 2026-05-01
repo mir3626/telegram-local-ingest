@@ -17,7 +17,7 @@
       "env": {}
     },
     "codex": {
-      "command": "./scripts/run-codex.sh",
+      "command": "./.vibe/harness/scripts/run-codex.sh",
       "args": ["{prompt}"],
       "env": {}
     }

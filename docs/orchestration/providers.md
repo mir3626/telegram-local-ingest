@@ -12,17 +12,17 @@
 |----------|-----------|------|
 | `claude-opus` | Agent 도구 (model: opus) | Claude 계열 — Planner/Evaluator 후보 (트리거 해당 시에만 소환) |
 | `claude-sonnet` | Agent 도구 (model: sonnet) | Claude 계열 |
-| `codex` | `Bash("... \| ./scripts/run-codex.sh -")` | **Codex CLI** (run-codex.sh wrapper 경유 — UTF-8 safety + 자동 재시도). 인증: OAuth (`codex auth login`, 기본) 또는 API 키 (`OPENAI_API_KEY`). 상세: `docs/context/codex-execution.md` |
+| `codex` | `Bash("... \| ./.vibe/harness/scripts/run-codex.sh -")` | **Codex CLI** (run-codex.sh wrapper 경유 — UTF-8 safety + 자동 재시도). 인증: OAuth (`codex auth login`, 기본) 또는 API 키 (`OPENAI_API_KEY`). 상세: `docs/context/codex-execution.md` |
 | `gemini` | Bash 도구 (`gemini "{prompt}"`) | CLI 직접 실행 |
 
 > **⚠️ Provider 호출 규칙**:
 > - **Claude 계열** provider → Claude Code의 **Agent 도구** 사용 (model 파라미터 지정)
-> - **Codex** → **`Bash("... | ./scripts/run-codex.sh -")` 로 wrapper 경유 CLI 호출**. Agent 도구는 Claude만 지원하므로 Codex에 사용 금지. raw `codex exec` 직접 호출은 Korean Windows 환경에서 mojibake 위험이 있으므로 금지.
+> - **Codex** → **`Bash("... | ./.vibe/harness/scripts/run-codex.sh -")` 로 wrapper 경유 CLI 호출**. Agent 도구는 Claude만 지원하므로 Codex에 사용 금지. raw `codex exec` 직접 호출은 Korean Windows 환경에서 mojibake 위험이 있으므로 금지.
 > - **기타 비-Claude 계열** provider → **Bash 도구**로 CLI/API 명령 실행
 >
 > `codex:rescue` 플러그인은 잠정 보류 (Windows 환경에서 불안정·속도 저하 이슈).
 
-Windows 네이티브 환경에서 `vibe:run-agent`가 `./scripts/run-codex.sh`를 실행할 때는
+Windows 네이티브 환경에서 `vibe:run-agent`가 `./.vibe/harness/scripts/run-codex.sh`를 실행할 때는
 Git Bash를 직접 탐색한다. bare `bash`가 WSL launcher(`WindowsApps\bash.exe`)로
 잡히는 환경에서도 provider 실행이 WSL로 새지 않게 하기 위함이다. WSL에서 Codex를
 사용하려면 WSL 내부에 Linux용 `node`와 `codex`를 설치하고, Windows npm shim을
@@ -55,12 +55,12 @@ Generator 호출은 반드시 **Codex CLI** (`Bash("codex exec ...")`)를 사용
 
 Claude Code has native hooks, but Codex and other CLI providers usually do not. The harness uses the following portable fallback:
 
-- `node scripts/vibe-agent-session-start.mjs` is the canonical session-start command. It runs session-start logging, `vibe-version-check`, and `vibe-model-registry-check`.
+- `node .vibe/harness/scripts/vibe-agent-session-start.mjs` is the canonical session-start command. It runs session-start logging, `vibe-version-check`, and `vibe-model-registry-check`.
 - Claude `SessionStart` calls that script through `.claude/settings.json`.
-- Codex calls it from `scripts/run-codex.sh` before non-health runs.
+- Codex calls it from `.vibe/harness/scripts/run-codex.sh` before non-health runs.
 - `npm run vibe:run-agent` calls it before any provider command when the script exists in the target workspace.
 
-Context compaction remains provider-specific. Providers without a native `PreCompact` hook must follow `_common-rules.md` Section 16: update `handoff.md` and `session-log.md`, then run `node scripts/vibe-checkpoint.mjs`.
+Context compaction remains provider-specific. Providers without a native `PreCompact` hook must follow `_common-rules.md` Section 16: update `handoff.md` and `session-log.md`, then run `node .vibe/harness/scripts/vibe-checkpoint.mjs`.
 
 ### ouroboros 설치 실패 (`Could not find a version that satisfies the requirement ouroboros-ai`)
 

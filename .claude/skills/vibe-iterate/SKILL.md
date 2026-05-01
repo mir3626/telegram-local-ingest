@@ -35,7 +35,7 @@ Planner prompts.
 Run:
 
 ```bash
-node scripts/vibe-interview.mjs --mode iterate --carryover <prior-iter-id> --output .vibe/interview-log/iter-<N>.json
+node .vibe/harness/scripts/vibe-interview.mjs --mode iterate --carryover <prior-iter-id> --output .vibe/interview-log/iter-<N>.json
 ```
 
 Build the carryover seed from previous unresolved items, confirmed decisions,
@@ -79,7 +79,7 @@ This is iter-<N> sprint-NN.
 After every Sprint in the iteration is complete, run:
 
 ```bash
-node scripts/vibe-project-report.mjs
+node .vibe/harness/scripts/vibe-project-report.mjs
 ```
 
 The regenerated `docs/reports/project-report.html` should render the cumulative
