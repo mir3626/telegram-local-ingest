@@ -316,6 +316,11 @@ export async function runArtifactRequest(input: ArtifactRunInput): Promise<Artif
     writeRunTextFile(stdoutPath, execution.stdout),
     writeRunTextFile(stderrPath, execution.stderr),
   ]);
+  await validateGeneratedRendererExecution({
+    request,
+    outputDir,
+    artifacts: execution.artifacts,
+  });
 
   const packaged = await finalizeDerivedPackage({
     request,
@@ -554,6 +559,39 @@ async function collectRendererArtifacts(outputDir: string, resultPath: string): 
     role: inferArtifactRole(filePath),
     mediaType: inferMediaType(filePath),
   }));
+}
+
+async function validateGeneratedRendererExecution(input: {
+  request: ArtifactRequest;
+  outputDir: string;
+  artifacts: RendererArtifact[];
+}): Promise<void> {
+  if (input.request.renderer.mode !== "generated") {
+    return;
+  }
+  const kind = input.request.artifactKind.toLowerCase();
+  const chartLike = kind === "chart" || kind === "fx_stats" || kind.includes("chart");
+  if (!chartLike) {
+    return;
+  }
+  for (const artifact of input.artifacts) {
+    const artifactPath = path.resolve(input.outputDir, artifact.path);
+    assertInside(input.outputDir, artifactPath, "Renderer artifact must stay inside output directory");
+    const mediaType = artifact.mediaType ?? inferMediaType(artifactPath);
+    if (mediaType === "text/csv" || path.extname(artifactPath).toLowerCase() === ".csv") {
+      const text = await fs.readFile(artifactPath, "utf8");
+      const nonEmptyLines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (nonEmptyLines.length <= 1) {
+        throw new Error(`Generated chart renderer produced an empty CSV data artifact: ${artifact.path}`);
+      }
+    }
+    if ([".md", ".txt"].includes(path.extname(artifactPath).toLowerCase())) {
+      const text = await fs.readFile(artifactPath, "utf8");
+      if (/\bdata\s*points\s*:\s*0\b/i.test(text)) {
+        throw new Error(`Generated chart renderer produced a zero-data report: ${artifact.path}`);
+      }
+    }
+  }
 }
 
 async function finalizeDerivedPackage(input: {

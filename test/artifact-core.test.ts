@@ -266,6 +266,59 @@ test("artifact renderer expands comma brace lists before exact source stat", asy
   }
 });
 
+test("generated chart renderers fail instead of packaging empty data artifacts", async () => {
+  const fixture = createFixture();
+  const sourcesDir = path.join(fixture.vaultRoot, "wiki", "sources");
+  fs.mkdirSync(sourcesDir, { recursive: true });
+  fs.writeFileSync(path.join(sourcesDir, "fx_koreaexim_20250401.md"), "# FX 2025-04-01\n", "utf8");
+
+  const request = artifactRequestSchema.parse({
+    action: "create_derived_artifact",
+    artifactKind: "chart",
+    artifactId: "empty_chart",
+    title: "Empty Chart",
+    renderer: {
+      mode: "generated",
+      language: "javascript",
+      suggestedId: "empty_chart",
+      code: [
+        "import fs from 'node:fs/promises';",
+        "import path from 'node:path';",
+        "const [, outputDir, resultPath] = process.argv.slice(2);",
+        "await fs.writeFile(path.join(outputDir, 'chart.png'), 'png', 'utf8');",
+        "await fs.writeFile(path.join(outputDir, 'data.csv'), 'date,value\\n', 'utf8');",
+        "await fs.writeFile(path.join(outputDir, 'report.md'), '# Report\\n\\n- Data points: 0\\n', 'utf8');",
+        "await fs.writeFile(resultPath, JSON.stringify({artifacts:[",
+        "  {path:'chart.png',role:'visualization',mediaType:'image/png'},",
+        "  {path:'data.csv',role:'data',mediaType:'text/csv'},",
+        "  {path:'report.md',role:'report',mediaType:'text/markdown'}",
+        "]}), 'utf8');",
+        "",
+      ].join("\n"),
+    },
+    sources: [{ path: "wiki/sources/fx_koreaexim_20250401.md", type: "wiki_source" }],
+    parameters: {},
+  }) satisfies ArtifactRequest;
+
+  try {
+    await assert.rejects(
+      runArtifactRequest({
+        request,
+        runId: "artifact_empty_chart_20260502T000000000Z",
+        vaultRoot: fixture.vaultRoot,
+        runtimeDir: fixture.runtimeDir,
+        sourcePrompt: "빈 차트 테스트",
+        now: new Date("2026-05-02T00:00:00.000Z"),
+        env: process.env,
+      }),
+      /empty CSV data artifact/,
+    );
+    assert.equal(fs.existsSync(path.join(fixture.vaultRoot, "derived", "2026-05-02", "empty_chart")), false);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("python artifact renderers prefer WIKI_ARTIFACT_PYTHON_BIN", async () => {
   const fixture = createFixture();
   const sourcesDir = path.join(fixture.vaultRoot, "wiki", "sources");

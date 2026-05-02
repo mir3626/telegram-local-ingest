@@ -10,6 +10,14 @@
 
 ## Status
 
+### Generated Chart Empty Output Guard — 2026-05-02
+
+Diagnosed the blank generated USD/KRW indicator chart for the Telegram request asking for `2025년 4월에서 2025년 8월까지의 달러 환율 차트`. The generated renderer successfully ran and sent files, but the chart/data were empty because the generated Python parser inspected only the first fenced `text` block in each Korea Eximbank source page. Those wiki pages place a Markdown summary table first and the canonical CSV block with `cur_unit` and `deal_bas_r` later, so the renderer matched zero USD rows.
+
+This was intentionally fixed in the generated-renderer path, not by promoting the request to a registered renderer. `packages/artifact-core` now rejects generated chart-like artifact runs before packaging if they produce headers-only CSV artifacts or reports containing `Data points: 0`, so blank charts are no longer delivered as successful outputs. The live `yoni-llm-wiki/scripts/chat.mjs` and framework `llmwiki-runtime-kit/scripts/chat.mjs` prompts now tell generated FX code to scan all fenced blocks, select the CSV block containing `cur_unit`/`deal_bas_r`, and fail loudly on zero matched rows.
+
+The same saved bad request now fails with `Generated chart renderer produced an empty CSV data artifact: fx_usd_indicators.csv` instead of packaging a blank artifact. A direct source scan of the same input found 103 USD rows from 2025-04-01 through 2025-08-29, confirming the wiki data exists and the fault was generated parsing logic. Verification passed: `npm run typecheck`, focused artifact-core tests, `npm run build`, full `npm test` (`156` passed), runtime-kit `npm run lint`, runtime-kit `npm run vault:diff -- --vault ../yoni-llm-wiki`, `npm run tlgi -- vault reconcile --json`, `node --check` for both chat wrappers, and `git diff --check`.
+
 ### Generated Renderer Hidden Block Parser Fix — 2026-05-02
 
 Fixed the generated renderer leak seen when a Telegram wiki-chat request asked for `2025년 4월에서 2025년 8월까지의 달러 환율 차트` with SMA/EMA/Bollinger/RSI/MACD-style auxiliary indicators. Root cause: the `tlgi-artifact-request` JSON contained generated Python code with literal Markdown triple-backtick fence text, and the runtime-kit chat wrapper used a non-greedy regex that stopped at the first inner fence. The artifact request was not written to `artifact-requests.json`, and the remaining generated code was sent as visible Telegram text.
