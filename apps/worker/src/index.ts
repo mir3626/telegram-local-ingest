@@ -1614,7 +1614,22 @@ async function handleWikiChatArtifactRequests(
 
 function selectWikiChatDeliveryArtifacts(artifacts: PackagedArtifact[]): PackagedArtifact[] {
   const presentation = artifacts.filter((artifact) => artifact.role === "presentation");
-  return presentation.length > 0 ? presentation : artifacts;
+  if (presentation.length === 0) {
+    return artifacts;
+  }
+  const spreadsheets = artifacts.filter((artifact) => (
+    artifact.role === "table" &&
+    artifact.mediaType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  ));
+  const selected = [...presentation, ...spreadsheets];
+  const seen = new Set<string>();
+  return selected.filter((artifact) => {
+    if (seen.has(artifact.path)) {
+      return false;
+    }
+    seen.add(artifact.path);
+    return true;
+  });
 }
 
 async function sendWikiChatAttachment(
