@@ -10,6 +10,10 @@
 
 ## Status
 
+### Inline Table Column Labels Fix — 2026-05-02
+
+Fixed the `table.inline` renderer bug that caused Telegram-generated table artifacts to show `Column 1`, `Column 2`, etc. The agent was correctly sending `parameters.tables[].columns` as a string array such as `["공급사 (국가)", "인보이스 번호", ...]`; the renderer only handled object-shaped columns and fell back to generic labels for primitive strings. Runtime-kit `renderers/inline-table/render.mjs` now accepts string/number columns and preserves their labels. Deployed to `yoni-llm-wiki` with zero framework drift; direct rerender of the invoice quote-items request now outputs the expected Korean CSV/DOCX column headers.
+
 ### Telegram Table Reply Policy — 2026-05-02
 
 Large Markdown pipe tables in wiki-chat visible replies now route to document artifacts. Runtime-kit `table.inline` converts computed chat tables into DOCX/CSV/XLSX, `scripts/chat.mjs` strips visible tables larger than 3 rows or 3 columns and creates a `table.inline` artifact request when the agent forgot one, and the worker sends presentation DOCX plus XLSX table artifacts. Deployed to yoni-llm-wiki with zero framework drift. Verification: runtime-kit lint/node checks, chat fallback smoke, inline renderer smoke, live vault lint, product typecheck/build/full tests, worker focused tests, readiness, and reconcile passed.
