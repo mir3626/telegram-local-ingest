@@ -10,6 +10,12 @@
 
 ## Status
 
+### LLMwiki Wrapper Guard Hardening — 2026-05-02
+
+Moved the mechanical subset of `wiki/_system/rules.md` into runtime-kit script wrappers so the system is not dependent on the agent reading Markdown rules. `llmwiki-runtime-kit/scripts/_lib/guards.mjs` now centralizes vault path, trash, source-authority, generated-code, read-only snapshot, and runtime lint checks. `scripts/chat.mjs` snapshots `raw/**`, `wiki/**`, `derived/**`, and `_trash/**` metadata around the chat agent and fails if the command mutates the vault; it validates attachment and artifact-request handoff files before writing them. `scripts/ingest.mjs` requires finalized raw bundles, rejects rendered output wiki inputs, and verifies source page/index/log outputs. `scripts/ingest-derived.mjs` requires finalized packages with provenance source basis and verifies derived page/index/log outputs. `scripts/lint.mjs` now catches root-level generated artifacts, zero-byte runtime files, derived data stored as raw bundles, malformed generated wiki pages, and incomplete finalized derived packages. `framework-sync.json` is now allowlist-deployed too, fixing the previous mismatch where live-vault `npm run lint` required the file but sync did not copy it.
+
+The runtime-kit update was deployed to `/home/tony/workspace/yoni-llm-wiki` and `npm run vault:diff -- --vault ../yoni-llm-wiki` reports no drift. Verification passed: runtime-kit `node --check` over changed scripts, runtime-kit `npm run lint`, guard smoke for attachment/artifact/snapshot blocking, live-vault `npm run lint`, product `npm run smoke:ready`, and `npm run tlgi -- vault reconcile --json`.
+
 ### Generated Chart Empty Output Guard — 2026-05-02
 
 Diagnosed the blank generated USD/KRW indicator chart for the Telegram request asking for `2025년 4월에서 2025년 8월까지의 달러 환율 차트`. The generated renderer successfully ran and sent files, but the chart/data were empty because the generated Python parser inspected only the first fenced `text` block in each Korea Eximbank source page. Those wiki pages place a Markdown summary table first and the canonical CSV block with `cur_unit` and `deal_bas_r` later, so the renderer matched zero USD rows.
