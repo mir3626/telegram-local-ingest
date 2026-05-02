@@ -10,6 +10,14 @@
 
 ## Status
 
+### Generated Renderer Hidden Block Parser Fix — 2026-05-02
+
+Fixed the generated renderer leak seen when a Telegram wiki-chat request asked for `2025년 4월에서 2025년 8월까지의 달러 환율 차트` with SMA/EMA/Bollinger/RSI/MACD-style auxiliary indicators. Root cause: the `tlgi-artifact-request` JSON contained generated Python code with literal Markdown triple-backtick fence text, and the runtime-kit chat wrapper used a non-greedy regex that stopped at the first inner fence. The artifact request was not written to `artifact-requests.json`, and the remaining generated code was sent as visible Telegram text.
+
+`llmwiki-runtime-kit/scripts/chat.mjs` and the live `/home/tony/workspace/yoni-llm-wiki/scripts/chat.mjs` now parse machine-readable JSON blocks with a balanced JSON scanner instead of a fence-only regex, so triple-backticks inside JSON string values no longer terminate the block. Malformed machine blocks are hidden rather than leaked. The prompt also tells generated renderers to avoid literal triple-backticks in JSON code strings when possible. Product worker output now defensively strips `tlgi-artifact-request`/`tlgi-attachments` blocks from visible wiki-chat replies before Telegram delivery.
+
+Verification passed: parser smoke with generated Python code containing literal triple-backticks, `node --check` for both chat scripts, runtime-kit `npm run lint`, runtime-kit `npm run vault:diff -- --vault /home/tony/workspace/yoni-llm-wiki` (no drift), product focused `node --import tsx --test test/worker.test.ts`, `npm run typecheck`, `npm run build`, full `npm test` (`153` passed), `npm run tlgi -- vault reconcile --json` (`0` issues), and diff/encoding checks.
+
 ### Runtime Audit Cleanup + Harness v1.7.2 Sync — 2026-05-02
 
 Code review cleanup was completed and pushed as product commit `894e6c4`. The product cleanup removes unused symbols, adds `npm run audit:unused`, stops writing empty stdout/stderr log files for automation and artifact runs, and keeps the ops dashboard compatible by treating missing stdout/stderr files as empty.

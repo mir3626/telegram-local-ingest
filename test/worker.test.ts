@@ -1561,6 +1561,53 @@ test("runWorkerOnce ignores invalid wiki chat attachment patterns without failin
   }
 });
 
+test("runWorkerOnce hides machine-readable wiki chat blocks from visible reply", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-hidden-block.mjs", [
+    "const payload = {",
+    "  schemaVersion: 'tlgi.artifact.request.v1',",
+    "  action: 'create_derived_artifact',",
+    "  artifactKind: 'chart',",
+    "  artifactId: 'hidden_demo',",
+    "  title: 'Hidden Demo',",
+    "  renderer: { mode: 'generated', language: 'javascript', code: \"const fence = '`'.repeat(3);\" },",
+    "  sources: [],",
+    "  parameters: {},",
+    "  delivery: { sendToTelegram: true, ingestDerived: false }",
+    "};",
+    "process.stdout.write('차트를 생성합니다.\\n\\n```tlgi-artifact-request\\n' + JSON.stringify(payload) + '\\n```\\n');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockWikiChatAttachmentFetch({ sentMessages, sentDocuments, text: "숨김 블록 테스트" }),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentDocuments.length, 0);
+    assert.equal(sentMessages.at(-1)?.text, "차트를 생성합니다.");
+    assert.doesNotMatch(sentMessages.at(-1)?.text ?? "", /tlgi\.artifact\.request|schemaVersion|generated/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
 test("runWorkerOnce executes wiki chat artifact requests and sends generated artifacts", async () => {
   const fixture = createFixture();
   const dbHandle = openIngestDatabase(":memory:");

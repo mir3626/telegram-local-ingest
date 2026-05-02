@@ -2103,7 +2103,7 @@ function runBufferedCommand(
 }
 
 function formatWikiChatReply(result: { stdout: string; stderr: string }): string {
-  const stdout = result.stdout.trim();
+  const stdout = sanitizeWikiChatVisibleText(result.stdout).trim();
   const stderr = result.stderr.trim();
   if (!stdout && !stderr) {
     return "🧠 위키 응답이 비어 있습니다.";
@@ -2115,6 +2115,22 @@ function formatWikiChatReply(result: { stdout: string; stderr: string }): string
     return `⚠️ 위키 경고\n\n${stderr}`;
   }
   return `${stdout}\n\n⚠️ stderr\n${stderr}`;
+}
+
+function sanitizeWikiChatVisibleText(text: string): string {
+  let sanitized = text;
+  for (const label of ["tlgi-artifact-request", "tlgi-attachments"]) {
+    const marker = `\`\`\`${label}`;
+    const markerIndex = sanitized.indexOf(marker);
+    if (markerIndex !== -1) {
+      sanitized = sanitized.slice(0, markerIndex);
+    }
+  }
+  const schemaIndex = sanitized.indexOf("\"schemaVersion\":\"tlgi.artifact.request.v1\"");
+  if (schemaIndex !== -1) {
+    sanitized = sanitized.slice(0, schemaIndex);
+  }
+  return sanitized.trim();
 }
 
 function startTelegramChatActionLoop(context: WorkerContext, chatId: string): () => void {
