@@ -120,7 +120,7 @@ export function buildWikiIngestCommand(input: WikiIngestAdapterInput, contract?:
       args.push("--wiki-input", JSON.stringify({
         id: wikiInput.id,
         role: wikiInput.role,
-        path: wikiInput.absolutePath,
+        path: wikiInput.relativePath,
         relativePath: wikiInput.relativePath,
         name: wikiInput.name,
         readByDefault: wikiInput.readByDefault,

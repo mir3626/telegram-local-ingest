@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
 
 import {
   addJobFile,
@@ -40,12 +41,36 @@ type ArtifactSmokeResult = {
   bundlePath: string;
   wikiPagePath?: string;
   artifactPaths: string[];
+  contentQa: string[];
 };
 
 type GuardResult = {
   name: string;
   status: "passed";
   detail: string;
+};
+
+type ContentTermCheck = {
+  relativePath: string;
+  includes?: string[];
+  excludes?: string[];
+};
+
+type SourceArtifactTermCheck = {
+  label: string;
+  artifactPaths: string[];
+  terms: string[];
+};
+
+type CsvCellCheck = {
+  relativePath: string;
+  rowWhere: Record<string, string>;
+  expectedCells: Record<string, string | string[]>;
+};
+
+type ZipEntry = {
+  name: string;
+  content: Buffer;
 };
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -137,6 +162,11 @@ async function main() {
         delivery: { sendToTelegram: false, ingestDerived: true },
       },
       expectedFiles: ["artifacts/chart.png", "artifacts/stats.csv", "artifacts/summary.docx"],
+      sourceArtifactChecks: [{
+        label: "FX stats content reflects selected FX source pages",
+        artifactPaths: ["artifacts/stats.csv", "artifacts/summary.docx", "presentation"],
+        terms: ["USD", "EUR"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -154,6 +184,11 @@ async function main() {
       },
       expectedFiles: ["artifacts/comparison_table.docx", "artifacts/comparison_table.csv", "artifacts/comparison_table.xlsx"],
       contentChecks: [{ relativePath: "artifacts/comparison_table.csv", includes: ["USD", "2025", "매매기준율"] }],
+      sourceArtifactChecks: [{
+        label: "FX comparison content reflects exact-date FX source pages",
+        artifactPaths: ["artifacts/comparison_table.csv", "artifacts/comparison_table.xlsx", "presentation"],
+        terms: ["USD", "EUR"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -170,6 +205,27 @@ async function main() {
         delivery: { sendToTelegram: false, ingestDerived: true },
       },
       expectedFiles: ["artifacts/comparison_table.docx", "artifacts/comparison_table.csv", "artifacts/comparison_table.xlsx"],
+      contentChecks: [
+        { relativePath: "artifacts/comparison_table.csv", includes: ["USD", "EUR", "30,800.00"], excludes: ["Column 1", "Column 2", "Bundle:", "Canonical Inputs"] },
+        { relativePath: "artifacts/comparison_table.xlsx", includes: ["USD", "EUR", "30,800.00"], excludes: ["Column 1", "Column 2", "Bundle:", "Canonical Inputs"] },
+      ],
+      csvCellChecks: [
+        {
+          relativePath: "artifacts/comparison_table.csv",
+          rowWhere: { "인보이스 번호": "PBT-INV-2026-0773" },
+          expectedCells: { "일자": "2026/04/24", "합계": ["USD", "30,800.00"], "통화": "USD" },
+        },
+        {
+          relativePath: "artifacts/comparison_table.csv",
+          rowWhere: { "인보이스 번호": "RFC-INV-26-00442" },
+          expectedCells: { "일자": "2026/04/24", "합계": ["EUR", "16,584.00"], "통화": "EUR" },
+        },
+      ],
+      sourceArtifactChecks: [{
+        label: "Invoice comparison content reflects invoice source pages",
+        artifactPaths: ["artifacts/comparison_table.csv", "artifacts/comparison_table.xlsx", "presentation"],
+        terms: ["Enzyme Solutions", "ESI-2026-0487", "NordicProbiotics"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -186,6 +242,11 @@ async function main() {
         delivery: { sendToTelegram: false, ingestDerived: true },
       },
       expectedFiles: ["artifacts/summary_report.docx"],
+      sourceArtifactChecks: [{
+        label: "Summary report content reflects selected business source pages",
+        artifactPaths: ["artifacts/summary_report.docx", "presentation"],
+        terms: ["Enzyme Solutions", "Lactase NL-4500"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -202,6 +263,11 @@ async function main() {
         delivery: { sendToTelegram: false, ingestDerived: true },
       },
       expectedFiles: ["artifacts/timeline.docx", "artifacts/timeline.json"],
+      sourceArtifactChecks: [{
+        label: "Timeline content reflects timeline source pages",
+        artifactPaths: ["artifacts/timeline.docx", "presentation"],
+        terms: ["Enzyme Solutions", "Sarah"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -219,6 +285,14 @@ async function main() {
       },
       expectedFiles: ["artifacts/invoice_summary.csv", "artifacts/report.docx"],
       minCsvRows: { relativePath: "artifacts/invoice_summary.csv", minRows: 1 },
+      contentChecks: [
+        { relativePath: "artifacts/invoice_summary.csv", excludes: ["Column 1", "Column 2", "Bundle:", "Canonical Inputs"] },
+      ],
+      sourceArtifactChecks: [{
+        label: "Invoice summary content reflects invoice source pages",
+        artifactPaths: ["artifacts/invoice_summary.csv", "artifacts/report.docx", "presentation"],
+        terms: ["Enzyme Solutions", "ESI-2026-0487"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -236,6 +310,11 @@ async function main() {
       },
       expectedFiles: ["artifacts/action_items.docx", "artifacts/action_items.csv"],
       minCsvRows: { relativePath: "artifacts/action_items.csv", minRows: 1 },
+      sourceArtifactChecks: [{
+        label: "Meeting action item content reflects meeting source pages",
+        artifactPaths: ["artifacts/action_items.csv", "artifacts/action_items.docx", "presentation"],
+        terms: ["Sarah", "follow-up"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -253,6 +332,11 @@ async function main() {
       },
       expectedFiles: ["artifacts/glossary.docx", "artifacts/glossary.csv"],
       minCsvRows: { relativePath: "artifacts/glossary.csv", minRows: 1 },
+      sourceArtifactChecks: [{
+        label: "Glossary content reflects selected source terminology",
+        artifactPaths: ["artifacts/glossary.csv", "artifacts/glossary.docx", "presentation"],
+        terms: ["Lactase", "Protease"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -269,6 +353,11 @@ async function main() {
         delivery: { sendToTelegram: false, ingestDerived: true },
       },
       expectedFiles: ["artifacts/topic_index.docx", "artifacts/topic_index.json"],
+      sourceArtifactChecks: [{
+        label: "Topic index content reflects selected source terminology",
+        artifactPaths: ["artifacts/topic_index.docx", "presentation"],
+        terms: ["Lactase", "Enzyme Solutions"],
+      }],
     }));
     runs.push(await runArtifact({
       requestDir,
@@ -292,6 +381,11 @@ async function main() {
       },
       expectedFiles: [],
       expectedArtifactSuffixes: ["_notebooklm_export.zip"],
+      sourceArtifactChecks: [{
+        label: "NotebookLM export pack includes selected source content",
+        artifactPaths: ["zip"],
+        terms: ["Enzyme Solutions", "Lactase NL-4500"],
+      }],
     }));
 
     guards.push(await expectArtifactFailure({
@@ -513,7 +607,7 @@ async function runWikiIngest(input: { vaultRoot: string; jobId: string; bundle: 
     args.push("--wiki-input", JSON.stringify({
       id: record.id,
       role: record.role,
-      path: path.join(input.bundle.paths.root, record.path),
+      path: record.path,
       relativePath: record.path,
       name: record.name,
       readByDefault: record.readByDefault,
@@ -534,7 +628,9 @@ async function runArtifact(input: {
   expectedFiles: string[];
   expectedArtifactSuffixes?: string[];
   minCsvRows?: { relativePath: string; minRows: number };
-  contentChecks?: { relativePath: string; includes: string[] }[];
+  contentChecks?: ContentTermCheck[];
+  csvCellChecks?: CsvCellCheck[];
+  sourceArtifactChecks?: SourceArtifactTermCheck[];
 }): Promise<ArtifactSmokeResult> {
   const artifactId = String(input.request.artifactId ?? input.request.title ?? "artifact");
   const requestFile = path.join(input.requestDir, `${safeName(artifactId)}.json`);
@@ -553,6 +649,7 @@ async function runArtifact(input: {
   const presentationPath = path.join(bundlePath, presentationRelative);
   await assertFile(presentationPath);
   await assertPresentationDocxClean(presentationPath);
+  const contentQa: string[] = [`opened presentation ${presentationRelative}`];
   for (const suffix of input.expectedArtifactSuffixes ?? []) {
     if (!parsed.artifactPaths.some((artifactPath) => artifactPath.endsWith(suffix))) {
       throw new Error(`Expected artifact suffix ${suffix} in ${parsed.artifactPaths.join(", ")}`);
@@ -562,11 +659,24 @@ async function runArtifact(input: {
     await assertCsvRows(path.join(bundlePath, input.minCsvRows.relativePath), input.minCsvRows.minRows);
   }
   for (const check of input.contentChecks ?? []) {
-    const content = await fs.readFile(path.join(bundlePath, check.relativePath), "utf8");
-    for (const expected of check.includes) {
-      if (!content.includes(expected)) {
-        throw new Error(`Expected ${check.relativePath} to contain ${expected}`);
-      }
+    const content = await extractArtifactText(path.join(bundlePath, check.relativePath));
+    assertIncludesTerms(content, check.includes ?? [], check.relativePath);
+    assertExcludesTerms(content, check.excludes ?? [], check.relativePath);
+    contentQa.push(`opened ${check.relativePath} (${[...(check.includes ?? []), ...(check.excludes ?? [])].length} term checks)`);
+  }
+  for (const check of input.csvCellChecks ?? []) {
+    await assertCsvCellCheck(path.join(bundlePath, check.relativePath), check);
+    contentQa.push(`parsed ${check.relativePath} (${Object.keys(check.expectedCells).length} cell checks)`);
+  }
+  if ((input.sourceArtifactChecks ?? []).length > 0) {
+    const sourceText = await readProvenanceSourceText(bundlePath);
+    for (const check of input.sourceArtifactChecks ?? []) {
+      assertIncludesTerms(sourceText, check.terms, `${check.label} source basis`);
+      const artifactText = (await Promise.all(check.artifactPaths.map((relativePath) =>
+        extractArtifactText(resolveArtifactCheckPath({ bundlePath, presentationRelative, artifactPaths: parsed.artifactPaths, relativePath })),
+      ))).join("\n\n");
+      assertIncludesTerms(artifactText, check.terms, check.label);
+      contentQa.push(`compared ${check.label}: ${check.artifactPaths.join(", ")} <= provenance sources`);
     }
   }
   const run = getArtifactRun(parsed.runId);
@@ -592,6 +702,7 @@ async function runArtifact(input: {
     bundlePath: run.derived_bundle_path,
     ...(run.wiki_page_path ? { wikiPagePath: run.wiki_page_path } : {}),
     artifactPaths: parsed.artifactPaths,
+    contentQa,
   };
 }
 
@@ -713,6 +824,8 @@ async function writeSummary(input: {
       run.wikiPagePath ? `- Wiki page: \`${run.wikiPagePath}\`` : "- Wiki page: none",
       "- Copied artifacts:",
       ...run.artifactPaths.map((artifactPath) => `  - \`${artifactPath}\``),
+      "- Content QA:",
+      ...run.contentQa.map((note) => `  - ${note}`),
       "",
     ]),
     "## Guard Checks",
@@ -793,9 +906,79 @@ async function assertCsvRows(filePath: string, minRows: number) {
   }
 }
 
+async function assertCsvCellCheck(filePath: string, check: CsvCellCheck) {
+  const content = await fs.readFile(filePath, "utf8");
+  const rows = parseCsvRows(content).filter((row) => row.some((cell) => cell.trim()));
+  const headers = rows[0];
+  if (!headers) {
+    throw new Error(`Expected CSV headers in ${filePath}`);
+  }
+  const records = rows.slice(1).map((row) =>
+    Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""])),
+  );
+  const record = records.find((candidate) =>
+    Object.entries(check.rowWhere).every(([header, expected]) =>
+      normalizeComparableText(candidate[header] ?? "").includes(normalizeComparableText(expected)),
+    ),
+  );
+  if (!record) {
+    throw new Error(`Expected CSV row in ${filePath} matching ${JSON.stringify(check.rowWhere)}`);
+  }
+  for (const [header, expected] of Object.entries(check.expectedCells)) {
+    const actual = record[header] ?? "";
+    const expectedValues = Array.isArray(expected) ? expected : [expected];
+    for (const value of expectedValues) {
+      if (!normalizeComparableText(actual).includes(normalizeComparableText(value))) {
+        throw new Error(`Expected CSV cell ${header} in ${filePath} to contain ${value}; got ${actual}`);
+      }
+    }
+  }
+}
+
 async function csvDataRowCount(filePath: string): Promise<number> {
   const content = await fs.readFile(filePath, "utf8");
   return content.split(/\r?\n/).filter((line) => line.trim()).slice(1).length;
+}
+
+function parseCsvRows(content: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    const next = content[index + 1];
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        cell += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    cell += char;
+  }
+  row.push(cell);
+  if (row.length > 1 || row[0]?.trim()) {
+    rows.push(row);
+  }
+  return rows;
 }
 
 async function runCli(args: string[]) {
@@ -838,6 +1021,9 @@ async function assertFile(filePath: string) {
   if (!stat.isFile()) {
     throw new Error(`Expected file: ${filePath}`);
   }
+  if (stat.size === 0) {
+    throw new Error(`Expected non-empty file: ${filePath}`);
+  }
 }
 
 async function assertPresentationDocxClean(filePath: string) {
@@ -865,6 +1051,217 @@ async function assertPresentationDocxClean(filePath: string) {
   if (marker) {
     throw new Error(`Presentation DOCX contains source-wrapper metadata (${marker}): ${filePath}`);
   }
+}
+
+async function readProvenanceSourceText(bundlePath: string): Promise<string> {
+  const vaultRoot = path.resolve(requiredEnv("OBSIDIAN_VAULT_PATH"));
+  const provenance = JSON.parse(await fs.readFile(path.join(bundlePath, "provenance.json"), "utf8")) as {
+    sources?: Array<{ path?: unknown }>;
+  };
+  const sourcePaths = Array.isArray(provenance.sources)
+    ? provenance.sources.map((source) => String(source.path ?? "")).filter(Boolean)
+    : [];
+  const chunks: string[] = [];
+  for (const relativePath of sourcePaths) {
+    const sourcePath = path.resolve(vaultRoot, relativePath);
+    assertInside(vaultRoot, sourcePath, "provenance source");
+    try {
+      chunks.push(await fs.readFile(sourcePath, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return chunks.join("\n\n");
+}
+
+function resolveArtifactCheckPath(input: {
+  bundlePath: string;
+  presentationRelative: string;
+  artifactPaths: string[];
+  relativePath: string;
+}): string {
+  if (input.relativePath === "presentation") {
+    return path.join(input.bundlePath, input.presentationRelative);
+  }
+  if (input.relativePath === "zip") {
+    const zipPath = input.artifactPaths.find((artifactPath) => artifactPath.toLowerCase().endsWith(".zip"));
+    if (!zipPath) {
+      throw new Error(`No ZIP artifact found in ${input.artifactPaths.join(", ")}`);
+    }
+    return path.join(input.bundlePath, zipPath);
+  }
+  return path.join(input.bundlePath, input.relativePath);
+}
+
+async function extractArtifactText(filePath: string): Promise<string> {
+  await assertFile(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".docx") {
+    return extractDocxText(filePath);
+  }
+  if (ext === ".xlsx") {
+    return extractXlsxText(filePath);
+  }
+  if (ext === ".pdf") {
+    return extractPdfText(filePath);
+  }
+  if (ext === ".zip") {
+    return extractZipText(filePath);
+  }
+  if ([".csv", ".json", ".md", ".txt", ".svg", ".xml"].includes(ext)) {
+    return fs.readFile(filePath, "utf8");
+  }
+  if ([".png", ".jpg", ".jpeg"].includes(ext)) {
+    const stat = await fs.stat(filePath);
+    return `${path.basename(filePath)} ${stat.size} bytes`;
+  }
+  return fs.readFile(filePath, "utf8");
+}
+
+async function extractDocxText(filePath: string): Promise<string> {
+  const pandocBin = process.env.PANDOC_BIN?.trim() || "pandoc";
+  try {
+    const result = await runProcess(pandocBin, [filePath, "-t", "plain"], { cwd: projectRoot, env: process.env });
+    return result.stdout;
+  } catch {
+    const entries = await readZipEntriesFromFile(filePath);
+    const documentXml = entries.find((entry) => entry.name === "word/document.xml")?.content.toString("utf8") ?? "";
+    return xmlTextContent(documentXml);
+  }
+}
+
+async function extractPdfText(filePath: string): Promise<string> {
+  const pdftotextBin = process.env.PDFTOTEXT_BIN?.trim() || "pdftotext";
+  const result = await runProcess(pdftotextBin, ["-layout", "-nopgbrk", "-enc", "UTF-8", filePath, "-"], { cwd: projectRoot, env: process.env });
+  return result.stdout;
+}
+
+async function extractXlsxText(filePath: string): Promise<string> {
+  const entries = await readZipEntriesFromFile(filePath);
+  const sharedXml = entries.find((entry) => entry.name === "xl/sharedStrings.xml")?.content.toString("utf8") ?? "";
+  const sharedStrings = [...sharedXml.matchAll(/<si\b[\s\S]*?<\/si>/g)].map((match) => xmlTextContent(match[0]));
+  const values: string[] = [...sharedStrings];
+  for (const entry of entries.filter((candidate) => /^xl\/worksheets\/sheet\d+\.xml$/.test(candidate.name))) {
+    const sheetXml = entry.content.toString("utf8");
+    for (const cellMatch of sheetXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+      const attrs = cellMatch[1] ?? "";
+      const body = cellMatch[2] ?? "";
+      const value = body.match(/<v>([\s\S]*?)<\/v>/)?.[1];
+      if (attrs.includes('t="s"') && value !== undefined) {
+        const shared = sharedStrings[Number(value)];
+        if (shared) {
+          values.push(shared);
+        }
+      } else if (attrs.includes('t="inlineStr"')) {
+        values.push(xmlTextContent(body));
+      } else if (value !== undefined) {
+        values.push(decodeXml(value));
+      }
+    }
+  }
+  return values.filter(Boolean).join("\n");
+}
+
+async function extractZipText(filePath: string): Promise<string> {
+  const entries = await readZipEntriesFromFile(filePath);
+  const chunks = [`ZIP entries:\n${entries.map((entry) => entry.name).join("\n")}`];
+  for (const entry of entries) {
+    if (!/\.(?:md|txt|json|csv|yaml|yml)$/i.test(entry.name)) {
+      continue;
+    }
+    chunks.push(`\n--- ${entry.name} ---\n${entry.content.toString("utf8")}`);
+  }
+  return chunks.join("\n");
+}
+
+async function readZipEntriesFromFile(filePath: string): Promise<ZipEntry[]> {
+  return readZipEntries(await fs.readFile(filePath));
+}
+
+function readZipEntries(zip: Buffer): ZipEntry[] {
+  const eocdOffset = findEndOfCentralDirectory(zip);
+  if (eocdOffset < 0) {
+    throw new Error("ZIP end of central directory not found");
+  }
+  let centralOffset = zip.readUInt32LE(eocdOffset + 16);
+  const centralEnd = centralOffset + zip.readUInt32LE(eocdOffset + 12);
+  const entries: ZipEntry[] = [];
+  while (centralOffset < centralEnd) {
+    if (zip.readUInt32LE(centralOffset) !== 0x02014b50) {
+      throw new Error("Invalid ZIP central directory header");
+    }
+    const method = zip.readUInt16LE(centralOffset + 10);
+    const compressedSize = zip.readUInt32LE(centralOffset + 20);
+    const fileNameLength = zip.readUInt16LE(centralOffset + 28);
+    const extraLength = zip.readUInt16LE(centralOffset + 30);
+    const commentLength = zip.readUInt16LE(centralOffset + 32);
+    const localHeaderOffset = zip.readUInt32LE(centralOffset + 42);
+    const nameStart = centralOffset + 46;
+    const name = zip.subarray(nameStart, nameStart + fileNameLength).toString("utf8");
+    const localNameLength = zip.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLength = zip.readUInt16LE(localHeaderOffset + 28);
+    const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const compressed = zip.subarray(dataOffset, dataOffset + compressedSize);
+    let content: Buffer;
+    if (method === 0) {
+      content = Buffer.from(compressed);
+    } else if (method === 8) {
+      content = inflateRawSync(compressed);
+    } else {
+      content = Buffer.alloc(0);
+    }
+    entries.push({ name, content });
+    centralOffset = nameStart + fileNameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function findEndOfCentralDirectory(zip: Buffer): number {
+  for (let index = zip.length - 22; index >= 0; index -= 1) {
+    if (zip.readUInt32LE(index) === 0x06054b50) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function xmlTextContent(xml: string): string {
+  return [...xml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>|<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)]
+    .map((match) => decodeXml(match[1] ?? match[2] ?? ""))
+    .join("\n");
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function assertIncludesTerms(text: string, terms: string[], label: string) {
+  const normalizedText = normalizeComparableText(text);
+  for (const term of terms) {
+    if (!normalizedText.includes(normalizeComparableText(term))) {
+      throw new Error(`Expected ${label} to contain ${term}`);
+    }
+  }
+}
+
+function assertExcludesTerms(text: string, terms: string[], label: string) {
+  const normalizedText = normalizeComparableText(text);
+  for (const term of terms) {
+    if (normalizedText.includes(normalizeComparableText(term))) {
+      throw new Error(`Expected ${label} not to contain ${term}`);
+    }
+  }
+}
+
+function normalizeComparableText(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function isSupportedInput(filePath: string): boolean {

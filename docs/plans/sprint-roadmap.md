@@ -2,7 +2,7 @@
 
 <!-- BEGIN:VIBE:CURRENT-SPRINT -->
 > **Current**: next-sprint-planning
-> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library, sprint-26-fx-wiki-workflow-acceptance, sprint-27-chart-format-expansion, sprint-28-derived-presentation-documents, sprint-29-vault-trash-tombstone-ux, sprint-30-registered-renderer-qa-matrix
+> **Completed**: sprint-0-phase0-seed, sprint-1-telegram-local-baseline, sprint-2-sqlite-job-model, sprint-3-telegram-capture, sprint-4-local-file-import, sprint-5-vault-bundle-writer, sprint-6-rtzr-stt, sprint-7-wiki-ingest-adapter, sprint-8-status-retry-cancel, sprint-9-output-store-downloads, sprint-10-preprocessing-language-check, sprint-11-codex-agent-postprocess, sprint-12-utility-cleanup-polish, sprint-13-vault-reconcile-retention, sprint-14-wiki-raw-input-schema, sprint-15-prebundle-canonical-artifacts, sprint-16-llmwiki-ingest-contract, sprint-17-automation-registry-cli, sprint-18-automation-dispatch-scheduler, sprint-19-fx-koreaexim-daily-module, sprint-20-ops-dashboard-automation, sprint-22-derived-artifact-runner, sprint-23-generated-renderer-audit, sprint-24-artifact-dashboard-promote, sprint-24b-dashboard-sse-observability, sprint-24c-dashboard-ui-redesign, sprint-25-derived-action-library, sprint-26-fx-wiki-workflow-acceptance, sprint-27-chart-format-expansion, sprint-28-derived-presentation-documents, sprint-29-vault-trash-tombstone-ux, sprint-30-registered-renderer-qa-matrix, sprint-32-derived-artifact-content-qa
 > **Pending**: sprint-21-bootstrap-packaging (deferred)
 <!-- END:VIBE:CURRENT-SPRINT -->
 
@@ -524,6 +524,23 @@ Telegram mobile/desktop
   - Runtime-kit documentation records the matrix so future registered renderers can add rows and smoke expectations before promotion.
   - Existing `smoke:fx-wiki`, typecheck, build, full tests, and checkpoint remain green.
 - **status**: completed. Added `scripts/smoke-wiki-renderers.ts` and `npm run smoke:wiki-renderers`; it imports the real local files under `yoni-llm-wiki/to-be-removed`, creates raw bundles/wiki source pages, runs the full registered renderer matrix and guard cases, and copies derived artifacts plus metadata into `yoni-llm-wiki/to-be-removed-result/<timestamp>/`. Runtime-kit now documents the renderer QA matrix in `docs/renderer-qa-matrix.md`.
+
+## Sprint 32 — Derived Artifact Content QA
+
+- **id**: `sprint-32-derived-artifact-content-qa`
+- **goal**: Catch derived artifact regressions that only become obvious after opening the generated files and comparing them with wiki source content.
+- **tasks**:
+  - Extend `npm run smoke:wiki-renderers` so it opens generated DOCX, CSV, XLSX, PDF, ZIP, and text artifacts instead of checking only file existence.
+  - Compare selected business terms from provenance source pages against the generated user-facing artifacts.
+  - Fail on zero-byte artifacts, leaked source-wrapper metadata, raw JSON/list dumps, truncated previews, generic table labels, and key invoice date/total/currency regressions.
+  - Record renderer source pages in provenance for the one-year FX chart renderer so generated chart packages have an auditable source basis.
+  - Repair wiki-input path handling so raw-bundle canonical artifacts are passed to the wiki ingest command as bundle-relative paths.
+  - Tighten invoice extraction for date, currency, and total rows exposed by the stricter smoke.
+- **acceptance criteria**:
+  - `npm run smoke:wiki-renderers` imports the local test documents, regenerates all registered renderer outputs, opens the final files, compares them to wiki/provenance content, and leaves `vault reconcile --json` clean.
+  - The copied result directory contains `qa-summary.md` with the artifact-level content QA notes for manual review.
+  - Runtime-kit framework changes are deployed to the live `yoni-llm-wiki` vault with no allowlist drift.
+- **status**: completed. The latest passing QA run copied outputs to `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/20260502_034834234`. It opened each presentation DOCX, compared source-backed terms for every registered renderer family, parsed invoice CSV cells for PacificBio and Rotterdam totals/dates/currencies, checked NotebookLM ZIP contents, and ran four guard cases. The smoke also caught and drove fixes for wiki-input relative path handling, FX chart provenance source recording, orphan derived cleanup planning, and invoice extraction edge cases.
 
 ## Iteration iter-2 — LLMwiki Foundation
 

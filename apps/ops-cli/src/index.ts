@@ -823,6 +823,7 @@ async function buildManagedDeletePlan(
   db: DatabaseSync,
   identifier: string,
 ): Promise<ManagedDeletePlan> {
+  const explicitVaultPath = await resolveExplicitVaultPath(paths, identifier);
   const pathPlan = await tryBuildPathDeletePlan(paths, identifier);
   if (pathPlan) {
     return pathPlan;
@@ -846,7 +847,14 @@ async function buildManagedDeletePlan(
   const artifactRun = getArtifactRendererRun(db, targetIdentifier)
     ?? artifactRuns.find((run) => run.artifactId === targetIdentifier);
   if (artifactRun) {
-    return buildDerivedArtifactDeletePlan(paths, artifactRun);
+    const plan = buildDerivedArtifactDeletePlan(paths, artifactRun);
+    if (explicitVaultPath && isPathInside(paths.vaultRoot, explicitVaultPath)) {
+      const stat = await fs.stat(explicitVaultPath).catch(() => null);
+      if (stat?.isDirectory() || stat?.isFile()) {
+        addManagedPath(plan.paths, explicitVaultPath, stat.isDirectory() ? "directory" : "file", true);
+      }
+    }
+    return plan;
   }
 
   const knownJob = getJob(db, targetIdentifier);
@@ -854,6 +862,22 @@ async function buildManagedDeletePlan(
     throw new Error(`Job has no source bundle to delete: ${targetIdentifier}`);
   }
   throw new Error(`No managed delete target found for: ${identifier}`);
+}
+
+async function resolveExplicitVaultPath(
+  paths: RuntimePaths & { vaultRoot: string },
+  identifier: string,
+): Promise<string | null> {
+  const rawPath = identifier.trim();
+  if (!looksLikePathIdentifier(rawPath)) {
+    return null;
+  }
+  const activePath = normalizeTrashIdentifier(paths, rawPath);
+  const resolved = path.resolve(path.isAbsolute(activePath) ? activePath : path.join(paths.vaultRoot, activePath));
+  if (!isPathInside(paths.vaultRoot, resolved)) {
+    throw new Error(`Vault path is outside OBSIDIAN_VAULT_PATH: ${identifier}`);
+  }
+  return resolved;
 }
 
 async function buildManagedTrashPlan(

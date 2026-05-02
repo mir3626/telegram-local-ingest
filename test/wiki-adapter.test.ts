@@ -76,7 +76,8 @@ test("runWikiIngestAdapter allows wiki writes and captures output", async () => 
     assert.equal(wikiInput.id, "extracted:file-1:original_text");
     assert.equal(wikiInput.role, "canonical_text");
     assert.equal(wikiInput.readByDefault, true);
-    assert.equal(fs.readFileSync(wikiInput.path, "utf8"), "Lead source text");
+    assert.equal(wikiInput.path, "extracted/lead.txt");
+    assert.equal(fs.readFileSync(path.join(fixture.bundlePath, wikiInput.path), "utf8"), "Lead source text");
     assert.ok(args.includes("--manifest"));
     assert.ok(args.includes(path.join(fixture.bundlePath, "manifest.yaml")));
     assert.ok(args.includes("--source"));

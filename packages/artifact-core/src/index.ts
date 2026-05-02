@@ -162,6 +162,7 @@ interface RendererExecutionResult {
   stdout: string;
   stderr: string;
   artifacts: RendererArtifact[];
+  inputs?: unknown;
   generatedScriptPath?: string;
 }
 
@@ -521,16 +522,20 @@ async function executeRenderer(input: {
     env: input.env,
     timeoutMs: input.timeoutMs,
   });
-  const artifacts = await collectRendererArtifacts(input.outputDir, input.resultPath);
-  const result: RendererExecutionResult = { stdout, stderr, artifacts };
+  const rendererResult = await collectRendererResult(input.outputDir, input.resultPath);
+  const result: RendererExecutionResult = { stdout, stderr, artifacts: rendererResult.artifacts };
+  if (rendererResult.inputs !== undefined) {
+    result.inputs = rendererResult.inputs;
+  }
   if (input.generatedScriptPath) {
     result.generatedScriptPath = input.generatedScriptPath;
   }
   return result;
 }
 
-async function collectRendererArtifacts(outputDir: string, resultPath: string): Promise<RendererArtifact[]> {
+async function collectRendererResult(outputDir: string, resultPath: string): Promise<{ artifacts: RendererArtifact[]; inputs?: unknown }> {
   let declared: RendererArtifact[] = [];
+  let inputs: unknown;
   try {
     const parsed = JSON.parse(await fs.readFile(resultPath, "utf8")) as unknown;
     if (isRecord(parsed) && Array.isArray(parsed.artifacts)) {
@@ -545,20 +550,24 @@ async function collectRendererArtifacts(outputDir: string, resultPath: string): 
         }];
       });
     }
+    if (isRecord(parsed) && parsed.inputs !== undefined) {
+      inputs = parsed.inputs;
+    }
   } catch (error) {
     if (!isNotFound(error)) {
       throw error;
     }
   }
   if (declared.length > 0) {
-    return declared;
+    return inputs === undefined ? { artifacts: declared } : { artifacts: declared, inputs };
   }
   const files = await listFiles(outputDir);
-  return files.map((filePath) => ({
+  const artifacts = files.map((filePath) => ({
     path: path.relative(outputDir, filePath).replace(/\\/g, "/"),
     role: inferArtifactRole(filePath),
     mediaType: inferMediaType(filePath),
   }));
+  return inputs === undefined ? { artifacts } : { artifacts, inputs };
 }
 
 async function validateGeneratedRendererExecution(input: {
@@ -699,6 +708,7 @@ async function finalizeDerivedPackage(input: {
       sha256: source.sha256,
       size_bytes: source.sizeBytes,
     })),
+    ...(input.execution.inputs !== undefined ? { inputs: input.execution.inputs } : {}),
     run: {
       id: input.runId,
       run_dir: input.runDir,

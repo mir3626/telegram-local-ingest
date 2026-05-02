@@ -10,6 +10,12 @@
 
 ## Status
 
+### Sprint 32 — Derived Artifact Content QA — 2026-05-02
+
+Completed Sprint 32 as a hardening pass for derived artifacts. `npm run smoke:wiki-renderers` now opens generated DOCX/CSV/XLSX/PDF/ZIP/text artifacts, compares selected terms against provenance source pages, fails on zero-byte files and user-facing metadata leaks, and performs column-aware invoice CSV checks for PacificBio and Rotterdam totals/dates/currencies. The latest passing result set is `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/20260502_034834234`; `qa-summary.md` records artifact-level content QA notes for all 11 registered renderer runs and 4 guard checks.
+
+The stricter smoke exposed and fixed three pipeline issues: raw-bundle wiki inputs were being passed to ingest as absolute paths instead of bundle-relative paths, the registered `fx.chart.1y` renderer did not record source page provenance, and managed delete did not include an explicitly requested derived bundle path when a failed artifact run had no `derived_bundle_path`. Runtime-kit invoice extraction was also tightened for date, currency, and invoice-total parsing; the live `yoni-llm-wiki` vault was updated from the runtime-kit allowlist and has zero framework drift.
+
 ### Inline Table Column Labels Fix — 2026-05-02
 
 Fixed the `table.inline` renderer bug that caused Telegram-generated table artifacts to show `Column 1`, `Column 2`, etc. The agent was correctly sending `parameters.tables[].columns` as a string array such as `["공급사 (국가)", "인보이스 번호", ...]`; the renderer only handled object-shaped columns and fell back to generic labels for primitive strings. Runtime-kit `renderers/inline-table/render.mjs` now accepts string/number columns and preserves their labels. Deployed to `yoni-llm-wiki` with zero framework drift; direct rerender of the invoice quote-items request now outputs the expected Korean CSV/DOCX column headers.
