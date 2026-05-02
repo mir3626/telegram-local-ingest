@@ -129,6 +129,30 @@ export interface PackagedArtifact {
   sizeBytes: number;
 }
 
+export function normalizeArtifactRequestInput(input: unknown): unknown {
+  if (!isRecord(input) || !isRecord(input.renderer) || input.renderer.mode !== "generated") {
+    return input;
+  }
+  if (isNonEmptyString(input.renderer.code)) {
+    return input;
+  }
+  const code = findGeneratedRendererCode(input, input.renderer);
+  if (!code) {
+    return input;
+  }
+  return {
+    ...input,
+    renderer: {
+      ...input.renderer,
+      code,
+    },
+  };
+}
+
+export function parseArtifactRequest(input: unknown): ArtifactRequest {
+  return artifactRequestSchema.parse(normalizeArtifactRequestInput(input));
+}
+
 interface PresentationContentArtifact extends PackagedArtifact {
   presentationSourcePath?: string;
   presentationSourceMediaType?: string;
@@ -162,7 +186,7 @@ export function extractArtifactRequestsFromText(text: string): ArtifactRequest[]
           ? parsed.requests
           : [parsed];
       for (const record of records) {
-        requests.push(artifactRequestSchema.parse(record));
+        requests.push(parseArtifactRequest(record));
       }
     } catch {
       // Ignore malformed machine blocks; visible agent text remains useful.
@@ -217,7 +241,7 @@ export async function discoverArtifactRenderers(renderersRoot: string): Promise<
 }
 
 export async function runArtifactRequest(input: ArtifactRunInput): Promise<ArtifactRunResult> {
-  const request = artifactRequestSchema.parse(input.request);
+  const request = parseArtifactRequest(input.request);
   const now = input.now ?? new Date();
   const startedAt = now.toISOString();
   const vaultRoot = path.resolve(input.vaultRoot);
@@ -2060,6 +2084,110 @@ function splitCommandLine(value: string): string[] {
     result.push(current);
   }
   return result;
+}
+
+function findGeneratedRendererCode(
+  request: Record<string, unknown>,
+  renderer: Record<string, unknown>,
+): string | undefined {
+  const direct = firstNonEmptyString(
+    renderer.code,
+    renderer.script,
+    renderer.source,
+    renderer.sourceCode,
+    renderer.generatedCode,
+    renderer.renderCode,
+    request.code,
+    request.script,
+    request.sourceCode,
+    request.generatedCode,
+  );
+  if (direct) {
+    return direct;
+  }
+  const nested = isRecord(renderer.generated)
+    ? firstNonEmptyString(
+      renderer.generated.code,
+      renderer.generated.script,
+      renderer.generated.source,
+      renderer.generated.sourceCode,
+    )
+    : undefined;
+  if (nested) {
+    return nested;
+  }
+  const entrypoint = firstNonEmptyString(renderer.entrypoint, renderer.entry, renderer.main, renderer.filename);
+  return generatedRendererFileCode(renderer.files, entrypoint);
+}
+
+function generatedRendererFileCode(files: unknown, entrypoint?: string): string | undefined {
+  if (isRecord(files)) {
+    if (entrypoint) {
+      const exact = codeFromGeneratedRendererFileEntry(files[entrypoint]);
+      if (exact) {
+        return exact;
+      }
+    }
+    for (const fileName of ["render.py", "render.mjs", "render.js", "index.py", "index.mjs", "index.js"]) {
+      const code = codeFromGeneratedRendererFileEntry(files[fileName]);
+      if (code) {
+        return code;
+      }
+    }
+    for (const value of Object.values(files)) {
+      const code = codeFromGeneratedRendererFileEntry(value);
+      if (code) {
+        return code;
+      }
+    }
+    return undefined;
+  }
+  if (Array.isArray(files)) {
+    if (entrypoint) {
+      const exact = files.find((file) => {
+        if (!isRecord(file)) {
+          return false;
+        }
+        return [file.path, file.name, file.filename].some((value) => value === entrypoint);
+      });
+      const code = codeFromGeneratedRendererFileEntry(exact);
+      if (code) {
+        return code;
+      }
+    }
+    for (const file of files) {
+      const code = codeFromGeneratedRendererFileEntry(file);
+      if (code) {
+        return code;
+      }
+    }
+  }
+  return undefined;
+}
+
+function codeFromGeneratedRendererFileEntry(value: unknown): string | undefined {
+  if (isNonEmptyString(value)) {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return firstNonEmptyString(
+    value.code,
+    value.content,
+    value.text,
+    value.source,
+    value.sourceCode,
+    value.script,
+  );
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  return values.find(isNonEmptyString) as string | undefined;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 async function sha256File(filePath: string): Promise<string> {

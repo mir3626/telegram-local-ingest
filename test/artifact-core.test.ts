@@ -8,6 +8,7 @@ import zlib from "node:zlib";
 import {
   artifactRequestSchema,
   buildArtifactRunId,
+  parseArtifactRequest,
   promoteGeneratedRenderer,
   runArtifactRequest,
   type ArtifactRequest,
@@ -21,6 +22,30 @@ import {
   migrate,
   openIngestDatabase,
 } from "@telegram-local-ingest/db";
+
+test("parseArtifactRequest normalizes generated renderer file maps", () => {
+  const request = parseArtifactRequest({
+    action: "create_derived_artifact",
+    artifactKind: "chart",
+    artifactId: "fx_custom",
+    title: "FX Custom",
+    renderer: {
+      mode: "generated",
+      language: "python",
+      entrypoint: "render.py",
+      files: {
+        "render.py": "print('ok')\n",
+      },
+    },
+    sources: [],
+    parameters: {},
+  });
+
+  assert.equal(request.renderer.mode, "generated");
+  if (request.renderer.mode === "generated") {
+    assert.equal(request.renderer.code, "print('ok')\n");
+  }
+});
 
 test("generated artifact renderer creates a derived package and records promotable DB log", async () => {
   const fixture = createFixture();

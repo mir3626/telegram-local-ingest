@@ -17,7 +17,7 @@ import {
   type DiscoveredAutomationModule,
 } from "@telegram-local-ingest/automation-core";
 import {
-  artifactRequestSchema,
+  parseArtifactRequest,
   promoteGeneratedRenderer,
 } from "@telegram-local-ingest/artifact-core";
 import { loadNearestEnvFile } from "@telegram-local-ingest/core";
@@ -647,7 +647,7 @@ async function promoteArtifactRun(context: DashboardContext, runId: string, rend
     if (!run) {
       throw new Error(`Artifact renderer run not found: ${runId}`);
     }
-    const request = artifactRequestSchema.parse(run.request);
+    const request = parseArtifactRequest(run.request);
     const promoted = await promoteGeneratedRenderer({
       runDir: run.runDir,
       request,

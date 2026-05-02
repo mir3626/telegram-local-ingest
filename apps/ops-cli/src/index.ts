@@ -17,8 +17,8 @@ import {
   type DiscoveredAutomationModule,
 } from "@telegram-local-ingest/automation-core";
 import {
-  artifactRequestSchema,
   buildArtifactRunId,
+  parseArtifactRequest,
   promoteGeneratedRenderer,
   runArtifactRequest,
   type ArtifactRequest,
@@ -214,7 +214,7 @@ async function handleArtifactCommand(command: string | undefined, args: string[]
       if (!paths.vaultRoot) {
         throw new Error("OBSIDIAN_VAULT_PATH is required for artifact run");
       }
-      const request = artifactRequestSchema.parse(JSON.parse(await fs.readFile(requestFile, "utf8")) as unknown);
+      const request = parseArtifactRequest(JSON.parse(await fs.readFile(requestFile, "utf8")) as unknown);
       const sourcePrompt = getOptionValue(args, "--prompt") ?? request.title;
       const artifactId = localArtifactId(request);
       const runId = buildArtifactRunId(artifactId);
@@ -278,7 +278,7 @@ async function handleArtifactCommand(command: string | undefined, args: string[]
       if (!run) {
         throw new Error(`Artifact run not found: ${runId}`);
       }
-      const request = artifactRequestSchema.parse(run.request);
+      const request = parseArtifactRequest(run.request);
       const rendererId = getOptionValue(args, "--id");
       const promoted = await promoteGeneratedRenderer({
         runDir: run.runDir,

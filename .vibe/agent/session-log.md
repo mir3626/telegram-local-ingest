@@ -139,3 +139,4 @@ Append-only notes that should survive context compaction.
 - 2026-04-22T00:00:00.000Z [decision] Large file capture uses Telegram Local Bot API Server, not Dropbox.
 - 2026-04-22T00:00:00.000Z [decision] Initial package manager is npm workspaces to keep the `vibe-doctor` harness stable.
 - 2026-04-22T00:00:00.000Z [decision] LLM agents are constrained to wiki ingest adapter behavior; deterministic worker owns capture, queue, file lifecycle, retry, permissions, and notify.
+- 2026-05-02T09:26:53+09:00 [wiki-artifact] Fixed silent wiki chat generated renderer drops. Artifact requests now normalize generated code from renderer.files/alias fields into renderer.code, invalid artifact requests send a Telegram warning, and llmwiki chat wrappers now require renderer.code while tolerating file-map output. Verified the saved USD/KRW indicator request against real FX sources in a temp derived root.

@@ -1633,7 +1633,7 @@ test("runWorkerOnce executes wiki chat artifact requests and sends generated art
     "  artifactKind: 'chart',",
     "  artifactId: 'demo_chart',",
     "  title: 'Demo Chart',",
-    "  renderer: { mode: 'generated', language: 'javascript', suggestedId: 'demo_chart', code },",
+    "  renderer: { mode: 'generated', language: 'javascript', suggestedId: 'demo_chart', entrypoint: 'render.mjs', files: { 'render.mjs': code } },",
     "  sources: [{ path: 'wiki/sources/demo.md', type: 'wiki_source' }],",
     "  parameters: {},",
     "  delivery: { sendToTelegram: true, ingestDerived: false }",
@@ -1665,6 +1665,57 @@ test("runWorkerOnce executes wiki chat artifact requests and sends generated art
     assert.match(sentDocuments[0]?.caption ?? "", /derived\/\d{4}-\d{2}-\d{2}\/demo_chart\/artifacts\/demo_chart_Demo_Chart\.docx/);
     assert.equal(listArtifactRendererRuns(dbHandle.db, 10)[0]?.rendererMode, "generated");
     assert.match(listArtifactRendererRuns(dbHandle.db, 10)[0]?.sourcePrompt ?? "", /demo 차트 생성/);
+  } finally {
+    dbHandle.close();
+  }
+});
+
+test("runWorkerOnce reports invalid wiki chat artifact requests", async () => {
+  const fixture = createFixture();
+  const dbHandle = openIngestDatabase(":memory:");
+  const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const sentDocuments: Array<{ chat_id: string; caption?: string; document?: string }> = [];
+  const scriptPath = writeFile(fixture.root, "wiki-chat-invalid-artifact.mjs", [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const attachmentDir = process.argv[process.argv.indexOf('--attachment-dir') + 1];",
+    "fs.mkdirSync(attachmentDir, { recursive: true });",
+    "fs.writeFileSync(path.join(attachmentDir, 'artifact-requests.json'), JSON.stringify({ requests: [{",
+    "  action: 'create_derived_artifact',",
+    "  artifactKind: 'chart',",
+    "  artifactId: 'broken_chart',",
+    "  title: 'Broken Chart',",
+    "  renderer: { mode: 'generated', language: 'javascript' },",
+    "  sources: [],",
+    "  parameters: {},",
+    "  delivery: { sendToTelegram: true, ingestDerived: false }",
+    "}]}), 'utf8');",
+    "process.stdout.write('차트를 생성합니다.');",
+    "",
+  ].join("\n"));
+  fs.chmodSync(scriptPath, 0o755);
+  try {
+    migrate(dbHandle.db);
+    const config = configFixture(fixture);
+    config.wiki.chatCommand = `${process.execPath} ${scriptPath}`;
+    config.wiki.chatTimeoutMs = 5000;
+    const context: WorkerContext = {
+      config,
+      db: dbHandle.db,
+      telegram: new TelegramBotApiClient(
+        { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
+        mockWikiChatAttachmentFetch({ sentMessages, sentDocuments, text: "broken 차트 생성해줘" }),
+      ),
+    };
+
+    const result = await runWorkerOnce(context);
+
+    assert.equal(result.operatorCommandsHandled, 1);
+    assert.equal(result.jobsCreated, 0);
+    assert.equal(sentDocuments.length, 0);
+    assert.equal(listArtifactRendererRuns(dbHandle.db, 10).length, 0);
+    assert.match(sentMessages.at(-1)?.text ?? "", /2차 산출물 요청을 실행하지 못했습니다/);
+    assert.match(sentMessages.at(-1)?.text ?? "", /renderer/);
   } finally {
     dbHandle.close();
   }

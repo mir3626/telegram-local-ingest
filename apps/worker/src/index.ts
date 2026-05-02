@@ -15,8 +15,8 @@ import {
   type AgentPostprocessResult,
 } from "@telegram-local-ingest/agent-adapter";
 import {
-  artifactRequestSchema,
   buildArtifactRunId,
+  parseArtifactRequest,
   runArtifactRequest,
   type ArtifactRequest,
   type PackagedArtifact,
@@ -134,6 +134,11 @@ interface ResolvedWikiChatAttachment {
   mimeType?: string;
   sizeBytes: number;
   sha256: string;
+}
+
+interface WikiChatArtifactRequestError {
+  index: number;
+  message: string;
 }
 
 interface WikiChatFileRequest {
@@ -1360,6 +1365,7 @@ async function handleWikiChatMessage(context: WorkerContext, message: ParsedTele
     const result = await runWikiChatCommand(context, message, text);
     const reply = formatWikiChatReply(result);
     await sendChunkedTelegramMessage(context, message.chatId, reply, { replaceMessageId: pendingMessage.message_id });
+    await sendWikiChatArtifactRequestErrors(context, message.chatId, result.artifactRequestErrors);
     const artifactAttachments = await handleWikiChatArtifactRequests(context, message, text, result.artifactRequests);
     await handleWikiChatAttachments(context, message, text, [...artifactAttachments, ...result.attachments]);
     logWorker(`wiki chat finished chat=${message.chatId} message=${message.messageId}`, "info", "WIKI");
@@ -1380,7 +1386,13 @@ async function runWikiChatCommand(
   context: WorkerContext,
   message: ParsedTelegramMessage,
   text: string,
-): Promise<{ stdout: string; stderr: string; attachments: ResolvedWikiChatAttachment[]; artifactRequests: ArtifactRequest[] }> {
+): Promise<{
+  stdout: string;
+  stderr: string;
+  attachments: ResolvedWikiChatAttachment[];
+  artifactRequests: ArtifactRequest[];
+  artifactRequestErrors: WikiChatArtifactRequestError[];
+}> {
   const commandText = context.config.wiki.chatCommand;
   if (!commandText) {
     throw new Error("WIKI_CHAT_COMMAND is not configured");
@@ -1429,12 +1441,13 @@ async function runWikiChatCommand(
     throw new Error(result.stderr || result.stdout || `WIKI_CHAT_COMMAND exited with ${result.exitCode}`);
   }
   const attachments = await loadWikiChatAttachments(attachmentDir, vaultRoot, rawRoot, wikiRoot);
-  const artifactRequests = await loadWikiChatArtifactRequests(attachmentDir);
+  const artifactRequestResult = await loadWikiChatArtifactRequests(attachmentDir);
   return {
     stdout: result.stdout,
     stderr: result.stderr,
     attachments,
-    artifactRequests,
+    artifactRequests: artifactRequestResult.requests,
+    artifactRequestErrors: artifactRequestResult.errors,
   };
 }
 
@@ -1468,6 +1481,29 @@ async function handleWikiChatAttachments(
         }]],
       },
     },
+  );
+}
+
+async function sendWikiChatArtifactRequestErrors(
+  context: WorkerContext,
+  chatId: string,
+  errors: WikiChatArtifactRequestError[],
+): Promise<void> {
+  if (errors.length === 0) {
+    return;
+  }
+  const lines = errors.slice(0, 3).map((error) => `${error.index + 1}. ${error.message}`);
+  const more = errors.length > lines.length ? `\n... 외 ${errors.length - lines.length}개` : "";
+  await context.telegram.sendMessage(
+    chatId,
+    [
+      "⚠️ 2차 산출물 요청을 실행하지 못했습니다.",
+      "",
+      ...lines,
+      more,
+      "",
+      "에이전트가 만든 machine-readable JSON이 실행 스키마와 맞지 않았습니다. 다시 요청하면 새 요청으로 재시도됩니다.",
+    ].filter(Boolean).join("\n"),
   );
 }
 
@@ -1676,14 +1712,16 @@ async function loadWikiChatAttachments(
   return resolved;
 }
 
-async function loadWikiChatArtifactRequests(attachmentDir: string): Promise<ArtifactRequest[]> {
+async function loadWikiChatArtifactRequests(
+  attachmentDir: string,
+): Promise<{ requests: ArtifactRequest[]; errors: WikiChatArtifactRequestError[] }> {
   const requestPath = path.join(attachmentDir, "artifact-requests.json");
   let payload: unknown;
   try {
     payload = JSON.parse(await fs.readFile(requestPath, "utf8"));
   } catch (error) {
     if (isNotFoundError(error)) {
-      return [];
+      return { requests: [], errors: [] };
     }
     throw error;
   }
@@ -1693,14 +1731,17 @@ async function loadWikiChatArtifactRequests(attachmentDir: string): Promise<Arti
       ? payload.requests
       : [];
   const requests: ArtifactRequest[] = [];
-  for (const record of records) {
+  const errors: WikiChatArtifactRequestError[] = [];
+  for (const [index, record] of records.entries()) {
     try {
-      requests.push(artifactRequestSchema.parse(record));
+      requests.push(parseArtifactRequest(record));
     } catch (error) {
-      logWorker(`wiki artifact request ignored error=${errorMessage(error)}`, "warn", "WIKI");
+      const message = errorMessage(error);
+      errors.push({ index, message });
+      logWorker(`wiki artifact request ignored index=${index} error=${message}`, "warn", "WIKI");
     }
   }
-  return requests;
+  return { requests, errors };
 }
 
 async function resolveWikiChatAttachment(
