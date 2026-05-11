@@ -98,13 +98,17 @@ test("runWorkerOnce captures, imports, bundles, completes, and notifies", async 
   }
 });
 
-test("runWorkerOnce runs agent postprocess for translation-needed text and sends a download button", async () => {
+test("runWorkerOnce renders translation-needed Markdown text as DOCX and sends a download button", async () => {
   const fixture = createFixture();
-  writeFile(fixture.botRoot, "documents/lead.txt", "This vendor agreement needs translation and business formatting.");
+  writeFile(fixture.botRoot, "documents/lead.md", "This vendor agreement needs translation and business formatting.");
+  const toolRoot = path.join(fixture.root, "tools");
+  const fakePandoc = writeFakePandoc(toolRoot, "번역 결과");
+  const oldPandoc = process.env.PANDOC_BIN;
   const dbHandle = openIngestDatabase(":memory:");
   const sentMessages: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
   const agentInputs: AgentPostprocessInput[] = [];
   try {
+    process.env.PANDOC_BIN = fakePandoc;
     migrate(dbHandle.db);
     const config = configFixture(fixture);
     config.agent = {
@@ -117,7 +121,7 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
       db: dbHandle.db,
       telegram: new TelegramBotApiClient(
         { botToken: "123:abc", baseUrl: "http://127.0.0.1:8081", localFilesRoot: fixture.botRoot },
-        mockTelegramFetch(sentMessages),
+        mockTelegramFetch(sentMessages, "/ingest project:sales", "documents/lead.md"),
       ),
       agent: {
         async postprocess(input): Promise<AgentPostprocessResult> {
@@ -164,28 +168,32 @@ test("runWorkerOnce runs agent postprocess for translation-needed text and sends
     assert.equal(agentInputs[0]?.language.translationNeeded, true);
     assert.equal(agentInputs[0]?.targetLanguage, "ko");
     assert.equal(agentInputs[0]?.defaultRelation, "business");
-    assert.ok(agentInputs[0]?.artifacts.some((artifact) => artifact.fileName === "lead.txt"));
+    assert.ok(agentInputs[0]?.artifacts.some((artifact) => artifact.fileName === "lead.md"));
     const bundle = mustGetSourceBundleForJob(dbHandle.db, "tg_300_21");
-    assert.equal(agentInputs[0]?.artifacts[0]?.sourcePath, path.join(bundle.bundlePath, "extracted", "lead.txt"));
+    assert.equal(agentInputs[0]?.artifacts[0]?.sourcePath, path.join(bundle.bundlePath, "extracted", "lead.md"));
     const outputs = listJobOutputs(dbHandle.db, "tg_300_21");
     assert.equal(outputs.length, 1);
     assert.equal(outputs[0]?.kind, "agent_translation");
-    assert.equal(outputs[0]?.fileName, "lead_translated.pdf");
-    assert.equal(outputs[0]?.mimeType, "application/pdf");
-    assert.equal(fs.readFileSync(outputs[0]?.filePath ?? "").subarray(0, 4).toString("utf8"), "%PDF");
+    assert.equal(outputs[0]?.fileName, "lead_translated.docx");
+    assert.equal(outputs[0]?.mimeType, DOCX_MIME_TYPE);
+    const outputXml = extractZipEntry(fs.readFileSync(outputs[0]?.filePath ?? ""), "word/document.xml")?.toString("utf8") ?? "";
+    assert.match(outputXml, /번역 결과/);
+    assert.match(outputXml, /\[원문\]/);
+    assert.match(outputXml, /This vendor agreement needs translation/);
     assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "translated.md")), false);
-    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "lead_translated.pdf")), true);
+    assert.equal(fs.existsSync(path.join(fixture.runtimeDir, "agent-postprocess", "tg_300_21", "outputs", "lead_translated.docx")), true);
     const completion = sentMessages.at(-1);
     assert.match(completion?.text ?? "", /자동번역이 완료되었습니다/);
     assert.match(completion?.text ?? "", /만료 시각/);
-    assert.match(completion?.text ?? "", /lead_translated\.pdf: \d{4}-\d{2}-\d{2} \d{2}:\d{2} KST/);
+    assert.match(completion?.text ?? "", /lead_translated\.docx: \d{4}-\d{2}-\d{2} \d{2}:\d{2} KST/);
     assert.match(JSON.stringify(completion?.reply_markup), /download:/);
-    assert.match(JSON.stringify(completion?.reply_markup), /PDF 다운로드/);
+    assert.match(JSON.stringify(completion?.reply_markup), /DOCX 다운로드/);
     assert.match(JSON.stringify(completion?.reply_markup), /까지/);
     const events = listJobEvents(dbHandle.db, "tg_300_21");
     assert.ok(events.some((event) => event.type === "agent.postprocess.completed"));
     assert.ok(events.some((event) => event.type === "output.created"));
   } finally {
+    restoreEnv("PANDOC_BIN", oldPandoc);
     dbHandle.close();
   }
 });

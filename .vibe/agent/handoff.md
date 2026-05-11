@@ -10,6 +10,14 @@
 
 ## Status
 
+### Markdown Upload DOCX Output + PDF Fallback Font Hardening — 2026-05-11
+
+Investigated the seven failed `TalkFile_*.md.md` uploads around 2026-05-11 12:24 KST. The files were captured, archived, bundled, preprocessed, language-detected, and sent through agent postprocess successfully; failure occurred after translation while the worker tried to build the fallback PDF output and PDFKit rejected the configured Noto CJK TTC font with `this.font.createSubset is not a function`.
+
+`apps/worker/src/index.ts` now treats `.md`, `.markdown`, `.txt`, `text/markdown`, and `text/plain` uploads as document sources, so translation-needed text/Markdown uploads produce DOCX downloads through the Pandoc/DOCX path with translated content and `[원문]` text. The PDF fallback remains available for non-document fallback and image overlay paths, but font loading now uses `PdfFontSpec` with inferred TTC family candidates such as `NotoSansCJKkr-Regular` and falls back to PDFKit defaults instead of failing the job when a configured font is unsupported. Regression coverage in `test/worker.test.ts` now verifies Markdown uploads produce DOCX output and the existing image/PDF output paths still pass.
+
+Verification passed: `npm run typecheck`, `node --import tsx --test test/worker.test.ts` (`39` passed), and full `npm test` (`156` passed).
+
 ### Sprint 32 — Derived Artifact Content QA — 2026-05-02
 
 Completed Sprint 32 as a hardening pass for derived artifacts. `npm run smoke:wiki-renderers` now opens generated DOCX/CSV/XLSX/PDF/ZIP/text artifacts, compares selected terms against provenance source pages, fails on zero-byte files and user-facing metadata leaks, and performs column-aware invoice CSV checks for PacificBio and Rotterdam totals/dates/currencies. The latest passing result set is `/home/tony/workspace/yoni-llm-wiki/to-be-removed-result/20260502_034834234`; `qa-summary.md` records artifact-level content QA notes for all 11 registered renderer runs and 4 guard checks.

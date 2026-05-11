@@ -117,6 +117,8 @@ import { parseCommandLine, runWikiIngestAdapter, snapshotTree } from "@telegram-
 const execFileAsync = promisify(execFile);
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const EML_MIME_TYPES = new Set(["application/eml", "message/rfc822"]);
+const TEXT_DOCUMENT_EXTENSIONS = new Set([".md", ".markdown", ".txt"]);
+const TEXT_DOCUMENT_MIME_TYPES = new Set(["text/markdown", "text/plain"]);
 const IMAGE_EXTENSIONS = new Set([".jpeg", ".jpg", ".png"]);
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
@@ -3204,12 +3206,17 @@ interface PdfTextSection {
   text: string;
 }
 
-type DocumentSourceKind = "docx" | "eml" | "hwp" | "pdf";
+type DocumentSourceKind = "docx" | "eml" | "hwp" | "pdf" | "text";
 
 interface DocumentSourceFile {
   kind: DocumentSourceKind;
   path: string;
   fileName: string;
+}
+
+interface PdfFontSpec {
+  path: string;
+  familyCandidates: string[];
 }
 
 interface ImageSourceFile {
@@ -3344,9 +3351,9 @@ async function createOriginalAndTranslationPdf(input: {
     throw new Error(`Agent postprocess did not create translated markdown/text output in ${input.outputDir}`);
   }
 
-  const [translationText, fontPath] = await Promise.all([
+  const [translationText, font] = await Promise.all([
     fs.readFile(translationFile.path, "utf8"),
-    findPdfFontPath(),
+    findPdfFontSpec(),
   ]);
   const pdfName = buildTranslatedOutputFileName(input.sourceFileName, ".pdf");
   const pdfPath = path.join(input.outputDir, pdfName);
@@ -3359,7 +3366,7 @@ async function createOriginalAndTranslationPdf(input: {
       title: path.basename(translationFile.relativePath),
       text: translationText,
     },
-    fontPath,
+    font,
   });
   return {
     path: pdfPath,
@@ -3385,11 +3392,11 @@ async function createImageOverlayTranslationPdf(input: {
   const pdfName = buildTranslatedOutputFileName(input.imageSource.fileName, ".pdf");
   const pdfPath = path.join(input.outputDir, pdfName);
   try {
-    const [supportSections, translations, blocks, fontPath] = await Promise.all([
+    const [supportSections, translations, blocks, font] = await Promise.all([
       readTemplatePreservedSupportSections(translationFile.path),
       readDocxBlockTranslations(translationsFile.path),
       readImageOcrBlocks(structureArtifact.structurePath),
-      findPdfFontPath(),
+      findPdfFontSpec(),
     ]);
     if (blocks.length === 0 || translations.size === 0) {
       return null;
@@ -3401,7 +3408,7 @@ async function createImageOverlayTranslationPdf(input: {
       blocks,
       translations,
       supportSections,
-      fontPath,
+      font,
     });
     logWorker(`image overlay render complete job=${input.job.id} source=${input.imageSource.fileName}`, "info", "OUTPUT");
     return {
@@ -3447,6 +3454,13 @@ function findDocumentSourceFile(files: StoredJobFile[]): DocumentSourceFile | nu
     if (extension === ".pdf" || mimeType === "application/pdf") {
       return {
         kind: "pdf",
+        path: candidatePath,
+        fileName,
+      };
+    }
+    if (TEXT_DOCUMENT_EXTENSIONS.has(extension) || (mimeType !== undefined && TEXT_DOCUMENT_MIME_TYPES.has(mimeType))) {
+      return {
+        kind: "text",
         path: candidatePath,
         fileName,
       };
@@ -4828,7 +4842,7 @@ async function readOriginalPdfSections(artifacts: AgentPostprocessInput["artifac
   return sections;
 }
 
-async function findPdfFontPath(): Promise<string | null> {
+async function findPdfFontSpec(): Promise<PdfFontSpec | null> {
   const candidates = [
     process.env.PDF_FONT_PATH,
     "/mnt/c/Windows/Fonts/malgun.ttf",
@@ -4842,7 +4856,10 @@ async function findPdfFontPath(): Promise<string | null> {
   for (const candidate of candidates) {
     try {
       await fs.access(candidate);
-      return candidate;
+      return {
+        path: candidate,
+        familyCandidates: buildPdfFontFamilyCandidates(candidate),
+      };
     } catch {
       // Try the next candidate.
     }
@@ -4850,12 +4867,66 @@ async function findPdfFontPath(): Promise<string | null> {
   return null;
 }
 
+function buildPdfFontFamilyCandidates(fontPath: string): string[] {
+  const configured = process.env.PDF_FONT_FAMILY?.trim();
+  const inferred = inferPdfFontFamilyCandidates(fontPath);
+  return [...new Set([
+    ...(configured ? [configured] : []),
+    ...inferred,
+  ])];
+}
+
+function inferPdfFontFamilyCandidates(fontPath: string): string[] {
+  const baseName = path.basename(fontPath).toLowerCase();
+  if (baseName === "notosanscjk-regular.ttc") {
+    return [
+      "NotoSansCJKkr-Regular",
+      "NotoSansCJKsc-Regular",
+      "NotoSansCJKtc-Regular",
+      "NotoSansCJKjp-Regular",
+    ];
+  }
+  if (baseName === "notosanscjk-bold.ttc") {
+    return [
+      "NotoSansCJKkr-Bold",
+      "NotoSansCJKsc-Bold",
+      "NotoSansCJKtc-Bold",
+      "NotoSansCJKjp-Bold",
+    ];
+  }
+  if (baseName.endsWith(".ttc")) {
+    return [];
+  }
+  return [];
+}
+
+function applyPdfFont(doc: PDFKit.PDFDocument, font: PdfFontSpec | null): boolean {
+  if (!font) {
+    return false;
+  }
+  const familyCandidates = font.familyCandidates.length > 0 ? font.familyCandidates : [undefined];
+  for (const family of familyCandidates) {
+    try {
+      if (family) {
+        doc.font(font.path, family);
+      } else {
+        doc.font(font.path);
+      }
+      return true;
+    } catch {
+      // Try the next family, or fall back to PDFKit's default font.
+    }
+  }
+  logWorker(`pdf font unavailable path=${font.path} families=${familyCandidates.filter(Boolean).join(",") || "(default)"}`, "warn", "OUTPUT");
+  return false;
+}
+
 async function writeOriginalAndTranslationPdf(input: {
   pdfPath: string;
   job: StoredJob;
   originalSections: PdfTextSection[];
   translation: PdfTextSection;
-  fontPath: string | null;
+  font: PdfFontSpec | null;
 }): Promise<void> {
   await fs.mkdir(path.dirname(input.pdfPath), { recursive: true });
   await new Promise<void>((resolve, reject) => {
@@ -4882,18 +4953,14 @@ async function writeOriginalAndTranslationPdf(input: {
     stream.on("finish", () => done());
     doc.pipe(stream);
 
-    if (input.fontPath) {
-      doc.font(input.fontPath);
-    }
+    applyPdfFont(doc, input.font);
     writePdfJobMetadata(doc, input.job);
 
     doc.fontSize(15).text("번역문", { underline: true });
     doc.moveDown(0.5);
     writeMarkdownLikePdfText(doc, input.translation.text);
     doc.addPage();
-    if (input.fontPath) {
-      doc.font(input.fontPath);
-    }
+    applyPdfFont(doc, input.font);
     doc.fontSize(15).text("[원문]", { underline: true });
     doc.moveDown(0.5);
     for (const section of input.originalSections) {
@@ -4913,7 +4980,7 @@ async function writeImageOverlayPdf(input: {
   blocks: ImageOcrBlock[];
   translations: Map<string, string>;
   supportSections: TemplateSupportSections;
-  fontPath: string | null;
+  font: PdfFontSpec | null;
 }): Promise<void> {
   const imageBuffer = await fs.readFile(input.imageSource.path);
   const dimensions = readImageDimensions(imageBuffer);
@@ -4945,17 +5012,13 @@ async function writeImageOverlayPdf(input: {
     stream.on("finish", () => done());
     doc.pipe(stream);
 
-    if (input.fontPath) {
-      doc.font(input.fontPath);
-    }
+    applyPdfFont(doc, input.font);
     writePdfJobMetadata(doc, input.job);
 
     if (input.supportSections.beforeTranslation) {
       writeMarkdownLikePdfText(doc, input.supportSections.beforeTranslation);
       doc.addPage();
-      if (input.fontPath) {
-        doc.font(input.fontPath);
-      }
+      applyPdfFont(doc, input.font);
     }
 
     doc.fontSize(15).text("번역문", { underline: true });
@@ -4970,16 +5033,12 @@ async function writeImageOverlayPdf(input: {
 
     if (input.supportSections.afterTranslation) {
       doc.addPage();
-      if (input.fontPath) {
-        doc.font(input.fontPath);
-      }
+      applyPdfFont(doc, input.font);
       writeMarkdownLikePdfText(doc, input.supportSections.afterTranslation);
     }
 
     doc.addPage();
-    if (input.fontPath) {
-      doc.font(input.fontPath);
-    }
+    applyPdfFont(doc, input.font);
     doc.fontSize(15).text("[원문]", { underline: true });
     doc.moveDown(0.5);
     drawImageFitToCurrentPage(doc, input.imageSource.path, dimensions);
