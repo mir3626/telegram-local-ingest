@@ -1058,7 +1058,7 @@ async function presentationMarkdown(input: {
         if (heading) {
           lines.push(`## ${heading}`, "");
         }
-        lines.push(preview, "");
+        lines.push(heading ? preview : stripLeadingMarkdownTitle(preview), "");
         continue;
       }
     }
@@ -1068,7 +1068,7 @@ async function presentationMarkdown(input: {
       if (heading) {
         lines.push(`## ${heading}`, "");
       }
-      lines.push(preview, "");
+      lines.push(heading ? preview : stripLeadingMarkdownTitle(preview), "");
     }
   }
 
@@ -1082,6 +1082,10 @@ async function presentationMarkdown(input: {
   }
 
   return `${lines.join("\n").trim()}\n`;
+}
+
+function stripLeadingMarkdownTitle(markdown: string): string {
+  return markdown.replace(/^\s*#\s+[^\n]+\n+/, "").trimStart();
 }
 
 async function renderPresentationPdf(input: {
@@ -1119,7 +1123,7 @@ function presentationArtifactHeading(artifact: PackagedArtifact, artifactCount: 
     case "table":
       return "Table";
     case "report":
-      return "Summary";
+      return artifactCount <= 2 ? null : readableArtifactName(artifact.path);
     case "index":
       return "Index";
     case "action_items":
